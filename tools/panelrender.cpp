@@ -445,6 +445,47 @@ int capStep(FontStack &fonts, float size, const std::string &caps)
 }
 
 //------------------------------------------------------------------------
+// The page buttons share the bottom row with the five bat switches, and a bat
+// switch's CLICK target is much wider than its art (see kToggleHitW), so a
+// button that looks clear of one on screen can still be stealing its clicks.
+// The mock's own positions were 1 px inside the Gate switch's hit box.
+bool auditHitBoxes()
+{
+    struct Box {
+        const char *what;
+        float l, t, r, b;
+    };
+    std::vector<Box> boxes;
+    for (int i = 0; i < geo::kToggleCount; ++i) {
+        const geo::ToggleSpec &t = geo::kToggles[i];
+        boxes.push_back({geo::kKnobs[i].label, t.cx - geo::kToggleHitW / 2.0f,
+                         static_cast<float>(t.cy + geo::kToggleHitTop),
+                         t.cx + geo::kToggleHitW / 2.0f,
+                         static_cast<float>(t.cy + geo::kToggleHitBottom)});
+    }
+    for (const geo::ButtonSpec &b : geo::kPageButtons)
+        boxes.push_back({b.label, static_cast<float>(b.x), static_cast<float>(b.y),
+                         static_cast<float>(b.x + b.w), static_cast<float>(b.y + b.h)});
+
+    int hits = 0;
+    for (size_t i = 0; i < boxes.size(); ++i)
+        for (size_t j = i + 1; j < boxes.size(); ++j) {
+            const Box &a = boxes[i], &c = boxes[j];
+            if (a.l < c.r && c.l < a.r && a.t < c.b && c.t < a.b) {
+                fprintf(stderr,
+                        "panelrender: the \"%s\" and \"%s\" hit boxes overlap "
+                        "(%.0f..%.0f vs %.0f..%.0f horizontally) — one of them will swallow the "
+                        "other's clicks\n",
+                        a.what, c.what, a.l, a.r, c.l, c.r);
+                ++hits;
+            }
+        }
+    if (hits == 0)
+        printf("hit boxes  %zu targets on the bottom row, none overlapping\n", boxes.size());
+    return hits == 0;
+}
+
+//------------------------------------------------------------------------
 bool auditText(FontStack &fonts)
 {
     cairo_surface_t *scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
@@ -671,6 +712,8 @@ int main(int argc, char **argv)
     // Text is audited even when a font fell back to a system face — a legend
     // that overflows in the fallback still overflows on screen.
     if (!auditText(fonts))
+        ++missing;
+    if (!auditHitBoxes())
         ++missing;
 
     if (missing) {

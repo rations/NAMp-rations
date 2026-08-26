@@ -350,9 +350,24 @@ struct ButtonSpec {
 };
 constexpr int kPageButtonW = 147, kPageButtonH = 30, kPageButtonY = 277;
 constexpr int kPageButtonCount = 2;
+// The seam between the two buttons is CENTRED ON A DIAL rather than left where
+// the mock happened to put it (x 803/813, a 7 px near-miss on Middle, which is
+// the kind of almost-aligned that reads as a mistake). Derived from the dial's
+// own cx so the pair follows the row if the pitch ever changes.
+//
+// Middle and not Bass, though Bass is the one this looks like it should line up
+// with: at 147 px wide the Pedalboard button would then run from 569 to 716 and
+// sit on top of the Gate bat switch, whose hit box is 597..657 on the same row.
+// Nothing narrower fixes it either — clearing the switch would cap the button at
+// 59 px, and "Pedalboard" is 108 px at kPageButtonTextSize. The Gate switch is
+// what owns that stretch of the row. panelrender checks the clearance.
+constexpr int kPageButtonSeamGap = 10;
+constexpr int kPageButtonSeamCX = kKnobs[6].cx; // Middle
 constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
-    {656, kPageButtonY, kPageButtonW, kPageButtonH, "Pedalboard", Page::Pedalboard},
-    {813, kPageButtonY, kPageButtonW, kPageButtonH, "Cabinet", Page::Cabinet},
+    {kPageButtonSeamCX - kPageButtonSeamGap / 2 - kPageButtonW, kPageButtonY, kPageButtonW,
+     kPageButtonH, "Pedalboard", Page::Pedalboard},
+    {kPageButtonSeamCX + kPageButtonSeamGap / 2, kPageButtonY, kPageButtonW, kPageButtonH,
+     "Cabinet", Page::Cabinet},
 };
 
 // The way back, drawn top-left on every page that is not the head. Its position
