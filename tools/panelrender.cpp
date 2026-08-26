@@ -8,12 +8,22 @@
 //      behaviour in a host — a broken install must not take the session down),
 //      and quiet degradation is exactly why a build needs something that shouts.
 //
+//      The audit covers TEXT as well as files: every legend on every page is
+//      measured against the space geometry.h gives it, and a legend that
+//      outgrows its allowance is an error here rather than a collision on
+//      screen. That is what makes the sizes in geometry.h's typography block
+//      measured numbers instead of taste.
+//
 //   2. RENDER. Each page is drawn through the same Canvas, FontStack, PNG and
 //      SVG code the editor uses, with no X11, no host and no VST3 objects, so
-//      layout and art can be judged before any windowing work exists.
+//      layout and art can be judged before any windowing work exists. Each page
+//      has its own canvas size (geo::pageSize) — the editor asks the host to
+//      resize the window on a page change — so the four PNGs are four different
+//      shapes, exactly as the four windows are.
 //
 // Usage: panelrender <output-prefix> [resource-dir] [scale]
-// Writes <prefix>-head.png, <prefix>-cabinet.png and <prefix>-pedalboard.png.
+// Writes <prefix>-head.png, <prefix>-cabinet.png, <prefix>-pedalboard.png and
+// <prefix>-settings.png.
 // The resource directory defaults to the usual runtime resolution
 // (RATIONS_RESOURCE_DIR, the bundle layout, or an executable-relative dir).
 // `scale` renders at a non-default size, which is how the host-resize path's
@@ -37,6 +47,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using namespace Rations;
 
@@ -113,7 +124,7 @@ void drawToggle(Canvas &c, ImageCache &images, const geo::ToggleSpec &t, bool on
     // Dimming it when off would read as "disabled", and for BYPASS that is
     // backwards — bypass off is the normal state. The bat carries the state.
     if (t.label)
-        drawCenteredText(c, Font::Body, geo::kToggleLabelSize, geo::kTextColor, t.label, t.cx,
+        drawCenteredText(c, Font::Title, geo::kToggleLabelSize, geo::kTextColor, t.label, t.cx,
                          t.cy + geo::kToggleLabelDY);
 }
 
@@ -176,8 +187,11 @@ void drawButton(Canvas &c, const geo::ButtonSpec &b)
     c.setColor(geo::kGold, 190);
     c.setPenSize(1.0f);
     c.strokeRoundRect(r, 4.0f);
-    drawCenteredText(c, Font::Body, geo::kPageButtonTextSize, geo::kTextColor, b.label, r.centerX(),
-                     r.bottom() - 9.0f);
+    // Baseline from the button's centre rather than its bottom: the cap height
+    // is about 0.72 em in Michroma, so half of that below the centre puts the
+    // legend optically centred at any size.
+    drawCenteredText(c, Font::Title, geo::kPageButtonTextSize, geo::kTextColor, b.label,
+                     r.centerX(), r.centerY() + geo::kPageButtonTextSize * 0.36f);
 }
 
 //------------------------------------------------------------------------
@@ -207,7 +221,7 @@ void drawIrRow(Canvas &c, SvgCache &icons, const geo::FileRow &row, const char *
 
     const float tx = row.x + geo::kIrTextDX;
     c.setFont(Font::Body);
-    c.setFontSize(12);
+    c.setFontSize(geo::kFileRowTextSize);
     c.setColor(loaded ? geo::kTextColor : geo::kDimColor);
     c.drawString(c.clipToWidth(text, row.w - (tx - row.x) - 10).c_str(), tx, row.y + row.h - 10);
 }
@@ -231,7 +245,7 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
         drawKnob(c, images, static_cast<float>(geo::kKnobs[i].cx),
                  static_cast<float>(geo::kKnobs[i].cy), static_cast<float>(geo::kKnobs[i].r),
                  demo[i]);
-        drawCenteredText(c, Font::Body, geo::kKnobLabelSize, geo::kTextColor, geo::kKnobs[i].label,
+        drawCenteredText(c, Font::Title, geo::kKnobLabelSize, geo::kTextColor, geo::kKnobs[i].label,
                          static_cast<float>(geo::kKnobs[i].cx),
                          static_cast<float>(geo::kKnobs[i].cy - geo::kKnobLabelDY));
     }
@@ -260,7 +274,7 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
         drawKnob(c, images, static_cast<float>(geo::kIoKnobs[i].cx),
                  static_cast<float>(geo::kIoKnobs[i].cy), static_cast<float>(geo::kIoKnobs[i].r),
                  io[i]);
-        drawCenteredText(c, Font::Body, geo::kIoLabelSize, geo::kTextColor, geo::kIoKnobs[i].label,
+        drawCenteredText(c, Font::Title, geo::kIoLabelSize, geo::kTextColor, geo::kIoKnobs[i].label,
                          static_cast<float>(geo::kIoKnobs[i].cx),
                          static_cast<float>(geo::kIoLabelBaselineY));
     }
@@ -287,7 +301,7 @@ void renderCabinet(Canvas &c, ImageCache &images, SvgCache &icons)
     drawKnob(c, images, static_cast<float>(geo::kBlendCX), static_cast<float>(geo::kBlendCY),
              static_cast<float>(geo::kBlendR), 0.0);
     drawCenteredText(
-        c, Font::Body, geo::kBlendLabelSize, bothLoaded ? geo::kTextColor : geo::kDimColor, "Blend",
+        c, Font::Title, geo::kBlendLabelSize, bothLoaded ? geo::kTextColor : geo::kDimColor, "Blend",
         static_cast<float>(geo::kBlendCX), static_cast<float>(geo::kBlendLabelBaselineY));
 
     drawIrRow(c, icons, geo::kIrRowA, "Marshall 1960A - SM57 cap edge.wav", true);
@@ -299,21 +313,166 @@ void renderCabinet(Canvas &c, ImageCache &images, SvgCache &icons)
 //------------------------------------------------------------------------
 void renderPedalboard(Canvas &c, ImageCache &, SvgCache &)
 {
+    const float cx = static_cast<float>(geo::pageCX(geo::Page::Pedalboard));
     c.setColor(geo::kBgColor);
     c.fillRect(c.bounds());
-    drawCenteredText(c, Font::Title, geo::kPedalPlaceholderSize, geo::kDimColor, "Pedalboard",
-                     geo::kFaceCX, geo::kPedalPlaceholderY);
-    drawCenteredText(c, Font::Body, 14, geo::kDimColor, "overdrive, flanger, chorus, delay, reverb",
-                     geo::kFaceCX, geo::kPedalPlaceholderY + 30);
+    drawCenteredText(c, Font::Title, geo::kPedalPlaceholderSize, geo::kDimColor, "Pedalboard", cx,
+                     static_cast<float>(geo::kPedalPlaceholderY));
+    drawCenteredText(c, Font::Body, geo::kPedalCaptionSize, geo::kDimColor,
+                     "overdrive, flanger, chorus, delay, reverb", cx,
+                     static_cast<float>(geo::kPedalPlaceholderY + geo::kPedalCaptionDY));
     drawButton(c, geo::kBackButton);
 }
 
 //------------------------------------------------------------------------
-bool renderPage(const char *path, double scale, FontStack &fonts, ImageCache &images,
-                SvgCache &icons, void (*draw)(Canvas &, ImageCache &, SvgCache &))
+// The MIDI settings page. Four rows, one per channel; the gate is absent
+// because it is deliberately not on the MIDI path. The learn table itself
+// arrives in a later phase — what is drawn here is the layout it lands in, with
+// one row shown learned and one shown arming so both states are visible.
+void renderSettings(Canvas &c, ImageCache &, SvgCache &)
 {
-    const int pxW = static_cast<int>(std::lround(geo::kWinW * scale));
-    const int pxH = static_cast<int>(std::lround(geo::kWinH * scale));
+    const float cx = static_cast<float>(geo::pageCX(geo::Page::Settings));
+    c.setColor(geo::kBgColor);
+    c.fillRect(c.bounds());
+    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, "MIDI Learn", cx,
+                     static_cast<float>(geo::kSettingsHeadingY));
+
+    const char *const learned[geo::kMidiRowCount] = {"CC 80 ch 1", "CC 81 ch 1", "-- listening --",
+                                                     "not learned"};
+    for (int i = 0; i < geo::kMidiRowCount; ++i) {
+        const Rect r(geo::kMidiRowX, geo::kMidiRowY0 + i * geo::kMidiRowPitch, geo::kMidiRowW,
+                     geo::kMidiRowH);
+        c.setColor(0x0C0B0A);
+        c.fillRoundRect(r, 4.0f);
+        c.setColor(geo::kGold, 190);
+        c.setPenSize(1.0f);
+        c.strokeRoundRect(r, 4.0f);
+
+        const float base = r.centerY() + geo::kMidiRowTextSize * 0.36f;
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(kChannelDirName[i], r.x + 12.0f, base);
+
+        // The mapping itself is data, not a legend, so it is the body face.
+        c.setFont(Font::Body);
+        c.setColor(i == 3 ? geo::kDimColor : geo::kTextColor);
+        c.drawString(learned[i], r.x + 120.0f, base);
+
+        const geo::ButtonSpec learn = {static_cast<int>(r.right()) - geo::kMidiLearnW -
+                                           geo::kMidiLearnInset,
+                                       static_cast<int>(r.y) + geo::kMidiLearnInset,
+                                       geo::kMidiLearnW,
+                                       geo::kMidiRowH - 2 * geo::kMidiLearnInset,
+                                       "Learn",
+                                       geo::Page::Settings};
+        drawButton(c, learn);
+    }
+
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     "The gate switch is not learnable and stays where you leave it.", cx,
+                     static_cast<float>(geo::kSettingsFootnoteY));
+    drawButton(c, geo::kBackButton);
+}
+
+//------------------------------------------------------------------------
+// One legend, and the width geometry.h leaves it. Measured rather than trusted:
+// see the typography block in geometry.h.
+struct TextFit {
+    const char *where;
+    Font font;
+    float size;
+    const char *text;
+    float allowance;
+};
+
+//------------------------------------------------------------------------
+bool auditText(FontStack &fonts)
+{
+    cairo_surface_t *scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t *cr = cairo_create(scratch);
+    Canvas c(cr, &fonts, 8, 8);
+
+    std::vector<TextFit> fits;
+
+    // The wordmark. Its band is bounded on the left by the bypass toggle and on
+    // the right by the gear, and it is centred between them.
+    const float titleRoom =
+        2.0f * std::min(geo::kFaceCX - (geo::kBypassToggleCX + geo::kToggleHitW / 2.0f),
+                        (geo::kGearCX - geo::kGearR) - static_cast<float>(geo::kFaceCX));
+    fits.push_back({"wordmark", Font::Title, geo::kTitleSize, "Rations", titleRoom});
+
+    // Dial legends: they must not reach their neighbours', so the allowance is
+    // the pitch less a gap.
+    for (const geo::KnobSpec &k : geo::kKnobs)
+        fits.push_back({"dial legend", Font::Title, geo::kKnobLabelSize, k.label,
+                        geo::kKnobPitch - 8.0f});
+    // Input / Output sit in their own column outside the dial row; the limit is
+    // the canvas edge on one side and the meter column's own width on the other.
+    for (const geo::KnobSpec &k : geo::kIoKnobs)
+        fits.push_back({"i/o legend", Font::Title, geo::kIoLabelSize, k.label, 2.0f * geo::kSideCXL});
+    // BYPASS is drawn BELOW its LED, not beside it, so the LED is not what
+    // bounds it: the input meter's column is, on the left, and the wordmark on
+    // the right (which is further away, so the left bound decides it).
+    fits.push_back({"toggle legend", Font::Title, geo::kToggleLabelSize, geo::kBypassToggle.label,
+                    2.0f * (geo::kBypassToggleCX - (geo::kInputMeter.x + geo::kMeterW) - 8.0f)});
+    for (const geo::ButtonSpec &b : geo::kPageButtons)
+        fits.push_back({"page button", Font::Title, geo::kPageButtonTextSize, b.label, b.w - 16.0f});
+    fits.push_back({"back button", Font::Title, geo::kPageButtonTextSize, geo::kBackButton.label,
+                    geo::kBackButton.w - 16.0f});
+
+    // Cabinet page.
+    fits.push_back({"blend legend", Font::Title, geo::kBlendLabelSize, "Blend", 2.0f * geo::kBlendHitR * 2.0f});
+    fits.push_back({"ir placeholder", Font::Body, geo::kFileRowTextSize, geo::kIrRowB.placeholder,
+                    geo::kIrRowW - geo::kIrTextDX - 10.0f});
+
+    // Pedalboard page.
+    fits.push_back({"pedal heading", Font::Title, geo::kPedalPlaceholderSize, "Pedalboard",
+                    geo::kPedalPageW - 32.0f});
+    fits.push_back({"pedal caption", Font::Body, geo::kPedalCaptionSize,
+                    "overdrive, flanger, chorus, delay, reverb", geo::kPedalPageW - 32.0f});
+
+    // Settings page.
+    fits.push_back({"settings heading", Font::Title, geo::kSettingsHeadingSize, "MIDI Learn",
+                    static_cast<float>(geo::kMidiRowW)});
+    for (int i = 0; i < geo::kMidiRowCount; ++i)
+        fits.push_back({"midi row", Font::Title, geo::kMidiRowTextSize, kChannelDirName[i], 96.0f});
+    fits.push_back({"midi learn button", Font::Title, geo::kPageButtonTextSize, "Learn",
+                    geo::kMidiLearnW - 16.0f});
+    fits.push_back({"settings footnote", Font::Body, geo::kSettingsFootnoteSize,
+                    "The gate switch is not learnable and stays where you leave it.",
+                    static_cast<float>(geo::kMidiRowW)});
+
+    int over = 0;
+    for (const TextFit &f : fits) {
+        c.setFont(f.font);
+        c.setFontSize(f.size);
+        const float w = c.stringWidth(f.text);
+        if (w > f.allowance) {
+            fprintf(stderr, "panelrender: %s \"%s\" is %.0f px at size %.0f but has %.0f — lower "
+                            "the size in geometry.h or widen the space\n",
+                    f.where, f.text, w, f.size, f.allowance);
+            ++over;
+        }
+    }
+
+    cairo_destroy(cr);
+    cairo_surface_destroy(scratch);
+    if (over == 0)
+        printf("text       %zu legends measured, all inside their allowance\n", fits.size());
+    return over == 0;
+}
+
+//------------------------------------------------------------------------
+bool renderPage(const char *path, geo::Page page, double scale, FontStack &fonts,
+                ImageCache &images, SvgCache &icons,
+                void (*draw)(Canvas &, ImageCache &, SvgCache &))
+{
+    // Each page is its own window: the editor keeps its scale across a page
+    // change and asks the host to resize to the incoming page's base size.
+    const geo::PageSize base = geo::pageSize(page);
+    const int pxW = static_cast<int>(std::lround(base.w * scale));
+    const int pxH = static_cast<int>(std::lround(base.h * scale));
     cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pxW, pxH);
     if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
         fprintf(stderr, "panelrender: cannot create a %dx%d surface\n", pxW, pxH);
@@ -325,7 +484,7 @@ bool renderPage(const char *path, double scale, FontStack &fonts, ImageCache &im
     // units, exactly as the editor draws it.
     cairo_scale(cr, scale, scale);
 
-    Canvas c(cr, &fonts, geo::kWinW, geo::kWinH);
+    Canvas c(cr, &fonts, static_cast<float>(base.w), static_cast<float>(base.h));
     draw(c, images, icons);
 
     cairo_destroy(cr);
@@ -421,6 +580,11 @@ int main(int argc, char **argv)
         }
     }
 
+    // Text is audited even when a font fell back to a system face — a legend
+    // that overflows in the fallback still overflows on screen.
+    if (!auditText(fonts))
+        ++missing;
+
     if (missing) {
         fprintf(stderr, "panelrender: %d asset problem(s); not rendering\n", missing);
         return 1;
@@ -430,15 +594,17 @@ int main(int argc, char **argv)
     //--- render ----------------------------------------------------------
     struct PageOut {
         const char *suffix;
+        geo::Page page;
         void (*draw)(Canvas &, ImageCache &, SvgCache &);
     };
     const PageOut pages[] = {
-        {"-head.png", renderHead},
-        {"-cabinet.png", renderCabinet},
-        {"-pedalboard.png", renderPedalboard},
+        {"-head.png", geo::Page::Head, renderHead},
+        {"-cabinet.png", geo::Page::Cabinet, renderCabinet},
+        {"-pedalboard.png", geo::Page::Pedalboard, renderPedalboard},
+        {"-settings.png", geo::Page::Settings, renderSettings},
     };
     for (const PageOut &p : pages)
-        if (!renderPage((prefix + p.suffix).c_str(), scale, fonts, images, icons, p.draw))
+        if (!renderPage((prefix + p.suffix).c_str(), p.page, scale, fonts, images, icons, p.draw))
             return 1;
 
     return 0;

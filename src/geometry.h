@@ -1,11 +1,11 @@
 // Rations editor geometry.
 //
-// The canvas size and palette are mirrored from gui/geometry.sh (the art
-// pipeline's source of truth); keep the two in sync by hand. The control rects
-// are placed against the panel art and against the author's mock rather than
-// against a grid: the faceplate rectangle below is the measured inside of the
-// gold piping in the amp-head photograph, and every control position here was
-// measured out of mock-head.png / mock-cabinet.png by connected-component scan
+// The head canvas size and the palette are mirrored from gui/geometry.sh (the
+// art pipeline's source of truth); keep the two in sync by hand. The control
+// rects are placed against the panel art and against the author's mock rather
+// than against a grid: the faceplate rectangle below is the measured inside of
+// the gold piping in the amp-head photograph, and every control position on the
+// head page was measured out of mock-head.png by connected-component scan
 // rather than eyeballed. gui/geometry.sh documents how to re-derive the
 // faceplate if the art is ever re-exported.
 //
@@ -25,24 +25,136 @@ namespace Rations
 namespace geo
 {
 
-// Editor canvas (geometry.sh: WIN_W/WIN_H). This is exactly the trimmed size of
-// head.png, so at scale 1.0 the panel is a pixel-exact blit with no resampling.
+// --- Pages ------------------------------------------------------------------
+// A page is a VIEW, not a parameter: it is editor-local state and is deliberately
+// never persisted or automated, because a host recalling a preset must not also
+// recall which panel the user happened to be looking at.
+enum class Page { Head, Cabinet, Pedalboard, Settings };
+constexpr int kPageCount = 4;
+
+// EACH PAGE HAS ITS OWN LOGICAL CANVAS, and changing page changes the window.
+//
+// The head is 2.81:1 because that is the shape of an amp head. Nothing else here
+// is that shape: the cabinet is 1.70:1, the pedalboard placeholder is a caption,
+// and the MIDI settings page is a short list of rows. Drawing all four inside the
+// head's letterbox leaves the narrow pages with several hundred pixels of black
+// down each side — margin that no amount of layout can fill, because the content
+// genuinely is not that wide.
+//
+// So the page swap asks the host for a new window: the editor keeps its current
+// scale, applies it to the incoming page's base size and calls
+// IPlugFrame::resizeView(), which is the SDK's documented plug-in-initiated
+// resize (pluginterfaces/gui/iplugview.h, "Plug-in requested resize" — the host
+// then calls back into IPlugView::onSize()). The scale plumbing itself is
+// untouched: still one cairo_scale(s, s) at compose, still mouse divided by s,
+// still one constrainSize() rule — that rule now reads its base size from the
+// current page instead of from a single constant.
+//
+// Two consequences, both deliberate:
+//   * constrainSize() is page-dependent, so the legal size range changes under
+//     the host when the page does. That is what canResize/checkSizeConstraint
+//     exist for, and the host is told through the resizeView call rather than
+//     being left to discover it.
+//   * A host with no IPlugFrame cannot be asked to resize. There the editor
+//     keeps the size it has and letterboxes the page inside it, which is the
+//     old behaviour and is why every page is still drawn centred on its own
+//     canvas rather than pinned to a corner.
+
+// The head page IS the trimmed size of head.png, so at scale 1.0 the panel is a
+// pixel-exact blit with no resampling. This one is not free to change.
 constexpr int kWinW = 1133;
 constexpr int kWinH = 403;
 
-// Host resize range, as a multiple of the canvas. The art is the ceiling: the
-// head is 1133 px wide in the source, so anything above 1.0 is a genuine
-// upscale and 1.5 is where a photographic faceplate stops holding up.
+// The cabinet: art aspect 1483/872 = 1.7007, drawn as wide as the page allows
+// with the two IR rows underneath it and a back button above.
+constexpr int kCabPageW = 640;
+constexpr int kCabPageH = 460;
+
+// The pedalboard placeholder: a heading and a caption. It is small because that
+// is all there is; it grows when the pedals do.
+constexpr int kPedalPageW = 480;
+constexpr int kPedalPageH = 220;
+
+// MIDI settings: four learn rows and a footnote.
+constexpr int kSettingsPageW = 560;
+constexpr int kSettingsPageH = 280;
+
+struct PageSize {
+    int w, h;
+};
+constexpr PageSize kPageSizes[kPageCount] = {
+    {kWinW, kWinH},
+    {kCabPageW, kCabPageH},
+    {kPedalPageW, kPedalPageH},
+    {kSettingsPageW, kSettingsPageH},
+};
+
+constexpr PageSize pageSize(Page p)
+{
+    return kPageSizes[static_cast<int>(p)];
+}
+
+// Horizontal centre of a page, for everything that is centred on the canvas
+// rather than on the faceplate.
+constexpr int pageCX(Page p)
+{
+    return pageSize(p).w / 2;
+}
+
+// Host resize range, as a multiple of whichever page is showing. The art is the
+// ceiling on the head page: it is 1133 px wide in the source, so anything above
+// 1.0 is a genuine upscale and 1.5 is where a photographic faceplate stops
+// holding up. The other pages are drawn rather than photographed and could go
+// further, but one range for all four keeps the scale continuous across a page
+// change — the window changes shape, never apparent size.
 constexpr double kScaleMin = 0.66;
 constexpr double kScaleMax = 1.50;
+
 // Rounded, not truncated, so these agree with the sizes the editor actually
 // produces — constrainSize() rounds, and it is the single authority on what is
-// a legal size. These four are the documented range.
-constexpr int kMinW = static_cast<int>(kWinW * kScaleMin + 0.5); // 748
-constexpr int kMinH = static_cast<int>(kWinH * kScaleMin + 0.5); // 266
-constexpr int kMaxW = static_cast<int>(kWinW * kScaleMax + 0.5); // 1700
-constexpr int kMaxH = static_cast<int>(kWinH * kScaleMax + 0.5); // 605
+// a legal size.
+constexpr int pageMinW(Page p)
+{
+    return static_cast<int>(pageSize(p).w * kScaleMin + 0.5);
+}
+constexpr int pageMinH(Page p)
+{
+    return static_cast<int>(pageSize(p).h * kScaleMin + 0.5);
+}
+constexpr int pageMaxW(Page p)
+{
+    return static_cast<int>(pageSize(p).w * kScaleMax + 0.5);
+}
+constexpr int pageMaxH(Page p)
+{
+    return static_cast<int>(pageSize(p).h * kScaleMax + 0.5);
+}
 
+// --- Typography -------------------------------------------------------------
+// EVERY PANEL LEGEND IS MICHROMA (Font::Title) — the wordmark's face, and the
+// only one on the panel. A silkscreen legend on an amp is one typeface used at
+// several sizes, and mixing a second face into the same row of knobs is what
+// made the first draft read as a dialog box with pictures of knobs on it.
+//
+// Roboto (Font::Body) is kept for exactly two things, and they are not legends:
+// file names in the IR rows, and the value readout that appears while a dial is
+// being dragged. Both are variable-length strings that have to stay legible when
+// clipped, which is what a proportional text face is for and what Michroma —
+// wide, monoline, all-caps in feel — is not.
+//
+// The sizes below are MEASURED against the space each string has, not chosen:
+// tools/panelrender.cpp fails the build's art audit if any legend outgrows its
+// allowance, so a size raised here has to be justified against that check.
+constexpr int kTitleSize = 56;      // the wordmark; fitted to the mock's cap height
+constexpr int kKnobLabelSize = 13;  // dial legends, main row
+constexpr int kIoLabelSize = 13;    // Input / Output, same row as the toggles
+constexpr int kToggleLabelSize = 11;// BYPASS
+constexpr int kPageButtonTextSize = 14;
+constexpr int kBlendLabelSize = 12;
+constexpr int kKnobValueSize = 12;  // Roboto: the drag readout
+constexpr int kFileRowTextSize = 12;// Roboto: IR file names
+
+// --- Head page --------------------------------------------------------------
 // Inner faceplate, inside the gold piping (measured; see gui/geometry.sh).
 // Right/bottom are EXCLUSIVE, matching Rect's convention.
 constexpr int kFaceL = 59, kFaceT = 62, kFaceR = 1074, kFaceB = 333;
@@ -60,12 +172,6 @@ using pal::kGold;
 using pal::kPeakColor;
 using pal::kTextColor;
 
-// --- Pages ------------------------------------------------------------------
-// A page is a VIEW, not a parameter: it is editor-local state and is deliberately
-// never persisted or automated, because a host recalling a preset must not also
-// recall which panel the user happened to be looking at.
-enum class Page { Head, Cabinet, Pedalboard };
-
 // --- The wordmark -----------------------------------------------------------
 // Drawn as TEXT in Michroma, not blitted from a badge asset — the way the
 // author's other plug-in draws its own name. Centred on the faceplate by
@@ -74,7 +180,6 @@ enum class Page { Head, Cabinet, Pedalboard };
 // kTitleSize is the Michroma size that reproduces that cap height and is checked
 // by the offline render rather than assumed.
 constexpr int kTitleBaselineY = 123;
-constexpr float kTitleSize = 56.0f;
 
 // --- The main dial row (8), evenly spaced -----------------------------------
 struct KnobSpec {
@@ -123,8 +228,6 @@ constexpr double kKnobSweepDeg = 270.0;
 // second permanent row of text the design does not have.
 constexpr int kKnobLabelDY = 45; // 226 - 181
 constexpr int kKnobValueDY = 45;
-constexpr int kKnobLabelSize = 25;
-constexpr int kKnobValueSize = 14;
 
 // --- Channel / gate indicator LEDs (5), above the dial labels ---------------
 // Red when the channel is the one sounding, black otherwise; the gate's LED
@@ -147,7 +250,6 @@ constexpr int kToggleW = 24, kToggleH = 40;
 // Level with the Input and Output dials, so the bottom of the panel reads as one
 // row rather than three.
 constexpr int kToggleCY = 275;
-constexpr int kToggleLabelSize = 12;
 constexpr int kToggleLabelDY = 33;
 // The CLICK target is deliberately bigger than the art: the lever is 24 px wide
 // and at the minimum window scale that is 16 physical px, which is a miss
@@ -212,8 +314,10 @@ constexpr MeterRect kOutputMeter = {
 // Smaller than the main row (the mock draws them at 46 px, not 56).
 constexpr int kIoKnobR = 23;
 constexpr int kIoKnobCY = 275;
-constexpr int kIoLabelBaselineY = 320;
-constexpr int kIoLabelSize = 25;
+// Close under the dial rather than down on the piping: at kIoLabelSize the cap
+// height is about 9 px, and a baseline left where a 25 px legend needed it
+// leaves the word floating clear of the control it names.
+constexpr int kIoLabelBaselineY = 312;
 constexpr KnobSpec kIoKnobs[2] = {
     {kInputGainId, kSideCXL, kIoKnobCY, kIoKnobR, "Input", "dB"},
     {kOutputGainId, kSideCXR, kIoKnobCY, kIoKnobR, "Output", "dB"},
@@ -226,54 +330,56 @@ struct ButtonSpec {
     Page target;
 };
 constexpr int kPageButtonW = 147, kPageButtonH = 30, kPageButtonY = 277;
-constexpr int kPageButtonTextSize = 20;
 constexpr int kPageButtonCount = 2;
 constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
     {656, kPageButtonY, kPageButtonW, kPageButtonH, "Pedalboard", Page::Pedalboard},
     {813, kPageButtonY, kPageButtonW, kPageButtonH, "Cabinet", Page::Cabinet},
 };
 
-// The way back, drawn on every page that is not the head. Top-left, clear of
-// the cabinet art and of the pedalboard placeholder.
-constexpr ButtonSpec kBackButton = {40, 20, 130, 30, "Amp", Page::Head};
+// The way back, drawn top-left on every page that is not the head. Its position
+// is the same on all three, and it is deliberately clear of every page's own
+// content, so the window changing shape underneath it does not move it.
+constexpr ButtonSpec kBackButton = {16, 12, 110, 28, "Amp", Page::Head};
+// Everything below the back button on a non-head page starts here.
+constexpr int kPageContentTop = kBackButton.y + kBackButton.h + 10; // 50
 
 // --- Gear (settings) button, top-right of the faceplate ---------------------
+// Opens Page::Settings, which is a page of its own rather than an overlay: the
+// MIDI rows want a narrow window, and drawing them over the head page would put
+// them in the middle of 1133 px of faceplate.
 constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
 
 // --- Cabinet page -----------------------------------------------------------
 // The cabinet page does NOT wear the amp head's faceplate: it is a picture of a
 // different object, so it is drawn on the same dark ground the head's letterbox
-// uses. That also buys the full 403 px of canvas height instead of the 271 px
-// inside the piping, which matters — the canvas is the head's 2.81:1 and the
-// cabinet art is 1.70:1, so this page is height-limited and every pixel of
-// height is 1.7 px of cabinet.
+// uses — and on a window of its own shape, so the cabinet is the page rather
+// than a stamp in the middle of one.
 //
-// The cabinet is drawn as tall as the canvas allows above the loader rows, and
-// the two rows are then sized so the pair spans EXACTLY the cabinet's width.
-// That is what stops the page reading as a small picture with two unrelated
-// widgets under it: cabinet and rows are one column, and the black either side
-// is margin rather than a gap something should have filled.
-constexpr int kCabH = 340;
-constexpr int kCabW = 578;                 // round(kCabH * 1483 / 872), the art's own aspect
-constexpr int kCabX = kFaceCX - kCabW / 2; // 277
-constexpr int kCabY = 8;
+// The cabinet is drawn as wide as the page allows, and the two loader rows are
+// then sized so the pair spans EXACTLY the cabinet's width. That is what stops
+// the page reading as a picture with two unrelated widgets under it: cabinet and
+// rows are one column, and the margin around them is even on all four sides.
+constexpr int kCabMargin = 22;
+constexpr int kCabW = kCabPageW - 2 * kCabMargin;              // 596
+constexpr int kCabH = (kCabW * 872 + 1483 / 2) / 1483;         // 350, the art's own aspect
+constexpr int kCabX = kCabMargin;
+constexpr int kCabY = kPageContentTop;
 
 // The Blend dial is drawn OVER the knob painted into the cabinet art, at the
 // same place and a shade larger so it covers it rather than sitting beside it.
 // The two fractions are measured off the source art (knob centre 739/1483 and
-// 634/872 of the trimmed cabinet), so the dial follows the art if the cabinet is
-// ever drawn at a different size.
+// 634/872 of the trimmed cabinet), so the dial follows the art whatever size the
+// cabinet is drawn at.
 constexpr float kCabBlendFX = 739.0f / 1483.0f;
 constexpr float kCabBlendFY = 634.0f / 872.0f;
 constexpr float kCabBlendLabelFY = 703.0f / 872.0f;
 constexpr int kBlendCX = kCabX + static_cast<int>(kCabBlendFX * kCabW + 0.5f);
 constexpr int kBlendCY = kCabY + static_cast<int>(kCabBlendFY * kCabH + 0.5f);
 constexpr int kBlendR = 14;
-// The dial is small because the cabinet is small — see above. The hit box is
-// not: it is sized for a finger on a trackpad, not for the art.
+// The dial is small because the knob painted under it is. The hit box is not:
+// it is sized for a finger on a trackpad, not for the art.
 constexpr int kBlendHitR = 24;
 constexpr int kBlendLabelBaselineY = kCabY + static_cast<int>(kCabBlendLabelFY * kCabH + 0.5f);
-constexpr int kBlendLabelSize = 14;
 
 // --- IR loader rows ---------------------------------------------------------
 // The parent plug-in's row design, unchanged, twice: an icon, a file name, and
@@ -286,9 +392,9 @@ struct FileRow {
     const char *ext; // browser filter (no dot); empty = directories only
 };
 constexpr int kFileRowH = 28;
-constexpr int kIrRowY = kCabY + kCabH + 10; // 358
+constexpr int kIrRowY = kCabY + kCabH + 12;      // 412
 constexpr int kIrRowGap = 18;
-constexpr int kIrRowW = (kCabW - kIrRowGap) / 2; // 280
+constexpr int kIrRowW = (kCabW - kIrRowGap) / 2; // 289
 constexpr FileRow kIrRowA = {kCabX, kIrRowY, kIrRowW, kFileRowH, "Select IR...", "wav"};
 constexpr FileRow kIrRowB = {kCabX + kIrRowW + kIrRowGap, kIrRowY, kIrRowW, kFileRowH,
                              "Select IR (optional)...",   "wav"};
@@ -307,15 +413,40 @@ constexpr float kIrTextDX = 72.0f;
 
 // --- Pedalboard page --------------------------------------------------------
 // A placeholder in this build. The overdrive, flanger, chorus, delay and reverb
-// are built into the plug-in later; nothing here hosts anyone else's.
+// are built into the plug-in later; nothing here hosts anyone else's. The page
+// is sized to the caption because that is the whole content — when there are
+// pedals to draw, kPedalPageW/H grow with them and nothing else here changes.
 constexpr int kPedalPlaceholderSize = 26;
-constexpr int kPedalPlaceholderY = 200;
+constexpr int kPedalPlaceholderY = 112;
+constexpr int kPedalCaptionSize = 14;
+constexpr int kPedalCaptionDY = 28;
 
-// --- Settings overlay -------------------------------------------------------
-constexpr int kSettingsX = 300, kSettingsY = 80, kSettingsW = 533, kSettingsH = 250;
+// --- Settings page (MIDI learn) ---------------------------------------------
+// Four rows, one per channel, each showing what that channel is currently
+// learned to and carrying a Learn button. The gate is deliberately absent: it is
+// not on the MIDI path at all.
+constexpr int kSettingsHeadingSize = 18;
+constexpr int kSettingsHeadingY = 58;
+constexpr int kMidiRowX = 24;
+constexpr int kMidiRowW = kSettingsPageW - 2 * kMidiRowX; // 512
+constexpr int kMidiRowH = 32;
+constexpr int kMidiRowY0 = 76;
+constexpr int kMidiRowPitch = 40;
+constexpr int kMidiRowCount = kChannelToggleCount;
+constexpr int kMidiRowTextSize = 13;
+// The Learn button, as an offset from a row's right edge.
+constexpr int kMidiLearnW = 92;
+constexpr int kMidiLearnInset = 6;
+constexpr int kSettingsFootnoteY = 254;
+constexpr int kSettingsFootnoteSize = 12;
 
 // --- File browser overlay ---------------------------------------------------
-constexpr int kBrowserX = 180, kBrowserY = 56, kBrowserW = 773, kBrowserH = 291;
+// Drawn over the cabinet page (the only page with anything to load), so it is
+// sized to that page rather than to the head's.
+constexpr int kBrowserX = 16;
+constexpr int kBrowserY = 16;
+constexpr int kBrowserW = kCabPageW - 2 * kBrowserX;  // 608
+constexpr int kBrowserH = kCabPageH - 2 * kBrowserY;  // 428
 
 } // namespace geo
 } // namespace Rations
