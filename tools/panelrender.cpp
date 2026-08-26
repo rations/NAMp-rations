@@ -46,6 +46,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -387,6 +388,63 @@ struct TextFit {
 };
 
 //------------------------------------------------------------------------
+// Cap evenness. Baseline is fixed, so the first SOLIDLY inked raster row of a
+// glyph is its apparent cap height, and a row of text whose caps and digits do
+// not agree on that row has some letters visibly short — which is what a short
+// D in "OD2" is. It is a property of the SIZE, not of the string, so the check
+// runs once per Michroma size over the caps and digits that size actually
+// draws: see the typography note in geometry.h for the measurement behind it.
+//
+// Restricted to the characters in use rather than the whole alphabet, because
+// the two are different questions. "Rations" carries exactly one capital, so
+// there is nothing for its R to look short against, and failing the wordmark
+// over letters it does not contain would be a false alarm that pushes a size
+// around for no visible reason.
+//
+// Michroma only. Font::Body carries file names, a drag readout and two lines of
+// prose — variable mixed-case text whose size is set by the row it sits in, and
+// where a one-pixel cap difference inside a lowercase word is neither visible
+// nor avoidable.
+int capStep(FontStack &fonts, float size, const std::string &caps)
+{
+    const int box = static_cast<int>(size * 3.0f) + 8;
+    const float baseline = size * 2.0f;
+    int lo = box, hi = -1;
+    for (char g : caps) {
+        const char one[2] = {g, '\0'};
+        cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, box, box);
+        cairo_t *cr = cairo_create(s);
+        {
+            // Through Canvas, so the glyphs are rasterised with exactly the font
+            // options the editor draws with.
+            Canvas c(cr, &fonts, static_cast<float>(box), static_cast<float>(box));
+            c.setColor(0x000000);
+            c.fillRect(c.bounds());
+            c.setFont(Font::Title);
+            c.setFontSize(size);
+            c.setColor(0xFFFFFF);
+            c.drawString(one, 4.0f, baseline);
+        }
+        cairo_destroy(cr);
+        cairo_surface_flush(s);
+        const unsigned char *d = cairo_image_surface_get_data(s);
+        const int stride = cairo_image_surface_get_stride(s);
+        for (int y = 0; y < box; ++y) {
+            int strongest = 0;
+            for (int x = 0; x < box; ++x)
+                strongest = std::max(strongest, static_cast<int>(d[y * stride + x * 4 + 1]));
+            if (strongest > 128) { // more than half covered: real ink, not a fringe
+                lo = std::min(lo, y);
+                hi = std::max(hi, y);
+                break;
+            }
+        }
+        cairo_surface_destroy(s);
+    }
+    return (hi < 0) ? 0 : hi - lo;
+}
+
+//------------------------------------------------------------------------
 bool auditText(FontStack &fonts)
 {
     cairo_surface_t *scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
@@ -443,7 +501,7 @@ bool auditText(FontStack &fonts)
                     "The gate switch is not learnable and stays where you leave it.",
                     static_cast<float>(geo::kMidiRowW)});
 
-    int over = 0;
+    int bad = 0;
     for (const TextFit &f : fits) {
         c.setFont(f.font);
         c.setFontSize(f.size);
@@ -452,15 +510,45 @@ bool auditText(FontStack &fonts)
             fprintf(stderr, "panelrender: %s \"%s\" is %.0f px at size %.0f but has %.0f — lower "
                             "the size in geometry.h or widen the space\n",
                     f.where, f.text, w, f.size, f.allowance);
-            ++over;
+            ++bad;
+        }
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(scratch);
+
+    // Every distinct Michroma size the panel uses, checked once, over the caps
+    // and digits that size actually sets.
+    std::map<float, std::string> capsAtSize;
+    for (const TextFit &f : fits) {
+        if (f.font != Font::Title)
+            continue;
+        std::string &set = capsAtSize[f.size];
+        for (const char *p = f.text; *p; ++p)
+            if (((*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')) &&
+                set.find(*p) == std::string::npos)
+                set.push_back(*p);
+    }
+    int checked = 0;
+    for (const auto &entry : capsAtSize) {
+        // One capital cannot disagree with itself.
+        if (entry.second.size() < 2)
+            continue;
+        ++checked;
+        const int step = capStep(fonts, entry.first, entry.second);
+        if (step != 0) {
+            fprintf(stderr,
+                    "panelrender: Michroma %.0f grid-fits \"%s\" onto %d different rows, so a "
+                    "legend at this size has visibly short letters (\"OD2\" is where it shows) — "
+                    "move to the nearest cap-even size, see geometry.h\n",
+                    entry.first, entry.second.c_str(), step + 1);
+            ++bad;
         }
     }
 
-    cairo_destroy(cr);
-    cairo_surface_destroy(scratch);
-    if (over == 0)
-        printf("text       %zu legends measured, all inside their allowance\n", fits.size());
-    return over == 0;
+    if (bad == 0)
+        printf("text       %zu legends inside their allowance, %d Michroma sizes cap-even\n",
+               fits.size(), checked);
+    return bad == 0;
 }
 
 //------------------------------------------------------------------------

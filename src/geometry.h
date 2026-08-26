@@ -142,14 +142,33 @@ constexpr int pageMaxH(Page p)
 // clipped, which is what a proportional text face is for and what Michroma —
 // wide, monoline, all-caps in feel — is not.
 //
-// The sizes below are MEASURED against the space each string has, not chosen:
-// tools/panelrender.cpp fails the build's art audit if any legend outgrows its
-// allowance, so a size raised here has to be justified against that check.
+// The sizes below are MEASURED, not chosen, against two things that
+// tools/panelrender.cpp checks and fails the art audit on:
+//
+//   * WIDTH. Every legend is measured against the space this header gives it,
+//     so a size raised here has to be justified rather than eyeballed.
+//
+//   * CAP EVENNESS. Michroma draws its round glyphs with the normal optical
+//     overshoot — at 100 px the O is 77 units tall, the D 75 and the 2 76, so
+//     the round ones are a shade taller and read as level. At a small size that
+//     2.6 % lands across a pixel boundary: at 13 px the O and the 2 grid-fit to
+//     11 rows and the D and the 1 to 10, and "OD2" comes out with a short D.
+//     Measured across the caps and digits, Michroma is even at 10, 11, 12,
+//     15-18, 20-23 and 26-28 and stepped at 13, 14, 19, 24, 25, 29 and 30, so
+//     the legend sizes are drawn from the even list. No hint style avoids this
+//     — FULL and SLIGHT step at the same sizes and NONE steps at different ones
+//     — and it is a property of the size, not of the string, which is why the
+//     audit checks the whole alphabet at each size rather than each legend.
+//
+// One caveat that cannot be designed away: the editor scales, so a legend at
+// 15 logical px is 15*s device px, and an intermediate window size can still
+// land on a stepped value. Being even at the sizes the window actually rests at
+// is what is available; being even everywhere is not.
 constexpr int kTitleSize = 56;      // the wordmark; fitted to the mock's cap height
-constexpr int kKnobLabelSize = 13;  // dial legends, main row
-constexpr int kIoLabelSize = 13;    // Input / Output, same row as the toggles
+constexpr int kKnobLabelSize = 15;  // dial legends, main row
+constexpr int kIoLabelSize = 15;    // Input / Output, same row as the toggles
 constexpr int kToggleLabelSize = 11;// BYPASS
-constexpr int kPageButtonTextSize = 14;
+constexpr int kPageButtonTextSize = 15;
 constexpr int kBlendLabelSize = 12;
 constexpr int kKnobValueSize = 12;  // Roboto: the drag readout
 constexpr int kFileRowTextSize = 12;// Roboto: IR file names
@@ -433,7 +452,7 @@ constexpr int kMidiRowH = 32;
 constexpr int kMidiRowY0 = 76;
 constexpr int kMidiRowPitch = 40;
 constexpr int kMidiRowCount = kChannelToggleCount;
-constexpr int kMidiRowTextSize = 13;
+constexpr int kMidiRowTextSize = 15;
 // The Learn button, as an offset from a row's right edge.
 constexpr int kMidiLearnW = 92;
 constexpr int kMidiLearnInset = 6;

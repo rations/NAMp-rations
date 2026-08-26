@@ -40,6 +40,31 @@ Canvas::Canvas(cairo_t *cr, const FontStack *fonts, float width, float height)
 {
     cairo_set_line_cap(mCr, CAIRO_LINE_CAP_BUTT);
     cairo_set_line_join(mCr, CAIRO_LINE_JOIN_MITER);
+
+    // METRIC HINTING OFF, and it is not a cosmetic preference. The panel is
+    // drawn in logical units inside one cairo_scale(s, s), so a string's width
+    // has to be s times its width at scale 1 or every centred legend walks as
+    // the window is dragged. With cairo's default metric hinting each glyph
+    // advance is rounded to a whole DEVICE pixel, and measuring "Crunch" in
+    // Michroma at 13 against the same string at 52/4 disagrees by up to 1.25 px
+    // — enough to shift a centred legend by a pixel at some window sizes and
+    // nowhere else. Off, the two agree exactly, which is also what makes the
+    // width allowances panelrender checks true at every scale rather than only
+    // at 1.0.
+    //
+    // Hint style SLIGHT keeps the vertical grid-fitting that stops small text
+    // going soft while leaving glyph outlines horizontally unhinted, so shapes
+    // and spacing stay proportional. (FULL measures identically here — cap
+    // heights are a vertical property and SLIGHT already snaps those — so
+    // SLIGHT costs nothing and distorts less.)
+    cairo_font_options_t *opts = cairo_font_options_create();
+    if (cairo_font_options_status(opts) == CAIRO_STATUS_SUCCESS) {
+        cairo_font_options_set_hint_style(opts, CAIRO_HINT_STYLE_SLIGHT);
+        cairo_font_options_set_hint_metrics(opts, CAIRO_HINT_METRICS_OFF);
+        cairo_set_font_options(mCr, opts);
+    }
+    cairo_font_options_destroy(opts);
+
     applyFont();
 }
 
