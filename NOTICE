@@ -1,0 +1,223 @@
+Rations — a four-channel Neural Amp Modeler amp head, a VST3 plug-in for Linux
+and Windows
+Copyright (c) 2026 rations
+
+This project builds on NeuralAmpModelerPlugin by Steven Atkinson, and directly
+on the author's own NAMp. The original upstream project is available at:
+  https://github.com/sdatkinson/NeuralAmpModelerPlugin
+
+Rations itself (the VST3 integration, the crossfade and channel-switch engines
+and the editor under src/) is released under the MIT Licence; see LICENSE. The
+third-party components it links, vendors and redistributes are covered by the
+licences below.
+
+-------------------------------------------------------------------------------
+
+The following components are used under the MIT Licence:
+
+  NeuralAmpModelerCore      https://github.com/sdatkinson/NeuralAmpModelerCore
+  AudioDSPTools             https://github.com/sdatkinson/AudioDSPTools
+  ToneStack                 (from NeuralAmpModelerPlugin)
+  Copyright (c) 2022, 2023 Steven Atkinson
+
+  This covers the NAM core DSP, the AudioDSPTools DSP library, and the tone
+  stack source copied from NeuralAmpModelerPlugin (deps/tonestack/ToneStack.h,
+  ToneStack.cpp). The per-library licence text is also retained in each tree's
+  own LICENSE file.
+
+  VST 3 SDK 3.8.0        https://github.com/steinbergmedia/vst3sdk
+  Copyright (c) 2025 Steinberg Media Technologies GmbH
+
+  Since version 3.7.10 the SDK is distributed under the MIT Licence; the full
+  text is retained in the SDK's LICENSE.txt. VST is a trademark of Steinberg
+  Media Technologies GmbH, registered in Europe and other countries.
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+The following component is used under the zlib Licence:
+
+  NanoSVG                   https://github.com/memononen/nanosvg
+  Copyright (c) 2013-14 Mikko Mononen
+
+  Vendored as src/gfx/nanosvg/nanosvg.h and nanosvgrast.h, which rasterise the
+  plug-in's SVG icons at runtime. The zlib licence text is retained in full at
+  the top of each header.
+
+-------------------------------------------------------------------------------
+
+The following component is used under the Mozilla Public Licence 2.0:
+
+  Eigen                     https://gitlab.com/libeigen/eigen
+
+  The linear-algebra backend of the NAM DSP core. The MPL 2.0 licence text is
+  retained in the Eigen tree's COPYING.MPL2.
+
+-------------------------------------------------------------------------------
+
+A note on AudioDSPTools' Lanczos resampler
+(AudioDSPTools/dsp/ResamplingContainer/):
+
+  ResamplingContainer.h originates from iPlug2 and is covered by iPlug2's zlib-
+  style licence, reproduced in full at the top of that file.
+
+  Dependencies/LanczosResampler.h is derived from sst-basic-blocks, which as a
+  library is GPL-3.0-or-later. That file, however, carries an explicit licence
+  exception from its sole author granting use "in an MIT/BSD context as well as
+  a GPL3 context"; the exception is reproduced verbatim at the top of the file.
+  Rations relies on that exception, so no GPL-licensed code enters this
+  distribution. This is the one dependency whose licence status must be
+  re-checked whenever AudioDSPTools is updated.
+
+-------------------------------------------------------------------------------
+
+The graphics stack — Linux and Windows differ here
+---------------------------------------------------
+
+On Linux these are system shared libraries: present on the machine, linked at
+run time, and NOT redistributed by this project. They are Cairo (LGPL 2.1 /
+MPL 1.1), FreeType (FTL / GPLv2 dual licence, used under the FTL), fontconfig
+(MIT-style) and libX11 (MIT). There is no JACK dependency: this project ships
+the VST3 bundle only.
+
+On Windows there is no system copy of any of them, so the Windows release
+STATICALLY LINKS and therefore redistributes them inside Rations.vst3. That changes
+the licence character of the shipped binary, so they are named here in full,
+with the versions scripts/build-win-deps.sh pins:
+
+  cairo 1.18.4       https://cairographics.org/
+                     LGPL 2.1-or-later OR MPL 1.1 (dual).
+  pixman 0.44.0      https://cairographics.org/     MIT.
+  FreeType 2.13.3    https://freetype.org/          FTL OR GPLv2 (dual).
+  libpng 1.6.48      http://libpng.org/pub/png/     libpng/zlib licence.
+  zlib 1.3.1         https://zlib.net/              zlib licence.
+
+  fontconfig is NOT part of the Windows build. It is linked on Linux but never
+  called — there is no Fc* call anywhere in this tree — and FreeType opens the
+  bundled .ttf files by path, so the Windows build simply drops it.
+
+  FreeType: the FTL is elected, not the GPLv2 option. The FTL requires this
+  credit to appear in the documentation of any product using it, so here it is
+  verbatim:
+
+      Portions of this software are copyright (c) 2024 The FreeType Project
+      (www.freetype.org).  All rights reserved.
+
+  FreeType is built with one modification, made by scripts/build-win-deps.sh
+  rather than carried as a patch: its meson.build defines DLL_EXPORT on Windows
+  without testing default_library, which makes a STATIC build export the whole
+  FreeType API from whatever links it. The build script removes that define. No
+  FreeType source file is changed.
+
+  cairo and the LGPL: cairo is linked statically into Rations.vst3, which
+  LGPL 2.1 section 6 permits provided the recipient can relink the work against a
+  modified cairo. That condition is met by publication rather than by a written
+  offer: Rations' complete corresponding source is published under the MIT
+  Licence, the exact cairo version and the exact configuration used to build it
+  are in scripts/build-win-deps.sh in this same repository, and the whole
+  plug-in rebuilds from that source with one cmake invocation. Anyone may
+  substitute their own cairo and rebuild. If cairo's LGPL terms are ever
+  inconvenient, its MPL 1.1 arm is available instead — no cairo source file is
+  modified either way.
+
+-------------------------------------------------------------------------------
+
+NSIS — the Windows installer (installer/rations.nsi, Rations-install.exe)
+
+  NSIS 3.11, https://nsis.sourceforge.io/
+
+  Copyright (c) 1999-2021 Nullsoft and Contributors, and others named in the
+  project's licence file. zlib/libpng licence, except:
+
+    Source/7zip/*  (the LZMA compression module)  Common Public License 1.0,
+      with a special exception from Igor Pavlov and Amir Szekely that
+      "expressly permit[s] you to statically or dynamically link your code (or
+      bind by name) to the files from the LZMA compression module for NSIS
+      without subjecting your linked code to the terms of the Common Public
+      license version 1.0". Rations uses the module unmodified, via
+      `SetCompressor /SOLID lzma`, so the exception applies and no CPL
+      obligation attaches to anything else here.
+
+    Source/bzip2/*  bzip2 licence. Not used by this installer.
+
+  NSIS is a BUILD tool: nothing from it enters the plug-in's include graph, and
+  the Linux release does not involve it at all. It is named here because the
+  Windows release redistributes one piece of it — makensis links a prebuilt NSIS
+  installer stub into Rations-install.exe and appends the compressed bundle, which
+  is what lets the installer be produced on Linux without Wine and without the
+  cross compiler.
+
+-------------------------------------------------------------------------------
+
+Editor art and the scripts that generate it (gui/, resources/img/):
+
+  Copyright (c) 2026 rations — MIT Licence.
+
+  The amp-head panel (head-base.png), the speaker cabinet (cabinet-base.png),
+  the dial and the indicator lamps are the author's own artwork. The bat-handle
+  toggle switches (switch_up_ring.png, switch_down_ring.png) and the meter track
+  are generated procedurally by gui/make_switch.sh and gui/make_meter.sh
+  (ImageMagick 7) rather than authored as raster files, and Folder.svg is the
+  author's own, drawn to match the icon set below. There is no badge image: the
+  "Rations" wordmark is drawn as text in Michroma at run time.
+
+  gui/make_knob.sh, and gui/make_switch.sh's ancestor make_footswitch.sh, were
+  originally written by the same author for a sibling project that is licensed
+  GPL-3.0-or-later, and they carried that project's GPL-3 header. That project
+  is GPL-3 solely because it links JUCE. Neither script contains JUCE code or
+  derives from anything GPL-licensed: both are pure ImageMagick 7 command
+  pipelines (masks, radial gradients, and the CopyOpacity / DstIn / screen
+  compose operators), and the only mention of JUCE in either file was a comment
+  explaining why the knob art must be trimmed and centred before rotation — a
+  requirement that applies identically to Cairo. As the sole author and
+  copyright holder, the author has relicensed them MIT for use here.
+
+-------------------------------------------------------------------------------
+
+Vector icons (resources/img/*.svg):
+
+  Gear.svg, File.svg, Cross.svg, ArrowLeft.svg and ArrowRight.svg are copied
+  verbatim from NeuralAmpModelerPlugin (MIT, Copyright (c) 2022, 2023 Steven
+  Atkinson) and are covered by the MIT grant reproduced above. Folder.svg is the
+  author's own, MIT, drawn in the same 24x24 stroked style so the set matches.
+
+-------------------------------------------------------------------------------
+
+Bundled fonts (resources/fonts/): Michroma-Regular.ttf (SIL Open Font License
+1.1) and Roboto-Regular.ttf (Apache License 2.0).
+
+-------------------------------------------------------------------------------
+
+Amp captures (captures/, shipped as Contents/Resources/captures/):
+
+  Copyright (c) 2026 rations.
+
+  The .nam files under captures/{Clean,Crunch,OD1,OD2}/ are the author's own
+  captures, made with the Neural Amp Modeler trainer, and they are part of the
+  product rather than a working set: the plug-in has no capture browser and
+  loads these and only these. Unlike the parent project's, they are tracked in
+  this repository and redistributed inside the bundle.
+
+  TERMS NOT YET SET — CONFIRM BEFORE RELEASE. The source code is MIT, but a
+  capture is a recording, not source, and the author has not yet stated whether
+  these carry the same MIT grant, a different licence, or a
+  no-separate-redistribution reservation. This paragraph is a deliberate flag,
+  not a placeholder to be quietly deleted: the .nam files must not be published
+  under an assumed licence.
