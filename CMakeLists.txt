@@ -214,6 +214,74 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Editor graphics stack: Cairo drawing, FreeType text, PNG layers and runtime
+# SVG rasterisation. Kept as its own library so the offline render tool can
+# exercise exactly the code the editor paints with, without X11 or VST3.
+# ---------------------------------------------------------------------------
+find_package(PkgConfig REQUIRED)
+if(RATIONS_WINDOWS)
+    # fontconfig is deliberately absent: there is not one Fc* call in this tree
+    # (FontStack loads its two TTFs by path), and cairo makes fontconfig optional
+    # on Windows, so requiring it here would only add a dependency nothing calls.
+    # cairo-ft.h guards its fontconfig include behind CAIRO_HAS_FC_FONT.
+    #
+    # There is no cairo-xlib either. The Windows editor composes into the same
+    # offscreen image surface the X11 one does and blits it with GDI, so cairo
+    # needs only its image backend, its FreeType font backend and PNG.
+    #
+    # These come from scripts/build-win-deps.sh; Debian packages no MinGW build
+    # of any of them. cmake/toolchain-mingw-w64.cmake points pkg-config at that
+    # prefix through PKG_CONFIG_LIBDIR.
+    #
+    # --static is required, and not merely for completeness. Everything in that
+    # sysroot is a static archive, and GNU ld resolves archives left to right in
+    # one pass: pkg-config's shared Libs: line orders them "-lz -lpng16", which
+    # is backwards for static linking and fails with undefined references to
+    # crc32/inflate/deflate out of libpng16.a. The --static line repeats -lz
+    # after -lpng16, which is exactly what the one-pass resolver needs.
+    set(PKG_CONFIG_ARGN --static)
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2)
+
+    # cairo.h declares every entry point __declspec(dllimport) unless this is
+    # defined, and cairo's own .pc file does not carry it even for a static
+    # build - so without it every cairo call fails to link as "undefined
+    # reference to __imp_cairo_*". It belongs on the imported target rather than
+    # on our own, because it describes how cairo must be USED, and it has to
+    # reach every translation unit that includes a cairo header.
+    target_compile_definitions(PkgConfig::CAIRO INTERFACE CAIRO_WIN32_STATIC_BUILD)
+else()
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2 fontconfig)
+    # The editor embeds into the host's X11 window; cairo-xlib paints it.
+    pkg_check_modules(CAIROX11 REQUIRED IMPORTED_TARGET cairo-xlib x11)
+endif()
+
+# What the editor's window layer needs beyond Cairo itself. On Linux that is
+# cairo-xlib and Xlib; on Windows it is GDI, because the Win32 view blits its
+# offscreen image surface through a DIB section rather than drawing to an X
+# drawable. Named once so the plug-in and the render tool cannot disagree.
+if(RATIONS_WINDOWS)
+    set(RATIONS_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
+else()
+    set(RATIONS_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
+endif()
+
+add_library(RationsGfx STATIC
+    ${RATIONS_ROOT}/src/gfx/canvas.cpp
+    ${RATIONS_ROOT}/src/gfx/fontstack.cpp
+    ${RATIONS_ROOT}/src/gfx/image.cpp
+    ${RATIONS_ROOT}/src/gfx/svg.cpp
+    ${RATIONS_ROOT}/src/gfx/resourcestore.h
+    ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
+    ${RATIONS_ROOT}/src/platform/respath.cpp
+)
+target_include_directories(RationsGfx PUBLIC ${RATIONS_ROOT}/src)
+target_link_libraries(RationsGfx PUBLIC PkgConfig::CAIRO ${CMAKE_DL_LIBS})
+target_compile_features(RationsGfx PUBLIC cxx_std_17)
+set_target_properties(RationsGfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# -Wall for our own code; the vendored NanoSVG headers are compiled as-is.
+target_compile_options(RationsGfx PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
 # NAM DSP core as a static library, linked --whole-archive by the plug-in: each
 # network architecture (WaveNet, LSTM, ConvNet, the slimmable container) self-
 # registers via a file-scope static initialiser, and the linker would otherwise
@@ -281,9 +349,12 @@ set(RATIONS_FONT_FILES
     fonts/Michroma-Regular.ttf
     fonts/Roboto-Regular.ttf
 )
+# The *-base.png files in resources/img are the untrimmed source exports that
+# gui/make_assets.sh reads; they are deliberately NOT in this list. What ships is
+# what the editor loads.
 set(RATIONS_IMG_FILES
-    img/head-base.png
-    img/cabinet-base.png
+    img/head.png
+    img/cabinet.png
     img/dial.png
     img/led_on.png
     img/led_off.png
@@ -441,3 +512,19 @@ target_link_libraries(Rations
 # objects are pulled in, and the DSP core's self-registering architectures are
 # registered from .init_array, which needs no exported symbol.
 target_link_options(Rations PRIVATE -Wl,--exclude-libs,ALL)
+
+# ---------------------------------------------------------------------------
+# panelrender — offline render of each editor page to a PNG, plus an audit of
+# every art asset and both fonts. Links RationsGfx only: no X11, no host, no
+# VST3 objects, so the graphics stack and the layout can be checked long before
+# the editor exists, and a missing asset fails the build gate instead of
+# silently degrading to a flat rectangle at run time.
+#
+# On Windows this is the FIRST gate, and the reason it is worth having: it
+# proves cairo, FreeType, PNG decode, NanoSVG and the whole of src/gfx work in
+# the cross build before a single line of window code exists.
+# ---------------------------------------------------------------------------
+add_executable(panelrender ${RATIONS_ROOT}/tools/panelrender.cpp)
+target_link_libraries(panelrender PRIVATE RationsGfx)
+target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
+target_compile_options(panelrender PRIVATE -Wall)
