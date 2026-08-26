@@ -403,6 +403,22 @@ endforeach()
 # ---------------------------------------------------------------------------
 # The plug-in.
 #
+# The native window class is picked here the same way src/platform/plugview.h
+# picks the type it declares, so exactly one of the two is ever compiled: the
+# other one's headers do not exist on this platform.
+if(WIN32)
+    set(RATIONS_PLATFORM_VIEW_SOURCES
+        src/platform/win32plugview.h
+        src/platform/win32plugview.cpp
+    )
+else()
+    set(RATIONS_PLATFORM_VIEW_SOURCES
+        src/platform/x11plugview.h
+        src/platform/x11plugview.cpp
+    )
+endif()
+
+#
 # The sources go straight into the bundle target rather than through an
 # intermediate static library. NAMp needed that library because its standalone
 # linked the same sources; Rations ships the bundle and nothing else, so a
@@ -411,11 +427,18 @@ endforeach()
 set(RATIONS_PLUGIN_SOURCES
     src/rationsids.h
     src/version.h
+    src/geometry.h
     src/rationsprocessor.h
     src/rationsprocessor.cpp
     src/rationscontroller.h
     src/rationscontroller.cpp
     src/rationsfactory.cpp
+    src/rationsview.h
+    src/rationsview.cpp
+    src/filebrowser.h
+    src/filebrowser.cpp
+    src/platform/plugview.h
+    ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
 
 smtg_add_vst3plugin(Rations ${RATIONS_PLUGIN_SOURCES})
@@ -497,6 +520,8 @@ target_include_directories(Rations PRIVATE ${RATIONS_ROOT}/src)
 target_link_libraries(Rations
     PRIVATE
         sdk
+        RationsGfx
+        ${RATIONS_PLATFORM_GUI_LIBS}
         -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive
 )
 

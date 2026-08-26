@@ -44,8 +44,8 @@ const std::string &resourceDir();
 // while the path is being built, before any filesystem call sees it.
 //
 // Every path this plug-in acts on is untrusted (RULES.md section 3): a state
-// blob written into a project file, a path handed over by a host through
-// INampFileLoader, an environment override. Without this, one bad byte in a
+// blob written into a project file, an impulse response picked in the cabinet
+// page's browser, an environment override. Without this, one bad byte in a
 // saved project would leave the host with an uncaught exception out of a worker
 // thread or out of its own message loop.
 //
