@@ -105,6 +105,12 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     parameters.addParameter(STR16("Active Capture"), nullptr, 0, 0.0,
                             Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
                             kActiveIndexId);
+    // The channel that is SOUNDING, as opposed to kChannelId, which is the one being asked for.
+    // The panel's LEDs follow this one so a lamp cannot light over a channel whose captures are
+    // still being built.
+    parameters.addParameter(STR16("Active Channel"), nullptr, 0, 0.0,
+                            Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
+                            kActiveChannelId);
 
     return kResultOk;
 }

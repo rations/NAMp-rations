@@ -140,17 +140,17 @@ void CrossfadeEngine::bindBranches(int k, bool wantUpper)
 }
 
 //------------------------------------------------------------------------
-void CrossfadeEngine::pollBank()
+bool CrossfadeEngine::pollBank()
 {
     // Retry a bank that could not be handed back last time before taking on anything new.
     if (mHolding && mLoader && mLoader->retire(mHolding))
         mHolding = nullptr;
 
     if (!mLoader)
-        return;
+        return false;
     Bank *incoming = mLoader->takePending();
     if (!incoming)
-        return;
+        return false;
 
     Bank *outgoing = mBank;
     mBank = incoming;
@@ -173,6 +173,7 @@ void CrossfadeEngine::pollBank()
             mHolding = outgoing;
         }
     }
+    return true;
 }
 
 //------------------------------------------------------------------------
@@ -210,6 +211,63 @@ double CrossfadeEngine::inputLevelDbu() const
 {
     return hasInputLevel() ? mBank->entries[mA.index].inputLevelDbu : 0.0;
 }
+
+//------------------------------------------------------------------------
+// The capture this engine's own dial names, and only if it is built. Deliberately NOT the
+// nearest-built fallback that processNative() uses while a bank fills in behind the knob: that
+// fallback exists so the channel already sounding keeps sounding, and applying it here would let
+// a footswitch land the player on a capture they did not select.
+int CrossfadeEngine::restIndex() const
+{
+    if (!mBank || mBank->count <= 0)
+        return -1;
+    int i = static_cast<int>(std::llround(mKnobPos));
+    i = std::min(std::max(i, 0), mBank->count - 1);
+    return mBank->entryReady(i) ? i : -1;
+}
+
+//------------------------------------------------------------------------
+int CrossfadeEngine::restPrewarmSamples() const
+{
+    const int i = restIndex();
+    return i < 0 ? 0 : mBank->entries[i].prewarmSamples;
+}
+
+//------------------------------------------------------------------------
+void CrossfadeEngine::snapToRest()
+{
+    const int i = restIndex();
+    if (i < 0)
+        return;
+
+    // Land ON the capture rather than travelling to it, and hold there. mPos is taken from the
+    // index rather than from the knob because an idle channel is at rest by definition: the dial
+    // may sit at 3.4, but nothing has been sweeping it, so the capture it names is 3 and exactly
+    // one branch needs priming. Reusing the detent state to hold it there is not a shortcut — it
+    // is the same state the auto-detent leaves behind, so the knob moving releases it in the one
+    // place that already knows how.
+    mSnapPosition = false;
+    mPos = static_cast<double>(i);
+    mLastKnob = mKnobPos;
+    mIdleSamples = 0;
+    mDetenting = false;
+    mDetented = true;
+    mDetentTarget = mPos;
+
+    bindBranches(i, false);
+}
+
+//------------------------------------------------------------------------
+void CrossfadeEngine::hintPriority()
+{
+    if (!mLoader || !mBank || mBank->count <= 0)
+        return;
+    int i = static_cast<int>(std::llround(mKnobPos));
+    i = std::min(std::max(i, 0), mBank->count - 1);
+    mLoader->setPriority(i);
+}
+
+//------------------------------------------------------------------------
 
 double CrossfadeEngine::activeIndexNorm() const
 {

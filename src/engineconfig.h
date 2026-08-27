@@ -8,6 +8,27 @@
 
 namespace Rations
 {
+
+// The four channels, in panel order. This is the value space of the kChannelId parameter and the
+// index space of every four-element array in the plug-in and the editor; nothing may reorder it.
+//
+// It lives HERE, in the header that deliberately has no VST3 dependency, rather than beside the
+// parameter IDs, for the same reason the tuning constants do: the channel rack and the offline
+// proof that the channel switch is exact both need to name a channel, and neither of them links
+// the plug-in. rationsids.h includes this file, so there is still exactly one definition.
+enum Channel : int {
+    kChannelClean = 0,
+    kChannelCrunch = 1,
+    kChannelOd1 = 2,
+    kChannelOd2 = 3,
+    kChannelCount = 4,
+};
+
+// The bank directory name for each channel, relative to the bundle's Resources/captures. These
+// are tracked content shipped inside the bundle, not a user selection: there is no capture
+// browser in this plug-in.
+inline constexpr const char *kChannelDirName[kChannelCount] = {"Clean", "Crunch", "OD1", "OD2"};
+
 namespace engine
 {
 
@@ -48,6 +69,101 @@ inline constexpr double kSlewPerIndexMs = 100.0;
 // model, not two.
 inline constexpr double kDetentIdleMs = 300.0;
 inline constexpr double kDetentGlideMs = 200.0;
+
+// --- the channel switch -------------------------------------------------------------------
+//
+// Switching channels is not a knob turn, so it is not the crossfade above. The incoming channel
+// has not been fed anything for however long it has been idle, and a strictly feed-forward model
+// with no convolution history produces a whole receptive field of wrong output before it produces
+// a right one. Fading into that would fade into garbage.
+//
+// So the incoming channel is CAUGHT UP first: it is fed the last R native-rate input samples out
+// of the ring below, faster than real time, with its output thrown away. When the ring is drained
+// the model is exact, and only then does the fade run — between two exact signals, which is why
+// kChannelFadeMs can be short. R is the incoming capture's own GetPrewarmSamples(), read from the
+// model; it is never a constant here.
+
+// Native-rate samples of input history kept for the catch-up. A power of two, so the ring indexes
+// with a mask instead of a modulo.
+//
+// The size follows from the catch-up arithmetic rather than being picked. The read cursor lags the
+// write head by R at the moment of the switch and never falls further behind than that — a
+// catch-up with no CPU headroom parks at exactly R rather than letting the gap grow — so the ring
+// must hold R plus whatever arrives while the gap is being closed, plus one native block. The A2
+// fast path reports 6347 samples at 48 kHz; even at a rate barely above real time, where the
+// catch-up takes several times R, the gap itself never exceeds R and the requirement is a small
+// multiple of it. 32768 is a power of two clear of every such case with a large host block still
+// to spare, and costs 256 KB per instance — against the ~33 MB the four banks already cost.
+//
+// A capture whose prewarm would not fit is not silently under-primed: ModelBank warns once at
+// build time, where the number is first known and where printing is allowed.
+inline constexpr int kInputRingSamples = 32768;
+
+// How many models the audio thread may be running at once, in total, at any instant during a
+// channel switch — the sounding channel's own branches included.
+//
+// A TOTAL, not a rate, and that is the whole of what this constant learned from being measured.
+// The design was originally costed as a rate: the incoming channel consumes input at some multiple
+// of real time, so the catch-up lasts R / ((multiple - 1) * Fs) and the peak is "outgoing branches
+// plus multiple". The trouble is the phrase "outgoing branches", which is one at rest and TWO
+// while a gain dial is moving — so a fixed rate quietly means two different peaks, and the larger
+// of them is the one a player produces by stomping the footswitch while turning the gain knob.
+// Measured, that combination missed the deadline at every rate, down to one where the catch-up
+// took two thirds of a second.
+//
+// Stated as a total instead, the peak is the same number whatever else is happening: the rack asks
+// the sounding channel how many branches it is about to run and gives the catch-up whatever is
+// left. When nothing is left the switch is HELD — the outgoing channel keeps sounding, the switch
+// simply arrives late — which is the same answer D4 already gives when a capture is not built yet,
+// applied to CPU instead of to readiness. A late switch is a bad afternoon; a missed deadline is a
+// hole in the recording.
+//
+// MEASURED, not chosen — rations_jackcheck, this machine, CPU governor left at powersave, the
+// built bundle driven from a real JACK process callback at 48 kHz / 128 frames, in three states:
+// stomping with the switches allowed to complete, stomping four times a second so the catch-up
+// never finishes, and stomping while a gain dial sweeps. Worst block as a fraction of the 2.67 ms
+// period, and xruns over fifteen seconds:
+//
+//     budget   catch-up   worst block   xruns
+//      (1.0)      —          40%          0     <- one model at its detent, no switching at all
+//      (2.0)      —          57%          0     <- a gain dial moving, no switching
+//       2.4      331 ms     56-78%        0     <- four passes x three states, all clean
+//       2.5      264 ms     55-82%        1
+//       2.6      220 ms     54-80%        1
+//       2.75     176 ms     67-76%       12
+//       3.0      132 ms     68-84%       60
+//       4.0       66 ms       108%       47
+//       7.0       26 ms       176%      109
+//
+// Two things to read out of that. The usable deadline is about three quarters of the nominal
+// period, not the whole of it — the ALSA interrupt, the graph turnaround and everything else on
+// the machine live inside it too. And the cliff is steep: 2.4 is clean over four passes where 2.5
+// is not, so 2.4 is the value taken. 128 frames is the buffer size it is qualified at, which is
+// the smallest one anyone actually records with.
+//
+// What it costs: at rest the catch-up gets 2.4 - 1 = 1.4 samples per sample of real time, so it
+// closes a 6347-sample gap at 0.4 samples per sample and the switch lands about 340 ms later. That
+// is SLOW for a footswitch, and it is arithmetic rather than implementation: one model costs
+// 29% of a JACK period on this machine, so there are about two and a half models to go round, the
+// plug-in already spends one of them, and priming a whole receptive field on the audio thread
+// needs most of what is left. The catch-up has a fixed amount of work to do — one receptive field
+// of model time — and the only lever on how long that takes is how much spare CPU there is to do
+// it in. Nothing about this constant can improve it; only the cost of a model can, which means
+// either the governor or moving the priming off the audio thread. Both are decisions for the
+// author, and the second one contradicts a binding rule, so neither was taken here.
+inline constexpr double kSwitchModelBudget = 2.4;
+
+// The floor under the above. A catch-up only closes the gap if it consumes input FASTER than real
+// time, so anything at or below 1.0 makes no progress at all and is treated as no headroom: the
+// switch is held and the cursor is parked one receptive field behind the write head, ready to
+// resume the instant the sounding channel collapses back to a single branch.
+inline constexpr double kCatchupMinRate = 1.0;
+
+// The fade between two channels, once the incoming one is exact. Both signals are true responses
+// to the same input by the time this runs, so there is no discontinuity to mask and no curve to
+// tune; the fade is here because the two channels are different amps at different levels, and a
+// step between two correct signals is still a step.
+inline constexpr double kChannelFadeMs = 10.0;
 
 // Bypass and start-up ramp length in milliseconds. Long enough to be inaudible, and never a hard
 // mute — a hard bypass switch is itself a click.

@@ -136,7 +136,9 @@ private:
     double paramValue(Steinberg::Vst::ParamID id) const;
     std::string paramText(Steinberg::Vst::ParamID id) const;
     bool irFile(int slot, std::string &out) const;
-    // Which of the four channels kChannelId currently selects.
+    // Which of the four channels kChannelId asks for, and which one is actually sounding. They
+    // differ while a switch is held waiting for its capture to be built — see the definitions.
+    int requestedChannel() const;
     int activeChannel() const;
     // Text shown under a dial while it is being dragged. A channel dial names the capture it is
     // sitting on rather than a number, because that is what the control actually selects.

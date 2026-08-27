@@ -447,6 +447,8 @@ set(RATIONS_PLUGIN_SOURCES
     src/modelbank.cpp
     src/crossfadeengine.h
     src/crossfadeengine.cpp
+    src/channelrack.h
+    src/channelrack.cpp
     src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
@@ -605,6 +607,63 @@ target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
 target_compile_options(rations_fadecheck PRIVATE -Wall)
 
 # ---------------------------------------------------------------------------
+# rations_jackcheck — the LIVE gate for the channel switch, and the measurement
+# that settles kCatchupRatio. Loads the built bundle the way a DAW does and
+# drives it from a real JACK process callback, stomping kChannelId through a
+# parameter-change queue. Linux only, and only when JACK's development headers
+# are present: it is a measurement rig, not part of the plug-in, and its absence
+# must not stop the plug-in from building.
+# ---------------------------------------------------------------------------
+if(NOT RATIONS_WINDOWS)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(RATIONS_JACK QUIET jack)
+    endif()
+    if(RATIONS_JACK_FOUND)
+        add_executable(rations_jackcheck
+            ${RATIONS_ROOT}/tools/rations_jackcheck.cpp
+            ${RATIONS_MODULE_LOADER}
+            ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+            ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+        )
+        target_include_directories(rations_jackcheck
+            PRIVATE ${RATIONS_ROOT}/src ${RATIONS_JACK_INCLUDE_DIRS})
+        target_link_libraries(rations_jackcheck PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES})
+        target_link_directories(rations_jackcheck PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
+        target_compile_features(rations_jackcheck PRIVATE cxx_std_17)
+        target_compile_options(rations_jackcheck PRIVATE -Wall)
+        add_dependencies(rations_jackcheck Rations)
+    else()
+        message(STATUS "jack not found - rations_jackcheck (the live switch gate) will not be built")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# rations_switchcheck — the offline proof that a CHANNEL change is exact rather
+# than merely smooth. The crossfade proof next door covers a knob turn, where
+# the incoming capture is already running at zero weight before it is needed;
+# this one covers a footswitch stomp, where it is not, and where the whole
+# design rests on replaying the input ring into a model that has no history at
+# all. Drives the shipped ChannelRack, not a paraphrase of it.
+# ---------------------------------------------------------------------------
+add_executable(rations_switchcheck
+    ${RATIONS_ROOT}/tools/rations_switchcheck.cpp
+    ${RATIONS_ROOT}/src/capturesource.cpp
+    ${RATIONS_ROOT}/src/modelbank.cpp
+    ${RATIONS_ROOT}/src/crossfadeengine.cpp
+    ${RATIONS_ROOT}/src/channelrack.cpp
+    # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
+    # from throwing out of the worker thread.
+    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
+)
+target_include_directories(rations_switchcheck PRIVATE ${RATIONS_ROOT}/src ${VST3_SDK_DIR})
+target_link_libraries(rations_switchcheck
+    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
+target_compile_options(rations_switchcheck PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
 # rations_rtcheck — counts allocations on the audio path using the DSP core's
 # own malloc/free interception harness. Built without optimisation and with
 # assertions live, as that harness requires.
@@ -623,6 +682,7 @@ add_executable(rations_rtcheck
     ${RATIONS_ROOT}/src/capturesource.cpp
     ${RATIONS_ROOT}/src/modelbank.cpp
     ${RATIONS_ROOT}/src/crossfadeengine.cpp
+    ${RATIONS_ROOT}/src/channelrack.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
     # from throwing out of the worker thread. Linked in rather than taken from
     # RationsGfx because this target deliberately links no graphics at all — it

@@ -5,7 +5,7 @@
 // larger than the size it was Reset with — none of those are visible by reading. So this counts
 // them, using the DSP core's own malloc/free interception harness.
 //
-// Three things are measured, and the third is the one most likely to be wrong:
+// Four things are measured, and the last two are the ones most likely to be wrong:
 //
 //   1. The crossfade engine, sweeping the knob across a whole bank so branches bind, swap and
 //      collapse while the count is running.
@@ -15,7 +15,13 @@
 //      captures can malloc. The plug-in relies on a one-reference capture fitting in libstdc++'s
 //      small-object buffer. That is an assumption about a standard library implementation detail,
 //      so it gets measured rather than asserted.
+//   4. The channel rack, switching channels back and forth while the count runs. The catch-up
+//      burst is still the audio thread: it feeds the incoming channel out of the input ring inside
+//      the same process() call, so every rule that applies to the steady state applies to it. This
+//      is also where a ring read, a fade buffer or a chunk stage that was sized wrong would show
+//      up, because those only run during a switch.
 
+#include "channelrack.h"
 #include "crossfadeengine.h"
 #include "engineconfig.h"
 #include "modelbank.h"
@@ -56,11 +62,14 @@ struct DirectDriver {
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) {
-        fprintf(stderr, "usage: rations_rtcheck <capture directory>\n");
+    if (argc < 3) {
+        fprintf(stderr, "usage: rations_rtcheck <capture directory A> <capture directory B>\n"
+                        "  two directories, because a channel switch needs somewhere to switch to "
+                        "and the catch-up burst is part of the audio path\n");
         return 2;
     }
     const std::string dir = argv[1];
+    const std::string dirB = argv[2];
 
     Rations::ModelBank loader;
     loader.start();
@@ -129,11 +138,13 @@ int main(int argc, char **argv)
                allocation_tracking::g_allocation_count);
     }
 
+    printf("counting       crossfade engine, knob sweeping\n");
     // Sweeping the position is the point: it binds branches, swaps them at integer crossings and
     // collapses them at rest. A static position would exercise almost none of the engine.
     allocation_tracking::run_allocation_test_no_allocations(
         nullptr, [&] { direct.run(400); }, nullptr, "crossfade engine, knob sweeping");
 
+    printf("counting       engine through the resampler at 48 kHz (bypassed)\n");
     allocation_tracking::run_allocation_test_no_allocations(
         nullptr,
         [&] {
@@ -146,6 +157,7 @@ int main(int argc, char **argv)
         },
         nullptr, "engine through the resampler at 48 kHz (bypassed)");
 
+    printf("counting       engine through the resampler at 44.1 kHz (engaged)\n");
     allocation_tracking::run_allocation_test_no_allocations(
         nullptr,
         [&] {
@@ -157,6 +169,48 @@ int main(int argc, char **argv)
             }
         },
         nullptr, "engine through the resampler at 44.1 kHz (engaged, std::function by value)");
+
+    // --- the channel rack, switching -----------------------------------------------------------
+    // Two channels loaded and a stomp every few blocks, so the count spans the whole switch: the
+    // ring writes, the catch-up feed at kCatchupRatio, the fade, and a stomp that lands inside a
+    // switch already in flight.
+    {
+        Rations::ChannelRack rack;
+        rack.prepare(kBlock, Rations::kNativeSampleRate);
+        rack.start();
+        rack.loadChannel(Rations::kChannelClean, dir, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(Rations::kChannelOd1, dirB, 1.0, Rations::engine::kChunk);
+        for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (rack.progress() < 1.0f) {
+            fprintf(stderr, "rations_rtcheck: the rack's banks never finished building\n");
+            return 1;
+        }
+
+        // The stomp period is deliberately shorter than a whole switch takes, so some requests
+        // land mid-catch-up and some mid-fade. Both are the paths that only exist here.
+        auto drive = [&](int blocks) {
+            NAM_SAMPLE *ip = in.data();
+            NAM_SAMPLE *op = out.data();
+            for (int b = 0; b < blocks; ++b) {
+                const Rations::Channel want =
+                    ((b / 3) % 2) ? Rations::kChannelOd1 : Rations::kChannelClean;
+                rack.pollBanks();
+                rack.setPositionNorm(Rations::kChannelClean, 0.0);
+                rack.setPositionNorm(Rations::kChannelOd1, 0.0);
+                rack.requestChannel(want);
+                rack.processNative(&ip, &op, kBlock);
+            }
+        };
+        drive(8); // warm anything lazily sized before the count starts
+
+        printf("counting       channel rack, stomping between two channels\n");
+        allocation_tracking::run_allocation_test_no_allocations(
+            nullptr, [&] { drive(200); }, nullptr, "channel rack, stomping between two channels");
+
+        rack.stop();
+        rack.releaseBanks();
+    }
 
     // Teardown happens off the counted path, which is the point of the whole retirement design.
     loader.stop();

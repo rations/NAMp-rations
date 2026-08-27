@@ -332,12 +332,20 @@ void RationsEditorView::composeHead(Canvas &c)
 
     // Five bat switches and five LEDs: one per channel, plus the gate. Exactly one channel LED is
     // ever lit, which is what kChannelId being a list parameter rather than four booleans buys.
-    const int active = activeChannel();
+    //
+    // The switch and its lamp read DIFFERENT things, and on purpose. A bat switch on a real amp
+    // moves the instant your hand moves it, so it follows the request; the lamp says which amp is
+    // actually under your hands, so it follows the audio. They agree within a switch's length of
+    // time, and while a channel's captures are still being built they visibly do not — which is
+    // the honest report, and the reason the switch is held rather than faked.
+    const int requested = requestedChannel();
+    const int sounding = activeChannel();
     const bool gateOn = paramValue(kNoiseGateOnId) > 0.5;
     for (int i = 0; i < geo::kToggleCount; ++i) {
-        const bool on = (i < geo::kChannelToggleCount) ? (i == active) : gateOn;
-        drawToggle(c, geo::kToggles[i], on);
-        drawLed(c, static_cast<float>(geo::kToggles[i].cx), static_cast<float>(geo::kLedCY), on);
+        const bool channel = i < geo::kChannelToggleCount;
+        drawToggle(c, geo::kToggles[i], channel ? (i == requested) : gateOn);
+        drawLed(c, static_cast<float>(geo::kToggles[i].cx), static_cast<float>(geo::kLedCY),
+                channel ? (i == sounding) : gateOn);
     }
 
     // Bypass. The LED follows the plug-in being IN circuit, so it is off when bypassed.
@@ -728,12 +736,26 @@ bool RationsEditorView::irFile(int slot, std::string &out) const
     return true;
 }
 
-// kChannelId is a 4-entry list parameter, so its normalized value is index/(count-1).
-int RationsEditorView::activeChannel() const
+// Both of these are 4-entry list values, so a normalized value is index/(count-1).
+//
+// They are deliberately two different parameters, and the difference is the whole of D4's "held,
+// not faked": kChannelId is what the user, the host or a footswitch ASKED for, and
+// kActiveChannelId is what the audio thread is actually sounding. A switch to a channel whose
+// capture is still being built is held until it can be honoured, so the two disagree for as long
+// as that takes. The bat switches write the request; the LEDs read the answer, which is why a
+// lamp can never light over a channel that is not there yet.
+int RationsEditorView::requestedChannel() const
 {
     const double norm = paramValue(kChannelId);
-    const int index = static_cast<int>(std::lround(norm * (kChannelCount - 1)));
-    return std::clamp(index, 0, kChannelCount - 1);
+    return std::clamp(static_cast<int>(std::lround(norm * (kChannelCount - 1))), 0,
+                      kChannelCount - 1);
+}
+
+int RationsEditorView::activeChannel() const
+{
+    const double norm = paramValue(kActiveChannelId);
+    return std::clamp(static_cast<int>(std::lround(norm * (kChannelCount - 1))), 0,
+                      kChannelCount - 1);
 }
 
 // Which capture is sounding in channel `c`. The processor reports the active channel's index from
@@ -919,7 +941,7 @@ bool RationsEditorView::handleHeadClick(float x, float y)
             // One list parameter, four views onto it. Clicking the switch that is already up is a
             // no-op: a real amp head has no all-channels-off position, so there is nothing for a
             // second click to mean.
-            if (i != activeChannel())
+            if (i != requestedChannel())
                 editParam(kChannelId, i / static_cast<double>(kChannelCount - 1));
         } else {
             editParam(t.id, paramValue(t.id) > 0.5 ? 0.0 : 1.0);

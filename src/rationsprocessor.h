@@ -2,7 +2,7 @@
 //
 // The chain:
 //
-//   input gain -> noise-gate trigger -> [ native-rate resampler { crossfade engine } ]
+//   input gain -> noise-gate trigger -> [ native-rate resampler { channel rack } ]
 //     -> noise-gate gain -> tone stack -> IR -> output gain -> bypass ramp
 //
 // with the gate, tone stack and IR running at the host rate on the whole block, once per block
@@ -10,11 +10,11 @@
 // size, and handing them a varying size would re-trigger that growth on the audio thread), and
 // every model call going through a fixed chunk loop at the models' native rate.
 //
-// WHAT IS WIRED IN THIS PHASE: one channel. The Clean bank loads from the bundle's
-// Resources/captures/Clean and its dial sweeps it, exactly as the parent plug-in's single bank
-// does. The other three channels have parameters, dials and switches but no audio yet: they get
-// their own banks and the click-free switch between them in the phase that owns that, and until
-// then kChannelId moves nothing. The second IR slot and its blend likewise.
+// All four channels are wired: each loads its own bank out of the bundle's Resources/captures,
+// each has its own dial sweeping that bank, and kChannelId picks which one sounds. The rack owns
+// the switch between them and the input history that makes it click-free; the processor's job is
+// only to keep it fed and to hand the host back which channel is ACTUALLY sounding, which is not
+// always the one the parameter asks for. The second IR slot and its blend are still stubbed.
 //
 // Output is pinned to Normalized. It is not a user choice here, so there is no parameter for it
 // and the engine is told once — see the setOutputMode call in setupProcessing.
@@ -27,8 +27,7 @@
 
 #include "public.sdk/source/vst/vstaudioeffect.h"
 
-#include "crossfadeengine.h"
-#include "modelbank.h"
+#include "channelrack.h"
 #include "nativeresampler.h"
 #include "rationsids.h"
 
@@ -107,10 +106,9 @@ private:
 
     std::atomic<double> mIrBlendNorm{0.0}; // 0 = IR A; inert unless both slots are filled
 
-    // The Clean bank and the crossfade between two of its captures. One of each in this phase;
-    // four of each when the channel rack lands.
-    ModelBank mBankLoader;
-    CrossfadeEngine mEngine;
+    // Four banks, four crossfade engines, one input ring and the switch between them. The single
+    // native-rate block processor the shared resampler drives.
+    ChannelRack mRack;
 
     std::unique_ptr<dsp::ImpulseResponse> mPendingIR;
     std::unique_ptr<dsp::ImpulseResponse> mIR;

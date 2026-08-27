@@ -48,8 +48,10 @@ public:
     }
 
     // RT. Collects any newly published bank and releases the old one. Call once per host block,
-    // before processing.
-    void pollBank();
+    // before processing. Returns true when a bank was actually taken — a republish replaces every
+    // model pointer in this engine, which the rack has to know about because a channel switch in
+    // flight toward it has been priming objects that are no longer bound.
+    bool pollBank();
 
     // RT. Knob position as a normalized 0 .. 1 value; mapped onto [0, N-1] internally.
     void setPositionNorm(double norm);
@@ -80,6 +82,45 @@ public:
     {
         return mReadyMix > 0.0 || mHaveReady;
     }
+    // True once this engine has actually put a sample into the output. Distinct from playable():
+    // the rack uses it to tell "nothing is being heard yet" from "something is", because adopting
+    // a channel outright is only free while nothing is audible.
+    bool sounding() const
+    {
+        return mReadyMix > 0.0;
+    }
+    // True when the ready gate is fully open, so this engine's output is its models' output and
+    // not a ramp of it. The channel fade must not start before this: a fade into a signal that is
+    // still being ramped in would be exact arithmetic on an inexact signal.
+    bool fullyOpen() const
+    {
+        return mReadyMix >= 1.0;
+    }
+
+    // RT. How many models this engine will run on the next block: one at rest, two while its dial
+    // is moving. The rack subtracts this from its total model budget before deciding how fast the
+    // incoming channel may be caught up, so a stomp can never stack on top of a knob turn.
+    int boundBranches() const
+    {
+        return (mA.bound() ? 1 : 0) + (mB.bound() ? 1 : 0);
+    }
+
+    // --- the channel switch ---------------------------------------------------------------
+    // RT. The bank index this engine would sound if it were made active right now: the capture
+    // its own dial names. Returns -1 when that capture is not built yet, which the rack answers
+    // by HOLDING the switch rather than by sounding a neighbour. Substituting here would be the
+    // one place a footswitch could put the wrong amp under the player's hands.
+    int restIndex() const;
+    // RT. How many samples of input that capture must be fed before its output is exact. Read
+    // from the entry the worker read it off the model; 0 when there is no such capture yet.
+    int restPrewarmSamples() const;
+    // RT. Park the engine on that capture, which is where an idle channel always is. Costs one
+    // bound branch rather than two, so exactly one model needs priming for a switch.
+    void snapToRest();
+    // RT. Tell this channel's worker which entry to build next even though the channel is silent,
+    // so the capture a switch would land on is the one that gets built first. An idle engine is
+    // not processed, and setPriority() otherwise only happens inside processNative().
+    void hintPriority();
 
     // Non-RT teardown: hand the live bank back once the worker has stopped.
     Bank *releaseBank();

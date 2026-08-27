@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include "engineconfig.h"
+
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/vst/vsttypes.h"
 
@@ -75,6 +77,11 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     // channel's bank. Read by the editor to name the current capture; distinct from the channel's
     // gain parameter, which is where the dial is.
     kActiveIndexId = 203,
+    // Which channel is actually SOUNDING, in kChannelId's own value space. Not a duplicate of
+    // kChannelId: that one is the request, and this one is the answer. A switch whose target
+    // capture is still being built is held rather than faked, and the panel LEDs read this so a
+    // lamp never lights over a channel the audio has not reached yet.
+    kActiveChannelId = 204,
 
     // RESERVED, not yet declared: the MIDI-mapped parameter block. IDs 1000 + cc for CC 0 .. 127,
     // and 1128 for Program Change. They exist because VST3 delivers CC and Program Change ONLY as
@@ -85,20 +92,9 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     kMidiProgramChangeId = 1128,
 };
 
-// The four channels, in panel order. This is the value space of kChannelId and the index space of
-// every four-element array in the processor and the editor; nothing may reorder it.
-enum Channel : int {
-    kChannelClean = 0,
-    kChannelCrunch = 1,
-    kChannelOd1 = 2,
-    kChannelOd2 = 3,
-    kChannelCount = 4,
-};
-
-// The bank directory name for each channel, relative to the bundle's Resources/captures. These
-// are tracked content shipped inside the bundle, not a user selection: there is no capture
-// browser in this plug-in.
-inline constexpr const char *kChannelDirName[kChannelCount] = {"Clean", "Crunch", "OD1", "OD2"};
+// Channel, kChannelCount and kChannelDirName are defined in engineconfig.h, which carries no VST3
+// dependency, because the channel rack and the offline switch proof both name channels without
+// linking the plug-in.
 
 // The per-channel gain parameter, indexed by Channel.
 inline constexpr Steinberg::Vst::ParamID kChannelGainId[kChannelCount] = {

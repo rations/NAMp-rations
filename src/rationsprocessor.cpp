@@ -120,17 +120,17 @@ RationsProcessor::RationsProcessor()
     // The trigger detects level on the model INPUT and drives the gain stage that attenuates the
     // model OUTPUT, which is why the two sit on opposite sides of the engine in the chain.
     mNoiseGateTrigger.AddListener(&mNoiseGateGain);
-    mEngine.setLoader(&mBankLoader);
 }
 
 //------------------------------------------------------------------------
 RationsProcessor::~RationsProcessor()
 {
-    // The worker must be joined before anything it could still be writing into goes away. Doing
-    // this only in terminate() is not enough: a host is free to destroy a component it never
-    // initialised.
-    mBankLoader.stop();
-    ModelBank::destroyBank(mEngine.releaseBank());
+    // The workers must be joined before anything they could still be writing into goes away.
+    // Doing this only in terminate() is not enough: a host is free to destroy a component it
+    // never initialised. The rack does the same in its own destructor; both are idempotent, and
+    // ordering it here keeps the teardown readable in one place.
+    mRack.stop();
+    mRack.releaseBanks();
 }
 
 //------------------------------------------------------------------------
@@ -143,12 +143,17 @@ tresult PLUGIN_API RationsProcessor::initialize(FUnknown *context)
     addAudioInput(STR16("Input"), SpeakerArr::kMono);
     addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
 
-    mBankLoader.start();
+    mRack.start();
     // The captures ship inside the bundle, so there is nothing for a user to load and no reason
-    // to wait for one: the bank is requested here and builds on the worker while the host is
-    // still setting up. A missing or unreadable directory is not fatal — the engine outputs
-    // ramped silence and ModelBank prints one warning.
-    mBankLoader.loadDirectory(channelBankDir(kChannelClean), kSlimFixed, engine::kChunk);
+    // to wait for one: all four banks are requested here and build on their own workers while the
+    // host is still setting up. Four workers rather than one is what makes the build breadth-
+    // first — every channel becomes switchable after roughly one model's build time instead of
+    // after all thirty-five are done. A missing or unreadable directory is not fatal: that
+    // channel outputs ramped silence, ModelBank prints one warning, and a switch to it is held.
+    for (int c = 0; c < kChannelCount; ++c) {
+        const Channel ch = static_cast<Channel>(c);
+        mRack.loadChannel(ch, channelBankDir(ch), kSlimFixed, engine::kChunk);
+    }
 
     return kResultOk;
 }
@@ -169,10 +174,10 @@ std::string RationsProcessor::channelBankDir(Channel ch)
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsProcessor::terminate()
 {
-    // Join before releasing the bank: a load in flight during teardown is otherwise writing into
+    // Join before releasing the banks: a load in flight during teardown is otherwise writing into
     // memory that is about to be freed.
-    mBankLoader.stop();
-    ModelBank::destroyBank(mEngine.releaseBank());
+    mRack.stop();
+    mRack.releaseBanks();
     return AudioEffect::terminate();
 }
 
@@ -211,9 +216,9 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
 
     mResampler.configure(mSampleRate, mMaxBlockSize);
     mLatency.store(static_cast<uint32>(mResampler.latency()), std::memory_order_relaxed);
-    mEngine.prepare(mResampler.maxNativeBlock(mMaxBlockSize), kNativeSampleRate);
+    mRack.prepare(mResampler.maxNativeBlock(mMaxBlockSize), kNativeSampleRate);
     // Normalized, once, and never from a parameter: it is not a user choice in this plug-in.
-    mEngine.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+    mRack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
 
     // Bypass ramp length in samples, at least one sample so the step is finite.
     const double rampSamples = std::max(1.0, engine::kBypassRampMs * 0.001 * mSampleRate);
@@ -347,9 +352,9 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
 
     handleParameterChanges(data.inputParameterChanges);
 
-    // Take delivery of a newly published bank and hand the old one back to the worker. Never a
+    // Take delivery of newly published banks and hand the old ones back to their workers. Never a
     // delete here: a delete is a free(), which takes the allocator lock.
-    mEngine.pollBank();
+    mRack.pollBanks();
 
     if (mIRPending.exchange(false, std::memory_order_acquire)) {
         mRetiredIR = std::move(mIR);
@@ -376,10 +381,14 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     if (!out)
         return kResultOk;
 
-    // Where the dial is, before any audio is touched. Only the Clean dial reaches the engine in
-    // this phase; the other three move their own parameters and nothing else, and the channel
-    // rack is what gives them a bank each.
-    mEngine.setPositionNorm(mChannelGainNorm[kChannelClean].load(std::memory_order_relaxed));
+    // Where every dial is, before any audio is touched. All four are pushed, not just the
+    // sounding one: an idle channel's dial decides which capture a switch to it would land on,
+    // and which capture its worker should build first.
+    for (int c = 0; c < kChannelCount; ++c)
+        mRack.setPositionNorm(static_cast<Channel>(c),
+                              mChannelGainNorm[c].load(std::memory_order_relaxed));
+    // And which channel the host wants. The rack decides when the audio can follow.
+    mRack.requestChannel(channelFromNorm(mChannelNorm.load(std::memory_order_relaxed)));
 
     // The host may hand us more than it promised in setupProcessing. Loop in whole sub-blocks
     // rather than clamping: clamping leaves the tail of the output buffer holding whatever was
@@ -407,8 +416,13 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
         }
         writeOutputPoint(data.outputParameterChanges, kInputMeterId, peakToMeterNorm(inPeak), 0);
         writeOutputPoint(data.outputParameterChanges, kOutputMeterId, peakToMeterNorm(outPeak), 0);
-        writeOutputPoint(data.outputParameterChanges, kBankProgressId, mBankLoader.progress(), 0);
-        writeOutputPoint(data.outputParameterChanges, kActiveIndexId, mEngine.activeIndexNorm(), 0);
+        writeOutputPoint(data.outputParameterChanges, kBankProgressId, mRack.progress(), 0);
+        writeOutputPoint(data.outputParameterChanges, kActiveIndexId, mRack.activeIndexNorm(), 0);
+        // Which channel is SOUNDING, which is not always the one kChannelId asks for: a switch
+        // whose target capture is still being built is held, and the editor's LED must not light
+        // over a channel that is not there yet. The parameter is the request; this is the answer.
+        writeOutputPoint(data.outputParameterChanges, kActiveChannelId,
+                         normFromChannel(mRack.soundingChannel()), 0);
     }
 
     return kResultOk;
@@ -447,7 +461,7 @@ void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
     // 3. The crossfade engine, at the native rate, in fixed chunks. The resampler is a straight
     // call-through at 48 kHz and is not even constructed there.
     mResampler.process(reinterpret_cast<NAM_SAMPLE **>(processingInput),
-                       reinterpret_cast<NAM_SAMPLE **>(&mWorkPtrOutput), numSamples, mEngine);
+                       reinterpret_cast<NAM_SAMPLE **>(&mWorkPtrOutput), numSamples, mRack);
     DSP_SAMPLE **modelOutput = &mWorkPtrOutput;
 
     // 4. Noise-gate gain (applies the envelope to the model output).
@@ -524,10 +538,9 @@ bool RationsProcessor::loadIr(const std::string &path)
 //
 // The banks are built on worker threads, so the answer sent right after a load necessarily
 // reports an empty set; the editor asks again (kMsgRequestCaps) until the real counts arrive.
-// Only the Clean bank exists in this phase, but all four channels are reported — including the
-// three empty ones — because the wire format is positional: the receiving side splits on the
-// separator and assigns names to channels by position, so a channel that sends nothing at all
-// would shift every channel after it.
+// All four channels are always reported, an empty one included, because the wire format is
+// positional: the receiving side splits on the separator and assigns names to channels by
+// position, so a channel that sent nothing at all would shift every channel after it.
 void RationsProcessor::sendModelCaps()
 {
     IPtr<IMessage> message = owned(allocateMessage());
@@ -538,19 +551,16 @@ void RationsProcessor::sendModelCaps()
     if (!attrs)
         return;
 
-    const std::vector<std::string> names = mBankLoader.captureNames();
-
     std::string blob;
     for (int c = 0; c < kChannelCount; ++c) {
-        const bool wired = (c == kChannelClean);
+        const std::vector<std::string> names = mRack.captureNames(static_cast<Channel>(c));
+
         std::string attr(kCapsEntryCountAttr);
         attr += kChannelDirName[c];
-        attrs->setInt(attr.c_str(), wired ? static_cast<int64>(names.size()) : 0);
+        attrs->setInt(attr.c_str(), static_cast<int64>(names.size()));
 
         if (c > 0)
             blob.push_back('\f'); // channel separator
-        if (!wired)
-            continue;
         for (size_t i = 0; i < names.size(); ++i) {
             if (i > 0)
                 blob.push_back('\n'); // capture separator
