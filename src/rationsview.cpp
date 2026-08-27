@@ -473,30 +473,31 @@ void RationsEditorView::drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled
     drawKnobAt(c, static_cast<float>(k.cx), static_cast<float>(k.cy), static_cast<float>(k.r),
                paramValue(k.id));
 
-    // Label above. It is silkscreen: constant, and in the panel's one typeface.
     const bool isIo = (k.id == kInputGainId || k.id == kOutputGainId);
-    c.setFont(Font::Title);
-    c.setFontSize(isIo ? geo::kIoLabelSize : geo::kKnobLabelSize);
-    c.setColor(enabled ? geo::kTextColor : geo::kDimColor);
     const float labelY =
         isIo ? static_cast<float>(geo::kIoLabelBaselineY) : (k.cy - geo::kKnobLabelDY);
-    const std::string label = c.clipToWidth(std::string(k.label), geo::kKnobPitch - 6.0f);
-    c.drawString(label.c_str(), k.cx - c.stringWidth(label.c_str()) * 0.5f, labelY);
 
-    // The value readout appears only WHILE the dial is being dragged. The design has no permanent
-    // value row — the silkscreen legend is all the panel shows — so this says where the user has
-    // got to without adding a second row of text the faceplate does not have.
-    if (mDragParam != k.id)
-        return;
-    const std::string readout = knobReadout(k);
-    if (readout.empty())
-        return;
-    c.setFont(Font::Body);
-    c.setFontSize(geo::kKnobValueSize);
-    c.setColor(geo::kAccent);
-    const std::string shown = c.clipToWidth(readout, geo::kKnobPitch - 6.0f);
-    c.drawString(shown.c_str(), k.cx - c.stringWidth(shown.c_str()) * 0.5f,
-                 k.cy + geo::kKnobValueDY);
+    // ONE text row per dial, and while the dial is being dragged the readout takes it.
+    //
+    // Not a second row underneath, which is where a value would naturally go and where it cannot
+    // go here: the band below the main row belongs to the bat switches, whose art spans 20 px
+    // either side of their own centre line, and a readout there is drawn straight across the
+    // levers. There is no gap to move it into — the dial's own art ends one pixel above the
+    // switch art begins — so the row above is the only space that exists.
+    //
+    // Losing the legend for the duration costs nothing: the pointer is on the dial being held, so
+    // which control it is is not in question, and the accent colour says the row is live rather
+    // than silkscreen.
+    const std::string readout = (mDragParam == k.id) ? knobReadout(k) : std::string();
+    const bool showValue = !readout.empty();
+
+    c.setFont(showValue ? Font::Body : Font::Title);
+    c.setFontSize(showValue ? geo::kKnobValueSize
+                            : (isIo ? geo::kIoLabelSize : geo::kKnobLabelSize));
+    c.setColor(showValue ? geo::kAccent : (enabled ? geo::kTextColor : geo::kDimColor));
+    const std::string text =
+        c.clipToWidth(showValue ? readout : std::string(k.label), geo::kKnobPitch - 6.0f);
+    c.drawString(text.c_str(), k.cx - c.stringWidth(text.c_str()) * 0.5f, labelY);
 }
 
 //------------------------------------------------------------------------

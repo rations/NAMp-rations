@@ -1,15 +1,23 @@
 // Rations processor — audio component (mono or stereo in, mono or stereo out).
 //
-// PHASE 0 SKELETON. This is the parameter, state and bus plumbing only: process() copies its
-// input to its output. The DSP chain arrives with the phases that own it, and will be
+// The chain:
 //
-//   input gain -> noise-gate trigger -> [ native-rate resampler { channel rack } ]
-//     -> noise-gate gain -> tone stack -> IR A/B blend -> output gain -> bypass ramp
+//   input gain -> noise-gate trigger -> [ native-rate resampler { crossfade engine } ]
+//     -> noise-gate gain -> tone stack -> IR -> output gain -> bypass ramp
 //
 // with the gate, tone stack and IR running at the host rate on the whole block, once per block
 // (their AudioDSPTools buffers are allocated lazily and pre-warmed at exactly the maximum block
 // size, and handing them a varying size would re-trigger that growth on the audio thread), and
 // every model call going through a fixed chunk loop at the models' native rate.
+//
+// WHAT IS WIRED IN THIS PHASE: one channel. The Clean bank loads from the bundle's
+// Resources/captures/Clean and its dial sweeps it, exactly as the parent plug-in's single bank
+// does. The other three channels have parameters, dials and switches but no audio yet: they get
+// their own banks and the click-free switch between them in the phase that owns that, and until
+// then kChannelId moves nothing. The second IR slot and its blend likewise.
+//
+// Output is pinned to Normalized. It is not a user choice here, so there is no parameter for it
+// and the engine is told once — see the setOutputMode call in setupProcessing.
 //
 // Real-time contract: process() never allocates, locks, does file I/O, logs, or destroys an
 // object. That holds from here on, including for the channel-switch catch-up burst, which runs
@@ -19,10 +27,19 @@
 
 #include "public.sdk/source/vst/vstaudioeffect.h"
 
+#include "crossfadeengine.h"
+#include "modelbank.h"
+#include "nativeresampler.h"
 #include "rationsids.h"
 
+#include "ImpulseResponse.h"
+#include "NoiseGate.h"
+#include "ToneStack.h"
+
 #include <atomic>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace Rations
 {
@@ -49,13 +66,26 @@ public:
         SMTG_OVERRIDE;
     Steinberg::tresult PLUGIN_API setupProcessing(Steinberg::Vst::ProcessSetup &setup)
         SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API setActive(Steinberg::TBool state) SMTG_OVERRIDE;
     Steinberg::tresult PLUGIN_API process(Steinberg::Vst::ProcessData &data) SMTG_OVERRIDE;
 
     Steinberg::tresult PLUGIN_API setState(Steinberg::IBStream *state) SMTG_OVERRIDE;
     Steinberg::tresult PLUGIN_API getState(Steinberg::IBStream *state) SMTG_OVERRIDE;
 
+    Steinberg::uint32 PLUGIN_API getLatencySamples() SMTG_OVERRIDE;
+
+    // Controller -> processor messages (message thread).
+    Steinberg::tresult PLUGIN_API notify(Steinberg::Vst::IMessage *message) SMTG_OVERRIDE;
+
 private:
     void handleParameterChanges(Steinberg::Vst::IParameterChanges *changes);
+    void applyDsp(const float *in, float *out, Steinberg::int32 numSamples);
+    bool loadIr(const std::string &path); // message thread only
+    void sendModelCaps();                 // message thread only
+    void allocateBuffers();               // message thread only
+    // The bundled bank for one channel: <resources>/captures/<Clean|Crunch|OD1|OD2>. Message
+    // thread only — it touches the filesystem.
+    static std::string channelBankDir(Channel ch);
 
     // Normalized parameter values. Written by RT parameter handling AND by setState on the
     // message thread, so the accesses are atomic to stay tear-free; relaxed ordering is enough
@@ -77,11 +107,43 @@ private:
 
     std::atomic<double> mIrBlendNorm{0.0}; // 0 = IR A; inert unless both slots are filled
 
+    // The Clean bank and the crossfade between two of its captures. One of each in this phase;
+    // four of each when the channel rack lands.
+    ModelBank mBankLoader;
+    CrossfadeEngine mEngine;
+
+    std::unique_ptr<dsp::ImpulseResponse> mPendingIR;
+    std::unique_ptr<dsp::ImpulseResponse> mIR;
+    std::unique_ptr<dsp::ImpulseResponse> mRetiredIR;
+    std::atomic<bool> mIRPending{false};
+
+    // Latency reported to the host. Depends only on the resampler, so it changes on a sample-rate
+    // change and never on a bank swap or a knob turn.
+    std::atomic<Steinberg::uint32> mLatency{0};
+
+    NativeResampler mResampler;
+
+    dsp::noise_gate::Trigger mNoiseGateTrigger;
+    dsp::noise_gate::Gain mNoiseGateGain;
+    dsp::tone_stack::BasicNamToneStack mToneStack;
+
+    // Pre-allocated double-precision work buffers, sized in setupProcessing for mMaxBlockSize.
+    // mDryBuf keeps the ungained input so the bypass ramp has something to fade back to.
+    std::vector<DSP_SAMPLE> mWorkBufInput;
+    std::vector<DSP_SAMPLE> mWorkBufOutput;
+    std::vector<DSP_SAMPLE> mDryBuf;
+    DSP_SAMPLE *mWorkPtrInput = nullptr;
+    DSP_SAMPLE *mWorkPtrOutput = nullptr;
+
+    // Bypass mix position: 0 = fully processed, 1 = fully dry. Ramped, never switched.
+    double mBypassMix = 0.0;
+    double mBypassStep = 1.0;
+
     // Message-thread only.
     std::string mIrPathA;
     std::string mIrPathB;
 
-    double mSampleRate = 48000.0;
+    double mSampleRate = kNativeSampleRate;
     Steinberg::int32 mMaxBlockSize = 512;
 };
 

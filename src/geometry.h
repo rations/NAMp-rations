@@ -164,14 +164,14 @@ constexpr int pageMaxH(Page p)
 // 15 logical px is 15*s device px, and an intermediate window size can still
 // land on a stepped value. Being even at the sizes the window actually rests at
 // is what is available; being even everywhere is not.
-constexpr int kTitleSize = 56;      // the wordmark; fitted to the mock's cap height
-constexpr int kKnobLabelSize = 15;  // dial legends, main row
-constexpr int kIoLabelSize = 15;    // Input / Output, same row as the toggles
-constexpr int kToggleLabelSize = 11;// BYPASS
+constexpr int kTitleSize = 56;       // the wordmark; fitted to the mock's cap height
+constexpr int kKnobLabelSize = 15;   // dial legends, main row
+constexpr int kIoLabelSize = 15;     // Input / Output, same row as the toggles
+constexpr int kToggleLabelSize = 11; // BYPASS
 constexpr int kPageButtonTextSize = 15;
 constexpr int kBlendLabelSize = 12;
-constexpr int kKnobValueSize = 12;  // Roboto: the drag readout
-constexpr int kFileRowTextSize = 12;// Roboto: IR file names
+constexpr int kKnobValueSize = 12;   // Roboto: the drag readout
+constexpr int kFileRowTextSize = 12; // Roboto: IR file names
 
 // --- Head page --------------------------------------------------------------
 // Inner faceplate, inside the gold piping (measured; see gui/geometry.sh).
@@ -240,13 +240,19 @@ constexpr KnobSpec kKnobs[kKnobCount] = {
 // no code-drawn notch (both would fight the pointer).
 constexpr double kKnobSweepDeg = 270.0;
 
-// Label baseline ABOVE the face centre (the mock puts all eight on y = 181),
-// value readout BELOW it. The mock has no permanent value row — the silkscreen
-// label is all it shows — so the readout appears only while a dial is being
-// dragged, which is what tells the user where they have got to without adding a
-// second permanent row of text the design does not have.
+// Label baseline ABOVE the face centre (the mock puts all eight on y = 181).
+//
+// There is exactly ONE text row per dial, and it is this one. The mock has no
+// permanent value row — the silkscreen legend is all it shows — so the readout
+// that says where a dial has got to appears only while that dial is being
+// dragged, and it appears HERE, replacing the legend for the duration.
+//
+// Below the dial is not available and never was: the bat switches sit on
+// y = 275 with art 20 px either side of that, and the dials' own art ends at
+// y = 254, so the gap between them is a single pixel. A value row underneath is
+// drawn across the levers. Confirmed by looking at it rather than by arithmetic
+// — the first version of this editor did exactly that.
 constexpr int kKnobLabelDY = 45; // 226 - 181
-constexpr int kKnobValueDY = 45;
 
 // --- Channel / gate indicator LEDs (5), above the dial labels ---------------
 // Red when the channel is the one sounding, black otherwise; the gate's LED
@@ -394,8 +400,8 @@ constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
 // the page reading as a picture with two unrelated widgets under it: cabinet and
 // rows are one column, and the margin around them is even on all four sides.
 constexpr int kCabMargin = 22;
-constexpr int kCabW = kCabPageW - 2 * kCabMargin;              // 596
-constexpr int kCabH = (kCabW * 872 + 1483 / 2) / 1483;         // 350, the art's own aspect
+constexpr int kCabW = kCabPageW - 2 * kCabMargin;      // 596
+constexpr int kCabH = (kCabW * 872 + 1483 / 2) / 1483; // 350, the art's own aspect
 constexpr int kCabX = kCabMargin;
 constexpr int kCabY = kPageContentTop;
 
@@ -426,7 +432,7 @@ struct FileRow {
     const char *ext; // browser filter (no dot); empty = directories only
 };
 constexpr int kFileRowH = 28;
-constexpr int kIrRowY = kCabY + kCabH + 12;      // 412
+constexpr int kIrRowY = kCabY + kCabH + 12; // 412
 constexpr int kIrRowGap = 18;
 constexpr int kIrRowW = (kCabW - kIrRowGap) / 2; // 289
 constexpr FileRow kIrRowA = {kCabX, kIrRowY, kIrRowW, kFileRowH, "Select IR...", "wav"};
@@ -479,8 +485,8 @@ constexpr int kSettingsFootnoteSize = 12;
 // sized to that page rather than to the head's.
 constexpr int kBrowserX = 16;
 constexpr int kBrowserY = 16;
-constexpr int kBrowserW = kCabPageW - 2 * kBrowserX;  // 608
-constexpr int kBrowserH = kCabPageH - 2 * kBrowserY;  // 428
+constexpr int kBrowserW = kCabPageW - 2 * kBrowserX; // 608
+constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
 
 } // namespace geo
 } // namespace Rations

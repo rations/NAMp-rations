@@ -437,6 +437,16 @@ set(RATIONS_PLUGIN_SOURCES
     src/rationsview.cpp
     src/filebrowser.h
     src/filebrowser.cpp
+    src/engineconfig.h
+    src/spscqueue.h
+    src/bank.h
+    src/nativeresampler.h
+    src/capturesource.h
+    src/capturesource.cpp
+    src/modelbank.h
+    src/modelbank.cpp
+    src/crossfadeengine.h
+    src/crossfadeengine.cpp
     src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
@@ -549,6 +559,87 @@ target_link_options(Rations PRIVATE -Wl,--exclude-libs,ALL)
 # proves cairo, FreeType, PNG decode, NanoSVG and the whole of src/gfx work in
 # the cross build before a single line of window code exists.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# rations_offline — headless host for the built bundle. Loads it the way a DAW
+# does and renders a signal through the whole chain, which is the only thing
+# that proves the BUNDLED bank resolves and the DSP is actually in circuit.
+# ---------------------------------------------------------------------------
+if(RATIONS_WINDOWS)
+    set(RATIONS_MODULE_LOADER
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
+else()
+    set(RATIONS_MODULE_LOADER
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
+endif()
+
+add_executable(rations_offline
+    ${RATIONS_ROOT}/tools/rations_offline.cpp
+    ${RATIONS_MODULE_LOADER}
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+)
+target_include_directories(rations_offline PRIVATE ${RATIONS_ROOT}/src)
+target_link_libraries(rations_offline PRIVATE sdk_hosting)
+target_compile_features(rations_offline PRIVATE cxx_std_17)
+target_compile_options(rations_offline PRIVATE -Wall)
+add_dependencies(rations_offline Rations)
+
+# ---------------------------------------------------------------------------
+# rations_fadecheck — the offline proof that the gain crossfade is exact rather
+# than merely smooth. Links the DSP core directly: no VST3, no plug-in, no
+# host, so what it measures is the arithmetic and nothing around it.
+# ---------------------------------------------------------------------------
+add_executable(rations_fadecheck
+    ${RATIONS_ROOT}/tools/rations_fadecheck.cpp
+    ${RATIONS_ROOT}/src/capturesource.cpp
+)
+target_include_directories(rations_fadecheck PRIVATE ${RATIONS_ROOT}/src)
+# --whole-archive for the same reason the plug-in needs it: each network
+# architecture registers itself through a file-scope static initialiser, and the
+# linker drops those object files from a normal static link because nothing
+# references them by name. The symptom is a clean build that fails at run time
+# with "No config parser registered for architecture: WaveNet".
+target_link_libraries(rations_fadecheck
+    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
+target_compile_options(rations_fadecheck PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
+# rations_rtcheck — counts allocations on the audio path using the DSP core's
+# own malloc/free interception harness. Built without optimisation and with
+# assertions live, as that harness requires.
+#
+# LINUX ONLY, and it has to be. The harness intercepts allocation by resolving
+# the real malloc through dlsym(RTLD_NEXT, ...) — see the DSP core's
+# tools/test/allocation_tracking.h — which is an ELF/glibc mechanism with no PE
+# equivalent, and that file is in a read-only upstream tree we do not patch. So
+# the no-allocation-on-the-RT-path gate that RULES.md requires is proved on
+# Linux and inherited by Windows: the audio path is the same source, and the
+# platform layer adds nothing to it.
+# ---------------------------------------------------------------------------
+if(NOT RATIONS_WINDOWS)
+add_executable(rations_rtcheck
+    ${RATIONS_ROOT}/tools/rations_rtcheck.cpp
+    ${RATIONS_ROOT}/src/capturesource.cpp
+    ${RATIONS_ROOT}/src/modelbank.cpp
+    ${RATIONS_ROOT}/src/crossfadeengine.cpp
+    # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
+    # from throwing out of the worker thread. Linked in rather than taken from
+    # RationsGfx because this target deliberately links no graphics at all — it
+    # is measuring allocations on the audio path.
+    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
+    ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp
+)
+target_include_directories(rations_rtcheck PRIVATE ${RATIONS_ROOT}/src ${NAM_CORE_DIR}/tools)
+target_link_libraries(rations_rtcheck
+    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
+# The interception harness needs real calls to operator new, so the optimiser
+# must not be allowed to elide them, and NDEBUG must not disable the checks.
+target_compile_options(rations_rtcheck PRIVATE -Wall -O0 -UNDEBUG)
+endif()
+
 add_executable(panelrender ${RATIONS_ROOT}/tools/panelrender.cpp)
 target_link_libraries(panelrender PRIVATE RationsGfx)
 target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
