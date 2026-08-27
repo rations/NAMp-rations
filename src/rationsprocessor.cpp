@@ -231,8 +231,10 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     // in fixed chunks, so it is Reset for (48 kHz, kChunk) at build time and neither the host's
     // rate nor its block size can invalidate it. Only the IR, which is resampled when it is
     // loaded, depends on the host rate.
-    if (!mIrPathA.empty())
-        loadIr(mIrPathA);
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        if (!mIrPath[slot].empty())
+            loadIr(slot, mIrPath[slot]);
+    }
 
     return kResultOk;
 }
@@ -244,8 +246,10 @@ void RationsProcessor::allocateBuffers()
     mWorkBufInput.assign(n, 0.0);
     mWorkBufOutput.assign(n, 0.0);
     mDryBuf.assign(n, 0.0);
+    mIrMixBuf.assign(n, 0.0);
     mWorkPtrInput = mWorkBufInput.data();
     mWorkPtrOutput = mWorkBufOutput.data();
+    mIrMixPtr = mIrMixBuf.data();
 }
 
 //------------------------------------------------------------------------
@@ -265,7 +269,8 @@ tresult PLUGIN_API RationsProcessor::setActive(TBool state)
         mBypassMix = 1.0;
     } else {
         // Anything the audio thread retired is unreachable from it now; free it here.
-        mRetiredIR.reset();
+        for (int slot = 0; slot < kIrSlotCount; ++slot)
+            mRetiredIR[slot].reset();
     }
     return AudioEffect::setActive(state);
 }
@@ -356,10 +361,16 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     // delete here: a delete is a free(), which takes the allocator lock.
     mRack.pollBanks();
 
-    if (mIRPending.exchange(false, std::memory_order_acquire)) {
-        mRetiredIR = std::move(mIR);
-        mIR = std::move(mPendingIR);
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        if (mIRPending[slot].exchange(false, std::memory_order_acquire)) {
+            mRetiredIR[slot] = std::move(mIR[slot]);
+            mIR[slot] = std::move(mPendingIR[slot]);
+        }
     }
+    // The blend profile arrives on its own flag rather than with either slot, because it is a
+    // property of the PAIR: loading B changes what the correct weights for A are.
+    if (mBlendPending.exchange(false, std::memory_order_acquire))
+        mBlend = mPendingBlend;
 
     if (data.numSamples <= 0 || data.numInputs == 0 || data.numOutputs == 0)
         return kResultOk;
@@ -479,11 +490,13 @@ void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
                                          ranges::kToneMin, ranges::kToneMax));
     DSP_SAMPLE **tsOutput = mToneStack.Process(gateOutput, 1, numSamples);
 
-    // 6. IR convolution. One slot in this phase; the second slot and the blend between them
-    // arrive with the cabinet page's DSP.
-    DSP_SAMPLE **irOutput = tsOutput;
-    if (mIR)
-        irOutput = mIR->Process(tsOutput, 1, static_cast<size_t>(numSamples));
+    // 6. The cabinet: one IR, two blended, or none. The weights come from the correlation measured
+    // between the two files at load time, so the middle of the dial neither bumps (two mic
+    // positions on one cabinet) nor digs a hole (two different cabinets) - one sqrt per block, and
+    // the endpoints exact by construction. See irblend.h.
+    DSP_SAMPLE **irOutput = processCabinet(mIR[0].get(), mIR[1].get(), mBlend,
+                                           mIrBlendNorm.load(std::memory_order_relaxed), tsOutput,
+                                           static_cast<size_t>(numSamples), &mIrMixPtr);
 
     // 7. double -> float with output gain and the ramped bypass mix. Per-capture loudness
     // compensation is NOT applied here: it is per-capture and has to happen inside the crossfade,
@@ -511,25 +524,99 @@ void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
 // Message thread only. An empty path clears the slot. The new IR is published to the audio thread
 // through mIRPending; the audio thread hands the old one back by moving it into mRetiredIR, which
 // is freed here on the next load or in setActive(false) — the audio thread never destroys one.
-bool RationsProcessor::loadIr(const std::string &path)
+bool RationsProcessor::loadIr(int slot, const std::string &path)
 {
+    if (slot < 0 || slot >= kIrSlotCount)
+        return false;
     if (path.empty()) {
-        mPendingIR.reset();
-        mIRPending.store(true, std::memory_order_release);
+        mPendingIR[slot].reset();
+        mIrProfile[slot].clear();
+        remeasureBlend();
+        mIRPending[slot].store(true, std::memory_order_release);
         return true;
     }
     try {
         auto ir = std::make_unique<dsp::ImpulseResponse>(path.c_str(), mSampleRate);
         if (ir->GetWavState() != dsp::wav::LoadReturnCode::SUCCESS)
             return false;
-        mPendingIR = std::move(ir);
-        mIRPending.store(true, std::memory_order_release);
+        mPendingIR[slot] = std::move(ir);
+        profileIr(slot);
+        // The blend goes out BEFORE the IR it belongs to, and the order is not cosmetic. These are
+        // two separate publications, so the audio thread can run a block between them; if the IR
+        // landed first, that block would mix two live IRs with weights measured when one of the
+        // slots was still empty - a linear mix, which on two uncorrelated cabinets is a 3 dB dip
+        // for one block, which is a click. Published this way round, the block in the middle sees
+        // the new weights against the OLD pair, and the old pair has a slot empty, so the blend is
+        // not consulted at all and nothing happens.
+        remeasureBlend();
+        mIRPending[slot].store(true, std::memory_order_release);
         return true;
     } catch (const std::exception &) {
         // An IR file is untrusted input: a malformed WAV must be a refused load, not an
         // exception escaping into the host's message loop.
         return false;
     }
+}
+
+//------------------------------------------------------------------------
+// Message thread only, and deliberately so: this runs the IR twice over several thousand samples.
+//
+// Two jobs at once. It captures what the IR actually does — reading the private weight vector
+// would miss the resampling to the host rate, the class's own gain and its 8192-sample
+// truncation, and would get the time alignment wrong when the two files are different lengths,
+// because the weights are applied oldest-first and so are stored reversed. Feeding an impulse and
+// recording what comes out sidesteps all of that: the answer is the impulse response, aligned to
+// the impulse, whatever the class did internally.
+//
+// And it warms the object. AudioDSPTools sizes its history and output buffers lazily on the first
+// Process call, which for an IR loaded mid-session would otherwise be a malloc on the audio
+// thread. Running it here means the first RT block finds everything already sized.
+//
+// The flush at the end matters: after the impulse the IR's history holds the impulse's tail, and
+// handing that to the audio thread would splat it onto the first block. Feeding zeros until the
+// whole history window is zero again leaves the object exactly as a freshly constructed one, so
+// the warm-up is not audible.
+void RationsProcessor::profileIr(int slot)
+{
+    mIrProfile[slot].clear();
+    dsp::ImpulseResponse *ir = mPendingIR[slot].get();
+    if (!ir)
+        return;
+
+    const size_t block = static_cast<size_t>(std::max<int32>(mMaxBlockSize, 1));
+    const size_t want = static_cast<size_t>(kIrProfileSamples);
+
+    // The stimulus is the -3 dB/octave weighting filter's own impulse response followed by
+    // silence, so what comes back is the IR's response weighted the way musical signal energy
+    // actually is. See irblend.h for why that matters more than it sounds like it should.
+    std::vector<DSP_SAMPLE> stim(want + block, 0.0);
+    fillIrProfileStimulus(stim.data(), want, mSampleRate);
+
+    mIrProfile[slot].reserve(want);
+    for (size_t pos = 0; mIrProfile[slot].size() < want; pos += block) {
+        DSP_SAMPLE *stimPtr = stim.data() + pos;
+        DSP_SAMPLE **out = ir->Process(&stimPtr, 1, block);
+        const size_t take = std::min(block, want - mIrProfile[slot].size());
+        mIrProfile[slot].insert(mIrProfile[slot].end(), out[0], out[0] + take);
+    }
+
+    // Flush the tail back out of the history so the audio thread gets a pristine object. The
+    // history is at most the IR's own length, and the profile above is already longer than that,
+    // so one more pass of the same length is always enough.
+    std::fill(stim.begin(), stim.end(), 0.0);
+    DSP_SAMPLE *silence = stim.data();
+    for (size_t done = 0; done < want; done += block)
+        ir->Process(&silence, 1, block);
+}
+
+//------------------------------------------------------------------------
+// Message thread only. The blend weights depend on both IRs together, so this is recomputed
+// whenever either slot changes, and published on its own flag.
+void RationsProcessor::remeasureBlend()
+{
+    const size_t n = std::min(mIrProfile[0].size(), mIrProfile[1].size());
+    mPendingBlend = measureIrBlend(mIrProfile[0].data(), mIrProfile[1].data(), n);
+    mBlendPending.store(true, std::memory_order_release);
 }
 
 //------------------------------------------------------------------------
@@ -587,9 +674,12 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
         return kResultOk;
     }
 
-    const bool isIrA = id && strcmp(id, kMsgLoadIrA) == 0;
-    const bool isIrB = id && strcmp(id, kMsgLoadIrB) == 0;
-    if (!isIrA && !isIrB)
+    int slot = -1;
+    for (int i = 0; i < kIrSlotCount; ++i) {
+        if (id && strcmp(id, kMsgLoadIr[i]) == 0)
+            slot = i;
+    }
+    if (slot < 0)
         return AudioEffect::notify(message);
 
     const void *data = nullptr;
@@ -600,18 +690,16 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
         path.assign(static_cast<const char *>(data), size);
 
     // A load is the message thread's chance to free whatever the audio thread retired earlier.
-    mRetiredIR.reset();
+    for (int i = 0; i < kIrSlotCount; ++i)
+        mRetiredIR[i].reset();
 
-    if (isIrB) {
-        // Recorded so it survives a save and is there for the blend when that stage exists, but
-        // it reaches no audio yet. Accepting the path and silently doing nothing with it would be
-        // worse than refusing it, so the editor is told plainly that it did not take effect.
-        mIrPathB = path;
-        return kResultFalse;
-    }
-
-    mIrPathA = path;
-    return loadIr(path) ? kResultOk : kResultFalse;
+    const bool ok = loadIr(slot, path);
+    if (ok)
+        mIrPath[slot] = path;
+    // No remeasure here: loadIr publishes the blend itself, in the order that keeps the two
+    // publications safe to observe apart. A refused load changes neither slot, so there is
+    // nothing to remeasure.
+    return ok ? kResultOk : kResultFalse;
 }
 
 //------------------------------------------------------------------------
@@ -662,15 +750,25 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
 
     // IR paths (written with writeStr8: int32 length + bytes). A missing entry leaves the slot
     // empty rather than failing the load.
-    mIrPathA.clear();
-    mIrPathB.clear();
-    if (char8 *p = streamer.readStr8()) {
-        mIrPathA = p;
-        delete[] p;
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        mIrPath[slot].clear();
+        if (char8 *p = streamer.readStr8()) {
+            mIrPath[slot] = p;
+            delete[] p;
+        }
     }
-    if (char8 *p = streamer.readStr8()) {
-        mIrPathB = p;
-        delete[] p;
+
+    // Recording the paths is not enough: they have to be LOADED. On a project open this is
+    // redundant, because setupProcessing runs afterwards and loads them again at the host's real
+    // sample rate — but a host is also free to push state at a plug-in that is already active, for
+    // a preset change, and then setupProcessing never comes. Without this that preset would carry
+    // over whatever cabinet the previous one had, or none.
+    //
+    // Message-thread work on the message thread: this is file I/O and it publishes to the audio
+    // thread through exactly the same pending-flag handover a load from the editor uses.
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        if (!loadIr(slot, mIrPath[slot]))
+            mIrPath[slot].clear(); // a path that no longer resolves is an empty slot, not a lie
     }
 
     return kResultOk;
@@ -700,8 +798,8 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
         streamer.writeDouble(mChannelGainNorm[c].load(std::memory_order_relaxed));
     streamer.writeDouble(mIrBlendNorm.load(std::memory_order_relaxed));
 
-    streamer.writeStr8(mIrPathA.c_str());
-    streamer.writeStr8(mIrPathB.c_str());
+    for (int slot = 0; slot < kIrSlotCount; ++slot)
+        streamer.writeStr8(mIrPath[slot].c_str());
     return kResultOk;
 }
 

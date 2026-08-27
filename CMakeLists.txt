@@ -449,6 +449,8 @@ set(RATIONS_PLUGIN_SOURCES
     src/crossfadeengine.cpp
     src/channelrack.h
     src/channelrack.cpp
+    src/irblend.h
+    src/irblend.cpp
     src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
@@ -587,6 +589,31 @@ target_compile_options(rations_offline PRIVATE -Wall)
 add_dependencies(rations_offline Rations)
 
 # ---------------------------------------------------------------------------
+# rations_ircheck — the offline proof for the cabinet's two IR slots (D10).
+# Drives the BUILT BUNDLE, loading IRs through the same IConnectionPoint
+# messages the editor sends and turning the blend through the same parameter
+# queue a DAW uses, because the two promises being checked are about the
+# plug-in's behaviour and not about an expression: that a one-IR user gets
+# bit-identical audio whatever the dial does, and that the middle of the dial
+# neither bumps nor digs a hole. Which curve achieves the second depends on
+# how correlated the two files are, so it is measured rather than argued.
+# ---------------------------------------------------------------------------
+add_executable(rations_ircheck
+    ${RATIONS_ROOT}/tools/rations_ircheck.cpp
+    ${RATIONS_MODULE_LOADER}
+    # For MemoryStream, which the save/reload check needs and which sdk_hosting
+    # does not carry.
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+)
+target_include_directories(rations_ircheck PRIVATE ${RATIONS_ROOT}/src)
+target_link_libraries(rations_ircheck PRIVATE sdk_hosting)
+target_compile_features(rations_ircheck PRIVATE cxx_std_17)
+target_compile_options(rations_ircheck PRIVATE -Wall)
+add_dependencies(rations_ircheck Rations)
+
+# ---------------------------------------------------------------------------
 # rations_fadecheck — the offline proof that the gain crossfade is exact rather
 # than merely smooth. Links the DSP core directly: no VST3, no plug-in, no
 # host, so what it measures is the arithmetic and nothing around it.
@@ -679,6 +706,7 @@ target_compile_options(rations_switchcheck PRIVATE -Wall)
 if(NOT RATIONS_WINDOWS)
 add_executable(rations_rtcheck
     ${RATIONS_ROOT}/tools/rations_rtcheck.cpp
+    ${RATIONS_ROOT}/src/irblend.cpp
     ${RATIONS_ROOT}/src/capturesource.cpp
     ${RATIONS_ROOT}/src/modelbank.cpp
     ${RATIONS_ROOT}/src/crossfadeengine.cpp

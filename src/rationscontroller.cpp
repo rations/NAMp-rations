@@ -154,8 +154,20 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
         return kResultFalse;
     setParamNormalized(kIrBlendId, blend);
 
-    // The two IR paths follow. They are not parameters, so nothing is set from them here; the
-    // editor reads them from the processor when it needs them.
+    // The two IR paths follow. They are not parameters, but they are still read here, because the
+    // editor has no other way to learn them: getIrFile() answers out of this controller's own copy
+    // and nothing asks the processor. Skip this and reopening a project leaves both cabinet rows
+    // reading "no IR loaded" while the IRs are audibly playing — and, worse since the second slot
+    // became real, leaves the blend dial drawn disabled over a blend that is actually running.
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        mIrPath[slot].clear();
+        if (char8 *p = streamer.readStr8()) {
+            mIrPath[slot] = p;
+            delete[] p;
+        }
+    }
+    if (mView)
+        mView->FilesChanged();
     return kResultOk;
 }
 
@@ -284,10 +296,23 @@ tresult RationsController::setIrFile(int slot, const char8 *path)
 {
     if (slot < 0 || slot >= kIrSlotCount)
         return kInvalidArgument;
+    // Sent BEFORE the row is updated, and the row is normally updated only if the processor
+    // accepted it: a malformed or unreadable WAV is refused, and a row naming a file the audio
+    // path does not have would be telling the user something untrue about what they hear.
+    //
+    // The exception is a host that has not connected the two halves. sendMessage answers
+    // kResultFalse both for "the processor said no" and for "there was nobody to ask", and only
+    // the first is a reason to leave the row empty; treating the second the same way would make
+    // the browser look inert in a host whose connection is merely late. So the peer is checked
+    // first, and with no peer the row is updated optimistically - which is the behaviour this
+    // plug-in has always had, kept for exactly the case where nothing better is knowable.
+    const tresult result = sendPath(kMsgLoadIr[slot], path);
+    if (result != kResultOk && getPeer())
+        return result;
     mIrPath[slot] = path ? path : "";
     if (mView)
         mView->FilesChanged();
-    return sendPath(slot == 0 ? kMsgLoadIrA : kMsgLoadIrB, path);
+    return result;
 }
 
 // Truncation is a failure rather than a silent short path: a caller that acted on half a path

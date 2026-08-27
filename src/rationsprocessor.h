@@ -28,6 +28,7 @@
 #include "public.sdk/source/vst/vstaudioeffect.h"
 
 #include "channelrack.h"
+#include "irblend.h"
 #include "nativeresampler.h"
 #include "rationsids.h"
 
@@ -79,9 +80,15 @@ public:
 private:
     void handleParameterChanges(Steinberg::Vst::IParameterChanges *changes);
     void applyDsp(const float *in, float *out, Steinberg::int32 numSamples);
-    bool loadIr(const std::string &path); // message thread only
-    void sendModelCaps();                 // message thread only
-    void allocateBuffers();               // message thread only
+    bool loadIr(int slot, const std::string &path); // message thread only
+    // Run a unit impulse through a freshly loaded IR to capture what it actually does - after
+    // resampling to the host rate, after the class's own gain, after its 8192-sample truncation -
+    // then flush it back to an all-zero history so the audio thread still gets a pristine object.
+    // Doubles as the warm-up that sizes the IR's lazily allocated buffers off the audio thread.
+    void profileIr(int slot); // message thread only
+    void remeasureBlend();    // message thread only
+    void sendModelCaps();     // message thread only
+    void allocateBuffers();   // message thread only
     // The bundled bank for one channel: <resources>/captures/<Clean|Crunch|OD1|OD2>. Message
     // thread only — it touches the filesystem.
     static std::string channelBankDir(Channel ch);
@@ -110,10 +117,23 @@ private:
     // native-rate block processor the shared resampler drives.
     ChannelRack mRack;
 
-    std::unique_ptr<dsp::ImpulseResponse> mPendingIR;
-    std::unique_ptr<dsp::ImpulseResponse> mIR;
-    std::unique_ptr<dsp::ImpulseResponse> mRetiredIR;
-    std::atomic<bool> mIRPending{false};
+    // Two IR slots. Slot A alone is the normal case and takes exactly the path it took before the
+    // second slot existed - one Process call, no mixing, the blend not consulted - so a user who
+    // never opens slot B cannot tell it is there. See applyDsp.
+    std::unique_ptr<dsp::ImpulseResponse> mPendingIR[kIrSlotCount];
+    std::unique_ptr<dsp::ImpulseResponse> mIR[kIrSlotCount];
+    std::unique_ptr<dsp::ImpulseResponse> mRetiredIR[kIrSlotCount];
+    std::atomic<bool> mIRPending[kIrSlotCount] = {{false}, {false}};
+
+    // The measured relationship between the two loaded IRs, published the same way the IRs
+    // themselves are. Recomputed on the message thread whenever either slot changes; the audio
+    // thread only ever copies it.
+    IrBlend mPendingBlend;
+    IrBlend mBlend;
+    std::atomic<bool> mBlendPending{false};
+    // Each slot's impulse response, captured at load time so the profile can be recomputed when
+    // the OTHER slot changes without going back to the file. Message thread only.
+    std::vector<double> mIrProfile[kIrSlotCount];
 
     // Latency reported to the host. Depends only on the resampler, so it changes on a sample-rate
     // change and never on a bank swap or a knob turn.
@@ -130,6 +150,10 @@ private:
     std::vector<DSP_SAMPLE> mWorkBufInput;
     std::vector<DSP_SAMPLE> mWorkBufOutput;
     std::vector<DSP_SAMPLE> mDryBuf;
+    // Where the two IRs are summed when both slots are filled. Only touched on that path, so the
+    // single-IR case never writes through it.
+    std::vector<DSP_SAMPLE> mIrMixBuf;
+    DSP_SAMPLE *mIrMixPtr = nullptr;
     DSP_SAMPLE *mWorkPtrInput = nullptr;
     DSP_SAMPLE *mWorkPtrOutput = nullptr;
 
@@ -138,8 +162,7 @@ private:
     double mBypassStep = 1.0;
 
     // Message-thread only.
-    std::string mIrPathA;
-    std::string mIrPathB;
+    std::string mIrPath[kIrSlotCount];
 
     double mSampleRate = kNativeSampleRate;
     Steinberg::int32 mMaxBlockSize = 512;

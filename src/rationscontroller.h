@@ -64,7 +64,6 @@ private:
     static Steinberg::tresult copyPath(const std::string &src, Steinberg::char8 *buffer,
                                        Steinberg::int32 bufferSize);
 
-    static constexpr int kIrSlotCount = 2;
     std::string mIrPath[kIrSlotCount];
     RationsEditorView *mView = nullptr; // live editor, host UI/run-loop thread only
 

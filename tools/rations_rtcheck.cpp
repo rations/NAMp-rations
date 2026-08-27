@@ -20,10 +20,17 @@
 //      the same process() call, so every rule that applies to the steady state applies to it. This
 //      is also where a ring read, a fade buffer or a chunk stage that was sized wrong would show
 //      up, because those only run during a switch.
+//   5. The cabinet stage with both IR slots filled and the blend dial sweeping. AudioDSPTools
+//      sizes an ImpulseResponse's history and output buffers on its FIRST Process call, which for
+//      an IR loaded mid-session would be a malloc on the audio thread. The plug-in avoids that by
+//      running each IR once off-thread when it loads it (the same pass that profiles it for the
+//      blend). That is a claim about a lazy allocation inside someone else's class, which is
+//      exactly the kind of claim inspection gets wrong, so it is counted here instead.
 
 #include "channelrack.h"
 #include "crossfadeengine.h"
 #include "engineconfig.h"
+#include "irblend.h"
 #include "modelbank.h"
 #include "nativeresampler.h"
 
@@ -210,6 +217,72 @@ int main(int argc, char **argv)
 
         rack.stop();
         rack.releaseBanks();
+    }
+
+    // --- the cabinet, both slots filled ---------------------------------------------------------
+    // The IRs are built from raw audio rather than read from files: ImpulseResponse takes an IRData
+    // directly, so the test needs no WAV on disk and no assumption about what is installed. Two
+    // different decaying shapes, because two IDENTICAL ones would leave the blend weights at the
+    // trivial values and skip the branch that matters.
+    {
+        auto makeIr = [](double decay, double wobble) {
+            dsp::ImpulseResponse::IRData d;
+            d.mRawAudioSampleRate = Rations::kNativeSampleRate;
+            d.mRawAudio.resize(2048);
+            for (size_t i = 0; i < d.mRawAudio.size(); ++i) {
+                const double t = static_cast<double>(i);
+                d.mRawAudio[i] = static_cast<float>(
+                    std::exp(-t * decay) * std::sin(t * wobble + 0.3) * (i ? 1.0 : 0.0) +
+                    (i == 0 ? 1.0 : 0.0));
+            }
+            return std::make_unique<dsp::ImpulseResponse>(d, Rations::kNativeSampleRate);
+        };
+        auto irA = makeIr(0.004, 0.21);
+        auto irB = makeIr(0.001, 0.07);
+
+        std::vector<double> profileA(Rations::kIrProfileSamples, 0.0);
+        std::vector<double> profileB(Rations::kIrProfileSamples, 0.0);
+        std::vector<double> mix(static_cast<size_t>(kBlock), 0.0);
+        double *mixPtr = mix.data();
+
+        // Warm and profile off the counted path, which is what the plug-in does on its message
+        // thread when an IR is loaded.
+        {
+            std::vector<double> stim(static_cast<size_t>(Rations::kIrProfileSamples) + kBlock, 0.0);
+            Rations::fillIrProfileStimulus(stim.data(),
+                                           static_cast<size_t>(Rations::kIrProfileSamples),
+                                           Rations::kNativeSampleRate);
+            auto profile = [&](dsp::ImpulseResponse *ir, std::vector<double> &dst) {
+                size_t got = 0;
+                for (size_t pos = 0; got < dst.size(); pos += kBlock) {
+                    double *p = stim.data() + pos;
+                    double **out = ir->Process(&p, 1, kBlock);
+                    const size_t take = std::min(static_cast<size_t>(kBlock), dst.size() - got);
+                    std::copy(out[0], out[0] + take, dst.begin() + static_cast<long>(got));
+                    got += take;
+                }
+            };
+            profile(irA.get(), profileA);
+            profile(irB.get(), profileB);
+        }
+        const Rations::IrBlend blend =
+            Rations::measureIrBlend(profileA.data(), profileB.data(), profileA.size());
+        printf("cabinet        two IRs, rho %.3f, powers %.4g / %.4g\n", blend.rho, blend.powerA,
+               blend.powerB);
+
+        auto sweepCabinet = [&](int blocks) {
+            double *ip = in.data();
+            for (int b = 0; b < blocks; ++b) {
+                const double x = static_cast<double>(b % 64) / 63.0;
+                Rations::processCabinet(irA.get(), irB.get(), blend, x, &ip, kBlock, &mixPtr);
+            }
+        };
+        sweepCabinet(8); // anything still lazily sized is sized now
+
+        printf("counting       cabinet, both IR slots filled, blend sweeping\n");
+        allocation_tracking::run_allocation_test_no_allocations(
+            nullptr, [&] { sweepCabinet(200); }, nullptr,
+            "cabinet, both IR slots filled, blend sweeping");
     }
 
     // Teardown happens off the counted path, which is the point of the whole retirement design.

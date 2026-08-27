@@ -112,11 +112,17 @@ inline constexpr double kToneMin = 0.0, kToneMax = 10.0, kToneDefault = 5.0;
 inline constexpr double kMeterMinDb = -70.0, kMeterMaxDb = 0.0;
 } // namespace ranges
 
+// The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
+// of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.
+inline constexpr int kIrSlotCount = 2;
+
 // Message IDs for controller -> processor IR loading (IConnectionPoint).
 // Attribute "path" carries a UTF-8 byte string (setBinary); empty = clear the slot.
 inline constexpr const char *kMsgLoadIrA = "RationsLoadIRA";
 inline constexpr const char *kMsgLoadIrB = "RationsLoadIRB";
 inline constexpr const char *kMsgPathAttr = "path";
+// Indexed by slot, so neither side has to spell out which of the two it means twice.
+inline constexpr const char *kMsgLoadIr[kIrSlotCount] = {kMsgLoadIrA, kMsgLoadIrB};
 
 // The editor asking the processor to re-send its capability message. The four banks are scanned,
 // parsed and built on worker threads, so at the moment a load is acknowledged the capture names do
