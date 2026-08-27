@@ -386,14 +386,39 @@ endforeach()
 # short is a worse failure than an extra configure step. The channel names are
 # the ones src/rationsids.h maps each channel to; the glob is per channel rather
 # than recursive so a stray directory cannot quietly become a fifth bank.
+#
+# The captures are the author's own and are NOT published with the source (see
+# NOTICE), so a clone of this repository does not carry them and this is the
+# point where that is noticed. It is a hard error by default rather than a
+# warning, because the alternative is a bundle that builds, installs, loads and
+# then plays ramped silence - a failure that looks like a DSP bug and is not.
+# RATIONS_CAPTURES_DIR points the build at a bank held elsewhere;
+# RATIONS_ALLOW_NO_CAPTURES=ON builds the plug-in deliberately empty, which is
+# useful for working on the editor and is never a shippable bundle.
+set(RATIONS_CAPTURES_DIR "${RATIONS_ROOT}/captures" CACHE PATH
+    "Directory holding the four capture banks, one subdirectory per channel")
+option(RATIONS_ALLOW_NO_CAPTURES
+    "Build without capture banks - editor work only, produces a silent plug-in" OFF)
+
 set(RATIONS_CAPTURE_CHANNELS Clean Crunch OD1 OD2)
 foreach(_chan IN LISTS RATIONS_CAPTURE_CHANNELS)
-    file(GLOB _chan_captures CONFIGURE_DEPENDS "${RATIONS_ROOT}/captures/${_chan}/*.nam")
+    file(GLOB _chan_captures CONFIGURE_DEPENDS "${RATIONS_CAPTURES_DIR}/${_chan}/*.nam")
     if(NOT _chan_captures)
-        message(FATAL_ERROR
-            "[Rations] no .nam captures found in captures/${_chan} - the four channel banks ship "
-            "inside the bundle and the plug-in has no capture browser, so a missing bank is a "
-            "broken build, not a runtime choice")
+        if(RATIONS_ALLOW_NO_CAPTURES)
+            message(WARNING
+                "[Rations] no .nam captures in ${RATIONS_CAPTURES_DIR}/${_chan} - channel ${_chan} "
+                "will output ramped silence. RATIONS_ALLOW_NO_CAPTURES is ON, so this is not a "
+                "build error; do not ship the result")
+        else()
+            message(FATAL_ERROR
+                "[Rations] no .nam captures found in ${RATIONS_CAPTURES_DIR}/${_chan}\n"
+                "  The four channel banks ship inside the bundle and the plug-in has no capture "
+                "browser, so a missing bank is a broken build rather than a runtime choice. The "
+                "captures are the author's own and are not published with the source.\n"
+                "  Point the build at a bank with -DRATIONS_CAPTURES_DIR=/path/to/captures "
+                "(one subdirectory per channel: Clean, Crunch, OD1, OD2), or build without one "
+                "with -DRATIONS_ALLOW_NO_CAPTURES=ON for editor work.")
+        endif()
     endif()
     list(LENGTH _chan_captures _n)
     message(STATUS "[Rations] channel ${_chan}: ${_n} captures")
@@ -521,10 +546,12 @@ smtg_target_add_plugin_resources(Rations
 # like. They are still parsed as untrusted input — a bundle is a directory
 # anyone can edit, and the resource directory can be redirected wholesale.
 foreach(_chan IN LISTS RATIONS_CAPTURE_CHANNELS)
-    smtg_target_add_plugin_resources(Rations
-        RESOURCES ${RATIONS_CAPTURES_${_chan}}
-        OUTPUT_SUBDIRECTORY captures/${_chan}
-    )
+    if(RATIONS_CAPTURES_${_chan})
+        smtg_target_add_plugin_resources(Rations
+            RESOURCES ${RATIONS_CAPTURES_${_chan}}
+            OUTPUT_SUBDIRECTORY captures/${_chan}
+        )
+    endif()
 endforeach()
 
 target_compile_features(Rations PUBLIC cxx_std_17)

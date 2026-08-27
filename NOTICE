@@ -207,17 +207,15 @@ Bundled fonts (resources/fonts/): Michroma-Regular.ttf (SIL Open Font License
 
 Amp captures (captures/, shipped as Contents/Resources/captures/):
 
-  Copyright (c) 2026 rations.
+  Copyright (c) 2026 rations. All rights reserved.
 
   The .nam files under captures/{Clean,Crunch,OD1,OD2}/ are the author's own
   captures, made with the Neural Amp Modeler trainer, and they are part of the
   product rather than a working set: the plug-in has no capture browser and
-  loads these and only these. Unlike the parent project's, they are tracked in
-  this repository and redistributed inside the bundle.
+  loads these and only these.
 
-  TERMS NOT YET SET — CONFIRM BEFORE RELEASE. The source code is MIT, but a
-  capture is a recording, not source, and the author has not yet stated whether
-  these carry the same MIT grant, a different licence, or a
-  no-separate-redistribution reservation. This paragraph is a deliberate flag,
-  not a placeholder to be quietly deleted: the .nam files must not be published
-  under an assumed licence.
+  They are NOT covered by this project's MIT licence and are NOT part of the
+  published source: captures/ is git-ignored, so a source clone does not carry
+  them. A capture is a recording, not source, and the two are separate grants.
+  The MIT text above applies to the code in this repository; it says nothing
+  about the .nam files, which are distributed only inside a release bundle.

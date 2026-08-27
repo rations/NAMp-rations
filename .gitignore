@@ -6,11 +6,16 @@ task.md
 PLAN.md
 .claude/
 
-# captures/ is deliberately NOT ignored here, unlike in the parent project. These
-# are the author's own captures of the four channels, they are the product rather
-# than a working set, and they ship inside the bundle's Contents/Resources — so
-# tracked source names them by path and a fresh clone must be able to build a
-# working plug-in.
+# The author's own captures of the four channels. They are the product, not a
+# working set — the plug-in has no capture browser and loads these and only
+# these — and they are deliberately NOT published with the source: the code is
+# MIT, a capture is a recording rather than source, and the two are not the same
+# grant. Tracked source still names them by path, because the four channel banks
+# are resolved that way and there is nothing else they could be called.
+#
+# A clone without them configures with an actionable error naming
+# RATIONS_CAPTURES_DIR; see CMakeLists.txt.
+captures/
 
 # Personal CMake configure presets (local reference-tree paths).
 CMakeUserPresets.json
@@ -40,10 +45,6 @@ Makefile
 *.so
 *.so.*
 *.vst3
-# ...the bundled captures are tracked content, not build output, and none of the
-# patterns above match .nam — this is only here so the next person does not add a
-# blanket rule that does.
-!captures/**/*.nam
 
 # Release archives produced by scripts/makedist-linux.sh — these are attached
 # to GitHub releases, not committed.
