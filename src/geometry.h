@@ -299,17 +299,35 @@ constexpr ToggleSpec kToggles[kToggleCount] = {
     {kNoiseGateOnId, kKnobs[4].cx, kToggleCY, nullptr, false},
 };
 
+// --- Gear (settings) button, top-right of the faceplate ---------------------
+// Opens Page::Settings, which is a page of its own rather than an overlay: the
+// MIDI rows want a narrow window, and drawing them over the head page would put
+// them in the middle of 1133 px of faceplate.
+//
+// Declared ahead of the bypass pair because the bypass LED is derived from it —
+// see there.
+constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
+
 // --- Bypass, in the empty band left of the wordmark -------------------------
 // NOT IN THE MOCK. The author asked for a bypass toggle after the mock was
 // drawn, and this band — between the input meter and the wordmark — is the only
 // empty space on the faceplate large enough to hold one without disturbing a
-// measured position. The LED sits to its left on the lever's pivot line, which
-// is the parent plug-in's arrangement. Say so if it belongs somewhere else;
-// nothing else depends on these four numbers.
-constexpr int kBypassToggleCX = 208;
-constexpr int kBypassToggleCY = 102;
-constexpr int kBypassLedCX = 168;
-constexpr int kBypassLedCY = kBypassToggleCY;
+// measured position.
+//
+// The LED IS THE GEAR'S MIRROR, and it is written that way rather than as a
+// number: the author's instruction was that the light sit at the same distance
+// from the input meter as the gear sits from the output meter, and since the
+// two meter columns are placed symmetrically about kFaceCX (both at kSideDX),
+// reflecting the gear through that centre is exactly that condition. Written as
+// a literal 151 it would be a number that silently stops meaning anything the
+// moment the gear or the meter columns move; written like this it cannot.
+constexpr int kBypassLedCX = 2 * kFaceCX - kGearCX; // 151
+constexpr int kBypassLedCY = kGearCY;
+// The switch sits inboard of its lamp, so the row reads meter, light, switch —
+// the same order, and the same gap, as before it moved.
+constexpr int kBypassLedToToggleDX = 40;
+constexpr int kBypassToggleCX = kBypassLedCX + kBypassLedToToggleDX; // 191
+constexpr int kBypassToggleCY = kBypassLedCY;
 constexpr ToggleSpec kBypassToggle = {kBypassId, kBypassToggleCX, kBypassToggleCY, "BYPASS",
                                       // Bypass on means the plug-in is OUT of
                                       // circuit, which on an amp is the bat down.
@@ -382,12 +400,6 @@ constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
 constexpr ButtonSpec kBackButton = {16, 12, 110, 28, "Amp", Page::Head};
 // Everything below the back button on a non-head page starts here.
 constexpr int kPageContentTop = kBackButton.y + kBackButton.h + 10; // 50
-
-// --- Gear (settings) button, top-right of the faceplate ---------------------
-// Opens Page::Settings, which is a page of its own rather than an overlay: the
-// MIDI rows want a narrow window, and drawing them over the head page would put
-// them in the middle of 1133 px of faceplate.
-constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
 
 // --- Cabinet page -----------------------------------------------------------
 // The cabinet page does NOT wear the amp head's faceplate: it is a picture of a

@@ -32,9 +32,9 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     // RETIRED NAMp IDs — never reuse these numbers in this plug-in.
     //   107  Tone Stack on/off   Bass/Middle/Treble are always on here, by design.
     //   109  Output Mode         pinned to Normalized; not a user choice.
-    //   110  Slim                fixed at 1.0 (full size). TODO: a real CPU lever the captures
-    //                            support, left out because it is not in the design, not because
-    //                            it is unavailable.
+    //   110  Slim                fixed at 1.0 (full size), permanently. The captures support a
+    //                            smaller variant and it would cost less CPU; this plug-in always
+    //                            plays them whole, so there is nothing here to expose.
     //   111  Calibrate Input     no input calibration in this plug-in.
     //   112  Input Cal Level     likewise.
     //   113  Capture             NAMp's single bank position. Rations has four banks, so the

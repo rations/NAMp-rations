@@ -85,9 +85,14 @@ inline void writeOutputPoint(IParameterChanges *outChanges, ParamID id, ParamVal
 constexpr int kOutputModeNormalized = 1;
 constexpr double kUnusedCalLevelDbu = 12.0;
 
-// Slim is fixed at full size. TODO: these captures ARE slimmable containers and Slim is a real
-// CPU lever, so the plumbing below carries it rather than hard-coding 1.0 at each call site. It
-// is left out because it is not in this design, not because it is unavailable.
+// Slim is fixed at full size, permanently and by decision — not deferred. These captures are
+// slimmable containers and a smaller variant would genuinely cost less CPU, but this plug-in
+// always plays them whole: an amp head that quietly swaps in a lesser model of itself is not
+// what is being built.
+//
+// Carried as a named constant through the loader's `slim` argument rather than hard-coded 1.0 at
+// each call site, because that keeps the one place the value is decided visible, and keeps the
+// ported loader identical to the parent's instead of forking it to delete a parameter.
 constexpr double kSlimFixed = 1.0;
 
 } // namespace

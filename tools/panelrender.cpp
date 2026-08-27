@@ -302,8 +302,8 @@ void renderCabinet(Canvas &c, ImageCache &images, SvgCache &icons)
     drawKnob(c, images, static_cast<float>(geo::kBlendCX), static_cast<float>(geo::kBlendCY),
              static_cast<float>(geo::kBlendR), 0.0);
     drawCenteredText(
-        c, Font::Title, geo::kBlendLabelSize, bothLoaded ? geo::kTextColor : geo::kDimColor, "Blend",
-        static_cast<float>(geo::kBlendCX), static_cast<float>(geo::kBlendLabelBaselineY));
+        c, Font::Title, geo::kBlendLabelSize, bothLoaded ? geo::kTextColor : geo::kDimColor,
+        "Blend", static_cast<float>(geo::kBlendCX), static_cast<float>(geo::kBlendLabelBaselineY));
 
     drawIrRow(c, icons, geo::kIrRowA, "Marshall 1960A - SM57 cap edge.wav", true);
     drawIrRow(c, icons, geo::kIrRowB, geo::kIrRowB.placeholder, false);
@@ -467,6 +467,26 @@ bool auditHitBoxes()
         boxes.push_back({b.label, static_cast<float>(b.x), static_cast<float>(b.y),
                          static_cast<float>(b.x + b.w), static_cast<float>(b.y + b.h)});
 
+    // The upper band: bypass and the gear. Not the same row as the five bat switches, but on the
+    // same faceplate and hit-tested from the same click, so they belong in the same check — and
+    // the bypass pair in particular has been moved once already.
+    boxes.push_back({"BYPASS", geo::kBypassToggle.cx - geo::kToggleHitW / 2.0f,
+                     static_cast<float>(geo::kBypassToggle.cy + geo::kToggleHitTop),
+                     geo::kBypassToggle.cx + geo::kToggleHitW / 2.0f,
+                     static_cast<float>(geo::kBypassToggle.cy + geo::kToggleHitBottom)});
+    // The gear's click target is its radius plus the same 4 px slop the editor allows.
+    boxes.push_back({"gear", static_cast<float>(geo::kGearCX - geo::kGearR - 4),
+                     static_cast<float>(geo::kGearCY - geo::kGearR - 4),
+                     static_cast<float>(geo::kGearCX + geo::kGearR + 4),
+                     static_cast<float>(geo::kGearCY + geo::kGearR + 4)});
+    // The two level meters are not clickable, but a control drawn on top of one is a control
+    // drawn on top of the thing it is supposed to sit beside, so they are in the check as
+    // obstacles.
+    for (const geo::MeterRect *m : {&geo::kInputMeter, &geo::kOutputMeter})
+        boxes.push_back({m == &geo::kInputMeter ? "input meter" : "output meter",
+                         static_cast<float>(m->x), static_cast<float>(m->y),
+                         static_cast<float>(m->x + m->w), static_cast<float>(m->y + m->h)});
+
     int hits = 0;
     for (size_t i = 0; i < boxes.size(); ++i)
         for (size_t j = i + 1; j < boxes.size(); ++j) {
@@ -480,8 +500,25 @@ bool auditHitBoxes()
                 ++hits;
             }
         }
+    // The bypass lamp is placed as the gear's reflection through the faceplate centre, which is
+    // what makes it sit the same distance from the input meter as the gear does from the output
+    // meter. That is a relationship, not a coincidence, so it is checked rather than trusted: the
+    // two meter columns are themselves symmetric about that centre, so if this ever fails it is
+    // because someone moved a column and not because the arithmetic drifted.
+    const int mirrored = 2 * geo::kFaceCX - geo::kGearCX;
+    if (geo::kBypassLedCX != mirrored) {
+        fprintf(stderr,
+                "panelrender: the bypass lamp is at x=%d but the gear's mirror is x=%d — the "
+                "lamp no longer sits off the input meter the way the gear sits off the output "
+                "meter\n",
+                geo::kBypassLedCX, mirrored);
+        ++hits;
+    }
+
     if (hits == 0)
-        printf("hit boxes  %zu targets on the bottom row, none overlapping\n", boxes.size());
+        printf("hit boxes  %zu targets on the faceplate, none overlapping; bypass lamp mirrors "
+               "the gear\n",
+               boxes.size());
     return hits == 0;
 }
 
@@ -504,24 +541,27 @@ bool auditText(FontStack &fonts)
     // Dial legends: they must not reach their neighbours', so the allowance is
     // the pitch less a gap.
     for (const geo::KnobSpec &k : geo::kKnobs)
-        fits.push_back({"dial legend", Font::Title, geo::kKnobLabelSize, k.label,
-                        geo::kKnobPitch - 8.0f});
+        fits.push_back(
+            {"dial legend", Font::Title, geo::kKnobLabelSize, k.label, geo::kKnobPitch - 8.0f});
     // Input / Output sit in their own column outside the dial row; the limit is
     // the canvas edge on one side and the meter column's own width on the other.
     for (const geo::KnobSpec &k : geo::kIoKnobs)
-        fits.push_back({"i/o legend", Font::Title, geo::kIoLabelSize, k.label, 2.0f * geo::kSideCXL});
+        fits.push_back(
+            {"i/o legend", Font::Title, geo::kIoLabelSize, k.label, 2.0f * geo::kSideCXL});
     // BYPASS is drawn BELOW its LED, not beside it, so the LED is not what
     // bounds it: the input meter's column is, on the left, and the wordmark on
     // the right (which is further away, so the left bound decides it).
     fits.push_back({"toggle legend", Font::Title, geo::kToggleLabelSize, geo::kBypassToggle.label,
                     2.0f * (geo::kBypassToggleCX - (geo::kInputMeter.x + geo::kMeterW) - 8.0f)});
     for (const geo::ButtonSpec &b : geo::kPageButtons)
-        fits.push_back({"page button", Font::Title, geo::kPageButtonTextSize, b.label, b.w - 16.0f});
+        fits.push_back(
+            {"page button", Font::Title, geo::kPageButtonTextSize, b.label, b.w - 16.0f});
     fits.push_back({"back button", Font::Title, geo::kPageButtonTextSize, geo::kBackButton.label,
                     geo::kBackButton.w - 16.0f});
 
     // Cabinet page.
-    fits.push_back({"blend legend", Font::Title, geo::kBlendLabelSize, "Blend", 2.0f * geo::kBlendHitR * 2.0f});
+    fits.push_back({"blend legend", Font::Title, geo::kBlendLabelSize, "Blend",
+                    2.0f * geo::kBlendHitR * 2.0f});
     fits.push_back({"ir placeholder", Font::Body, geo::kFileRowTextSize, geo::kIrRowB.placeholder,
                     geo::kIrRowW - geo::kIrTextDX - 10.0f});
 
@@ -548,8 +588,9 @@ bool auditText(FontStack &fonts)
         c.setFontSize(f.size);
         const float w = c.stringWidth(f.text);
         if (w > f.allowance) {
-            fprintf(stderr, "panelrender: %s \"%s\" is %.0f px at size %.0f but has %.0f — lower "
-                            "the size in geometry.h or widen the space\n",
+            fprintf(stderr,
+                    "panelrender: %s \"%s\" is %.0f px at size %.0f but has %.0f — lower "
+                    "the size in geometry.h or widen the space\n",
                     f.where, f.text, w, f.size, f.allowance);
             ++bad;
         }
