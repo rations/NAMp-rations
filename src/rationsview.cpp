@@ -57,6 +57,12 @@ constexpr int kRowIconH = 16;
 constexpr int kCapsPollTicks = 15;
 constexpr int kCapsMaxPolls = 40;
 
+// MIDI table polling, on the same tick rate. Unbounded, unlike the capability poll: a row stays
+// armed until the player presses something or clicks the button again, and there is no count at
+// which giving up would be the right answer. It only runs with the settings page open and a row
+// waiting, so the steady state is still no traffic at all.
+constexpr int kMidiPollTicks = 15;
+
 // Strip a trailing ".nam" so a capture reads as the amp's own marking.
 std::string captureLabel(const std::string &name)
 {
@@ -402,10 +408,14 @@ void RationsEditorView::composePedalboard(Canvas &c)
 // The MIDI settings page. Four rows, one per channel; the gate is absent because it is
 // deliberately not on the MIDI path at all.
 //
-// TODO (MIDI phase): the learn table itself does not exist yet, so every row reads "not learned"
-// and the Learn buttons are drawn disabled and ignore clicks. Drawn disabled rather than omitted
-// on purpose — a control that looks live and does nothing is worse than one that says it cannot,
-// and the layout is what the later phase has to land in.
+// Four rows, one per channel, each showing what it is currently learned to and carrying the two
+// buttons that change that. The gate is deliberately absent: it is not on the MIDI path at all
+// and stays on for as long as the user has it on.
+//
+// The table being drawn is the CONTROLLER's copy, which is a copy: the authority is the
+// processor's, because a footswitch has to keep working with this page closed and this whole view
+// destroyed. That is also why a learn completes without anything here being told - the moment it
+// happens is on the audio thread - so an armed row polls for the answer (see pollMidi).
 void RationsEditorView::composeSettings(Canvas &c)
 {
     const float cx = static_cast<float>(geo::pageCX(geo::Page::Settings));
@@ -415,10 +425,10 @@ void RationsEditorView::composeSettings(Canvas &c)
     c.drawString("MIDI Learn", cx - c.stringWidth("MIDI Learn") * 0.5f,
                  static_cast<float>(geo::kSettingsHeadingY));
 
+    const int armed = mController ? mController->armedMidiRow() : -1;
+
     for (int i = 0; i < geo::kMidiRowCount; ++i) {
-        const Rect r(static_cast<float>(geo::kMidiRowX),
-                     static_cast<float>(geo::kMidiRowY0 + i * geo::kMidiRowPitch),
-                     static_cast<float>(geo::kMidiRowW), static_cast<float>(geo::kMidiRowH));
+        const Rect r = midiRowRect(i);
         c.setColor(0x0C0B0A);
         c.fillRoundRect(r, 4.0f);
         c.setColor(geo::kGold, 190);
@@ -429,30 +439,91 @@ void RationsEditorView::composeSettings(Canvas &c)
         c.setFont(Font::Title);
         c.setFontSize(geo::kMidiRowTextSize);
         c.setColor(geo::kTextColor);
-        c.drawString(kChannelDirName[i], r.x + 12.0f, base);
+        c.drawString(kMidiLearnRows[i].label, r.x + 12.0f, base);
 
-        // The mapping is data, not a legend, so it is the body face.
+        const MidiBinding binding = mController ? mController->midiBinding(i) : MidiBinding();
+        // The mapping is data, not a legend, so it is the body face. An armed row says what it is
+        // waiting for rather than what it was, because that is the question the user has open.
+        const std::string text =
+            (i == armed) ? std::string(geo::kMidiListeningText) : describeBinding(binding);
         c.setFont(Font::Body);
-        c.setColor(geo::kDimColor);
-        c.drawString("not learned", r.x + 120.0f, base);
+        c.setColor(binding.learned() && i != armed ? geo::kTextColor : geo::kDimColor);
+        c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);
 
-        const geo::ButtonSpec learn = {static_cast<int>(r.right()) - geo::kMidiLearnW -
-                                           geo::kMidiLearnInset,
-                                       static_cast<int>(r.y) + geo::kMidiLearnInset,
-                                       geo::kMidiLearnW,
-                                       geo::kMidiRowH - 2 * geo::kMidiLearnInset,
-                                       "Learn",
-                                       geo::Page::Settings};
-        drawButton(c, learn, false);
+        if (binding.learned())
+            drawButton(c, midiButton(i, true));
+        drawButton(c, midiButton(i, false));
     }
 
     c.setFont(Font::Body);
     c.setFontSize(geo::kSettingsFootnoteSize);
     c.setColor(geo::kDimColor);
-    const char *note = "The gate switch is not learnable and stays where you leave it.";
-    c.drawString(note, cx - c.stringWidth(note) * 0.5f,
-                 static_cast<float>(geo::kSettingsFootnoteY));
+    // Two lines, and the second one is not decoration. A learned CC or Program Change answers on
+    // every MIDI channel, because VST3 hands those over as parameter changes with the channel
+    // already discarded (see midilearn.h) - so a player whose pedal sends on channel 2 and whose
+    // keyboard sends the same CC on channel 1 needs to know that before they find out by playing.
+    const char *notes[2] = {geo::kSettingsFootnote, geo::kSettingsFootnote2};
+    const int noteY[2] = {geo::kSettingsFootnoteY, geo::kSettingsFootnote2Y};
+    for (int i = 0; i < 2; ++i)
+        c.drawString(notes[i], cx - c.stringWidth(notes[i]) * 0.5f, static_cast<float>(noteY[i]));
     drawButton(c, geo::kBackButton);
+}
+
+//------------------------------------------------------------------------
+// The geometry of one settings row and its buttons, in one place, so the painter and the hit test
+// cannot drift apart - which for a Clear button that only exists on a learned row is not a
+// theoretical risk.
+Rect RationsEditorView::midiRowRect(int row)
+{
+    return Rect(static_cast<float>(geo::kMidiRowX),
+                static_cast<float>(geo::kMidiRowY0 + row * geo::kMidiRowPitch),
+                static_cast<float>(geo::kMidiRowW), static_cast<float>(geo::kMidiRowH));
+}
+
+geo::ButtonSpec RationsEditorView::midiButton(int row, bool clear) const
+{
+    const Rect r = midiRowRect(row);
+    const int learnX = static_cast<int>(r.right()) - geo::kMidiLearnInset - geo::kMidiLearnW;
+    const bool armed = mController && mController->armedMidiRow() == row;
+    if (clear)
+        return {learnX - geo::kMidiButtonGap - geo::kMidiClearW,
+                static_cast<int>(r.y) + geo::kMidiLearnInset,
+                geo::kMidiClearW,
+                geo::kMidiRowH - 2 * geo::kMidiLearnInset,
+                geo::kMidiClearLabel,
+                geo::Page::Settings};
+    return {learnX,
+            static_cast<int>(r.y) + geo::kMidiLearnInset,
+            geo::kMidiLearnW,
+            geo::kMidiRowH - 2 * geo::kMidiLearnInset,
+            armed ? geo::kMidiListenLabel : geo::kMidiLearnLabel,
+            geo::Page::Settings};
+}
+
+//------------------------------------------------------------------------
+bool RationsEditorView::handleSettingsClick(float x, float y)
+{
+    if (!mController)
+        return false;
+    for (int i = 0; i < geo::kMidiRowCount; ++i) {
+        if (mController->midiBinding(i).learned() &&
+            buttonRect(midiButton(i, true)).contains(x, y)) {
+            mController->clearMidiLearn(i);
+            invalidate();
+            return true;
+        }
+        if (buttonRect(midiButton(i, false)).contains(x, y)) {
+            // Clicking the row that is already listening stops it listening. A Learn button with
+            // no way out would leave the plug-in waiting to be taught by the next thing the
+            // player happened to touch.
+            const bool armed = mController->armedMidiRow() == i;
+            mController->armMidiLearn(armed ? -1 : i);
+            mMidiPollTicks = 1;
+            invalidate();
+            return true;
+        }
+    }
+    return false;
 }
 
 //------------------------------------------------------------------------
@@ -890,10 +961,11 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
         case geo::Page::Cabinet:
             handleCabinetClick(fx, fy);
             return;
-        case geo::Page::Pedalboard:
         case geo::Page::Settings:
-            // Nothing else on either page is live yet; the settings rows arrive with the MIDI
-            // phase and are drawn disabled until then.
+            handleSettingsClick(fx, fy);
+            return;
+        case geo::Page::Pedalboard:
+            // A placeholder page, and the back button above is the only thing on it.
             return;
     }
 }
@@ -1251,9 +1323,25 @@ void RationsEditorView::pollCaps()
 }
 
 //------------------------------------------------------------------------
+// A learn completes on the AUDIO thread, which cannot send a message and cannot call the
+// controller, so nothing pushes the answer here. While a row is armed the editor asks - twice a
+// second, and only while the settings page is open with a row waiting - and stops the moment the
+// processor reports the row is no longer armed. An idle editor sends nothing.
+void RationsEditorView::pollMidi()
+{
+    if (!mController || mPage != geo::Page::Settings || mController->armedMidiRow() < 0)
+        return;
+    if (--mMidiPollTicks > 0)
+        return;
+    mMidiPollTicks = kMidiPollTicks;
+    mController->requestMidiTable();
+}
+
+//------------------------------------------------------------------------
 void RationsEditorView::onTick()
 {
     pollCaps();
+    pollMidi();
 
     const float in = mInDisp, out = mOutDisp;
     mInDisp *= kMeterRelease;

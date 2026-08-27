@@ -35,6 +35,7 @@
 // than a copy of it.
 
 #include "geometry.h"
+#include "midilearn.h"
 #include "gfx/canvas.h"
 #include "gfx/fontstack.h"
 #include "gfx/image.h"
@@ -327,9 +328,10 @@ void renderPedalboard(Canvas &c, ImageCache &, SvgCache &)
 
 //------------------------------------------------------------------------
 // The MIDI settings page. Four rows, one per channel; the gate is absent
-// because it is deliberately not on the MIDI path. The learn table itself
-// arrives in a later phase — what is drawn here is the layout it lands in, with
-// one row shown learned and one shown arming so both states are visible.
+// because it is deliberately not on the MIDI path. The bindings drawn here are
+// stand-ins - this tool has no processor to ask - chosen so that all three
+// states the row can be in are on screen at once: learned, listening, and
+// unlearned, since each is a different width and a different set of buttons.
 void renderSettings(Canvas &c, ImageCache &, SvgCache &)
 {
     const float cx = static_cast<float>(geo::pageCX(geo::Page::Settings));
@@ -338,8 +340,16 @@ void renderSettings(Canvas &c, ImageCache &, SvgCache &)
     drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, "MIDI Learn", cx,
                      static_cast<float>(geo::kSettingsHeadingY));
 
-    const char *const learned[geo::kMidiRowCount] = {"CC 80 ch 1", "CC 81 ch 1", "-- listening --",
-                                                     "not learned"};
+    // The widest each kind of binding gets, not a typical one: this page is a
+    // measurement, so what it draws is the worst case the row has to hold.
+    const MidiBinding kShown[geo::kMidiRowCount] = {
+        {MidiMsg::ControlChange, kMidiAnyChannel, 127},
+        {MidiMsg::NoteOn, 15, 1}, // "Note C#-2 ch 16"
+        {MidiMsg::ProgramChange, kMidiAnyChannel, 127},
+        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
+    };
+    const int kArmed = 2; // one row shown listening, so that state is on screen too
+
     for (int i = 0; i < geo::kMidiRowCount; ++i) {
         const Rect r(geo::kMidiRowX, geo::kMidiRowY0 + i * geo::kMidiRowPitch, geo::kMidiRowW,
                      geo::kMidiRowH);
@@ -353,26 +363,40 @@ void renderSettings(Canvas &c, ImageCache &, SvgCache &)
         c.setFont(Font::Title);
         c.setFontSize(geo::kMidiRowTextSize);
         c.setColor(geo::kTextColor);
-        c.drawString(kChannelDirName[i], r.x + 12.0f, base);
+        c.drawString(kMidiLearnRows[i].label, r.x + 12.0f, base);
 
         // The mapping itself is data, not a legend, so it is the body face.
+        const std::string text =
+            (i == kArmed) ? std::string(geo::kMidiListeningText) : describeBinding(kShown[i]);
         c.setFont(Font::Body);
-        c.setColor(i == 3 ? geo::kDimColor : geo::kTextColor);
-        c.drawString(learned[i], r.x + 120.0f, base);
+        c.setColor(kShown[i].learned() && i != kArmed ? geo::kTextColor : geo::kDimColor);
+        c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);
 
-        const geo::ButtonSpec learn = {static_cast<int>(r.right()) - geo::kMidiLearnW -
-                                           geo::kMidiLearnInset,
-                                       static_cast<int>(r.y) + geo::kMidiLearnInset,
+        const int learnX = static_cast<int>(r.right()) - geo::kMidiLearnInset - geo::kMidiLearnW;
+        const int by = static_cast<int>(r.y) + geo::kMidiLearnInset;
+        const int bh = geo::kMidiRowH - 2 * geo::kMidiLearnInset;
+        if (kShown[i].learned()) {
+            const geo::ButtonSpec clear = {learnX - geo::kMidiButtonGap - geo::kMidiClearW,
+                                           by,
+                                           geo::kMidiClearW,
+                                           bh,
+                                           geo::kMidiClearLabel,
+                                           geo::Page::Settings};
+            drawButton(c, clear);
+        }
+        const geo::ButtonSpec learn = {learnX,
+                                       by,
                                        geo::kMidiLearnW,
-                                       geo::kMidiRowH - 2 * geo::kMidiLearnInset,
-                                       "Learn",
+                                       bh,
+                                       i == kArmed ? geo::kMidiListenLabel : geo::kMidiLearnLabel,
                                        geo::Page::Settings};
         drawButton(c, learn);
     }
 
     drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
-                     "The gate switch is not learnable and stays where you leave it.", cx,
-                     static_cast<float>(geo::kSettingsFootnoteY));
+                     geo::kSettingsFootnote, cx, static_cast<float>(geo::kSettingsFootnoteY));
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     geo::kSettingsFootnote2, cx, static_cast<float>(geo::kSettingsFootnote2Y));
     drawButton(c, geo::kBackButton);
 }
 
@@ -574,13 +598,38 @@ bool auditText(FontStack &fonts)
     // Settings page.
     fits.push_back({"settings heading", Font::Title, geo::kSettingsHeadingSize, "MIDI Learn",
                     static_cast<float>(geo::kMidiRowW)});
-    for (int i = 0; i < geo::kMidiRowCount; ++i)
-        fits.push_back({"midi row", Font::Title, geo::kMidiRowTextSize, kChannelDirName[i], 96.0f});
-    fits.push_back({"midi learn button", Font::Title, geo::kPageButtonTextSize, "Learn",
-                    geo::kMidiLearnW - 16.0f});
+    for (int i = 0; i < kMidiLearnRowCount; ++i)
+        fits.push_back({"midi row", Font::Title, geo::kMidiRowTextSize, kMidiLearnRows[i].label,
+                        static_cast<float>(geo::kMidiTextX) - 20.0f});
+    fits.push_back({"midi learn button", Font::Title, geo::kPageButtonTextSize,
+                    geo::kMidiLearnLabel, geo::kMidiLearnW - 16.0f});
+    // The Learn button does not resize when it starts listening, so the longer of its two
+    // legends is the one that has to fit - and it is the one nobody looks at until it is on
+    // screen with a player's foot over the pedal.
+    fits.push_back({"midi listen button", Font::Title, geo::kPageButtonTextSize,
+                    geo::kMidiListenLabel, geo::kMidiLearnW - 16.0f});
+    fits.push_back({"midi clear button", Font::Title, geo::kPageButtonTextSize,
+                    geo::kMidiClearLabel, geo::kMidiClearW - 16.0f});
+    // Every shape a binding can be written in, against the space between the channel name and the
+    // Clear button. The widest of each kind rather than a typical one.
+    static const MidiBinding kWidest[] = {
+        {MidiMsg::ControlChange, kMidiAnyChannel, 127},
+        {MidiMsg::ProgramChange, kMidiAnyChannel, 127},
+        {MidiMsg::NoteOn, 15, 1},
+        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
+    };
+    static std::vector<std::string> bindingText;
+    bindingText.clear();
+    for (const MidiBinding &b : kWidest)
+        bindingText.push_back(describeBinding(b));
+    bindingText.push_back(geo::kMidiListeningText);
+    for (const std::string &t : bindingText)
+        fits.push_back({"midi binding", Font::Body, geo::kMidiRowTextSize, t.c_str(),
+                        static_cast<float>(geo::kMidiTextW)});
     fits.push_back({"settings footnote", Font::Body, geo::kSettingsFootnoteSize,
-                    "The gate switch is not learnable and stays where you leave it.",
-                    static_cast<float>(geo::kMidiRowW)});
+                    geo::kSettingsFootnote, static_cast<float>(geo::kMidiRowW)});
+    fits.push_back({"settings footnote 2", Font::Body, geo::kSettingsFootnoteSize,
+                    geo::kSettingsFootnote2, static_cast<float>(geo::kMidiRowW)});
 
     int bad = 0;
     for (const TextFit &f : fits) {

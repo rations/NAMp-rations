@@ -6,7 +6,9 @@
 
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
+#include "pluginterfaces/base/ustring.h"
 
+#include <cstdio>
 #include <cstring>
 
 using namespace Steinberg;
@@ -17,7 +19,7 @@ namespace Rations
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsController::initialize(FUnknown *context)
 {
-    tresult result = EditController::initialize(context);
+    tresult result = EditControllerEx1::initialize(context);
     if (result != kResultOk)
         return result;
 
@@ -112,7 +114,92 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
                             Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
                             kActiveChannelId);
 
+    // --- the MIDI block ------------------------------------------------------------------
+    //
+    // 129 parameters nobody will ever turn. They are here because a footswitch's messages do not
+    // arrive as MIDI: Control Change arrives as a parameter change routed by IMidiMapping, and
+    // Program Change as a parameter change on a kIsProgramChange parameter found through
+    // IUnitInfo. Both need a real parameter to land on or they do not arrive at all. midilearn.h
+    // carries the SDK sites this was verified against.
+    //
+    // Their own Unit, so a host lists them under "MIDI" rather than beside Bass and Treble.
+    addUnit(new Vst::Unit(STR16("MIDI"), kMidiUnitId, Vst::kRootUnitId, kMidiProgramListId));
+
+    // FLAGS 0, and this is not an oversight. kIsHidden would be the obvious choice for a
+    // parameter with no UI, and the SDK documents it as implying kIsReadOnly - which would make
+    // these unwritable and silently discard every CC the host routed to them. Flags 0 is the
+    // SDK's own pattern for MIDI-mapped parameters.
+    for (int cc = 0; cc < kMidiCcCount; ++cc) {
+        char ascii[32];
+        snprintf(ascii, sizeof(ascii), "MIDI CC %d", cc);
+        Vst::String128 title = {};
+        UString(title, USTRINGSIZE(title)).fromAscii(ascii);
+        parameters.addParameter(title, nullptr, 0, 0.0, 0,
+                                static_cast<Vst::ParamID>(kMidiCcBaseId + cc), kMidiUnitId);
+    }
+
+    // Program Change. A program LIST rather than a plain parameter, because that is the only
+    // route a Program Change actually travels: the host looks up the unit for the incoming MIDI
+    // channel, finds that unit's program list, and writes the program number onto the list's
+    // kIsProgramChange parameter. ProgramList builds that parameter itself, with the list id as
+    // the ParamID, which is why kMidiProgramListId and kMidiProgramChangeId are the same number.
+    //
+    // The programs are named for what they are - the message, not a preset. This plug-in has no
+    // presets and the list is not pretending to be one; it is the doorway a PC number comes
+    // through, and the learn table decides what any given number does.
+    auto *programs = new Vst::ProgramList(STR16("Program Change"), kMidiProgramListId, kMidiUnitId);
+    for (int pc = 0; pc < kMidiProgramCount; ++pc) {
+        char ascii[32];
+        snprintf(ascii, sizeof(ascii), "PC %d", pc);
+        Vst::String128 name = {};
+        UString(name, USTRINGSIZE(name)).fromAscii(ascii);
+        programs->addProgram(name);
+    }
+    addProgramList(programs);
+    if (Vst::Parameter *pcParam = programs->getParameter())
+        parameters.addParameter(pcParam);
+
     return kResultOk;
+}
+
+//------------------------------------------------------------------------
+tresult PLUGIN_API RationsController::queryInterface(const char *iid, void **obj)
+{
+    QUERY_INTERFACE(iid, obj, Vst::IMidiMapping::iid, Vst::IMidiMapping)
+    return EditControllerEx1::queryInterface(iid, obj);
+}
+
+//------------------------------------------------------------------------
+// Controller numbers 0 .. 127 only. 128 and 129 are aftertouch and pitch bend, which are not
+// switches and have nothing to learn; 130 and up are not controller numbers at all - the SDK's
+// kCountCtrlNumber is 130, the same value as kCtrlProgramChange, because everything from there up
+// belongs to the legacy MIDI-CC-OUT namespace. Answering for those would be answering a question
+// the host is not asking, and the SDK's own validator says so.
+tresult PLUGIN_API RationsController::getMidiControllerAssignment(int32 busIndex, int16 /*channel*/,
+                                                                  Vst::CtrlNumber ccNumber,
+                                                                  Vst::ParamID &id)
+{
+    if (busIndex != 0 || ccNumber < 0 || ccNumber >= kMidiCcCount)
+        return kResultFalse;
+    id = static_cast<Vst::ParamID>(kMidiCcBaseId + ccNumber);
+    return kResultTrue;
+}
+
+//------------------------------------------------------------------------
+tresult PLUGIN_API RationsController::getUnitByBus(Vst::MediaType type, Vst::BusDirection dir,
+                                                   int32 busIndex, int32 channel,
+                                                   Vst::UnitID &unitId)
+{
+    // Every channel of the one event input, onto the one unit that has a program list. Rations
+    // has no per-channel behaviour to express here: a Program Change means the same thing
+    // whichever channel the pedal sends it on, which is the same limitation CC has and for the
+    // same reason (midilearn.h).
+    if (type == Vst::kEvent && dir == Vst::kInput && busIndex == 0 && channel >= 0 &&
+        channel < 16) {
+        unitId = kMidiUnitId;
+        return kResultTrue;
+    }
+    return kResultFalse;
 }
 
 //------------------------------------------------------------------------
@@ -124,7 +211,7 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
     IBStreamer streamer(state, kLittleEndian);
 
     int32 version = 0;
-    if (!streamer.readInt32(version) || version < 1 || version > 1)
+    if (!streamer.readInt32(version) || version < 1 || version > kStateVersion)
         return kResultFalse;
 
     static const Vst::ParamID kOrder[] = {
@@ -166,6 +253,21 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
             delete[] p;
         }
     }
+
+    // The MIDI learn table, added in state version 2. A version 1 blob simply has nothing here,
+    // which is not a failure: it is a project saved before the pedal could do anything, and it
+    // opens with an unlearned table.
+    for (int row = 0; row < kMidiLearnRowCount; ++row)
+        mMidiTable[row] = MidiBinding();
+    if (version >= 2) {
+        for (int row = 0; row < kMidiLearnRowCount; ++row) {
+            int32 word = 0;
+            if (!streamer.readInt32(word))
+                return kResultFalse;
+            mMidiTable[row] = unpackBinding(static_cast<std::uint32_t>(word));
+        }
+    }
+
     if (mView)
         mView->FilesChanged();
     return kResultOk;
@@ -178,8 +280,10 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
 tresult PLUGIN_API RationsController::notify(Vst::IMessage *message)
 {
     const char *id = message ? message->getMessageID() : nullptr;
+    if (id && strcmp(id, kMsgMidiTable) == 0)
+        return receiveMidiTable(message);
     if (!id || strcmp(id, kMsgModelCaps) != 0)
-        return EditController::notify(message);
+        return EditControllerEx1::notify(message);
 
     Vst::IAttributeList *attrs = message->getAttributes();
     if (!attrs)
@@ -334,6 +438,87 @@ tresult RationsController::getIrFile(int slot, char8 *buffer, int32 bufferSize) 
     if (slot < 0 || slot >= kIrSlotCount)
         return kInvalidArgument;
     return copyPath(mIrPath[slot], buffer, bufferSize);
+}
+
+//------------------------------------------------------------------------
+// MIDI learn. Every one of these is a request, not a change: the table this controller holds is a
+// copy for the editor to draw, and the processor's is the one a footswitch talks to. Editing this
+// copy directly and hoping the two stay in step is exactly the class of bug the single-parameter
+// channel decision exists to avoid, so it is not done here either.
+void RationsController::sendMidiRow(const char *messageID, int row)
+{
+    IPtr<Vst::IMessage> message = owned(allocateMessage());
+    if (!message)
+        return;
+    message->setMessageID(messageID);
+    message->getAttributes()->setInt(kMidiRowAttr, row);
+    sendMessage(message);
+}
+
+void RationsController::armMidiLearn(int row)
+{
+    if (row < -1 || row >= kMidiLearnRowCount)
+        return;
+    // Shown as armed straight away rather than waiting for the round trip, because the user is
+    // about to stamp on a pedal and a button that takes a message round trip to light up reads as
+    // one that did not register the click. The processor's reply corrects it either way.
+    mArmedRow = row;
+    sendMidiRow(kMsgMidiLearn, row);
+    if (mView)
+        mView->FilesChanged();
+}
+
+void RationsController::clearMidiLearn(int row)
+{
+    if (row < 0 || row >= kMidiLearnRowCount)
+        return;
+    sendMidiRow(kMsgMidiClear, row);
+}
+
+void RationsController::requestMidiTable()
+{
+    IPtr<Vst::IMessage> message = owned(allocateMessage());
+    if (!message)
+        return;
+    message->setMessageID(kMsgRequestMidi);
+    sendMessage(message);
+}
+
+const MidiBinding &RationsController::midiBinding(int row) const
+{
+    static const MidiBinding kUnlearned;
+    if (row < 0 || row >= kMidiLearnRowCount)
+        return kUnlearned;
+    return mMidiTable[row];
+}
+
+// The processor's answer. Parsed defensively for the same reason the capability blob is: it is
+// our own processor, but a short or absent attribute must leave a readable table rather than an
+// out-of-range read, because the editor indexes into it every repaint.
+tresult RationsController::receiveMidiTable(Vst::IMessage *message)
+{
+    Vst::IAttributeList *attrs = message ? message->getAttributes() : nullptr;
+    if (!attrs)
+        return kResultFalse;
+
+    const void *data = nullptr;
+    uint32 size = 0;
+    if (attrs->getBinary(kMidiTableAttr, data, size) == kResultOk && data &&
+        size == kMidiLearnRowCount * sizeof(std::uint32_t)) {
+        std::uint32_t words[kMidiLearnRowCount] = {};
+        memcpy(words, data, sizeof(words));
+        for (int row = 0; row < kMidiLearnRowCount; ++row)
+            mMidiTable[row] = unpackBinding(words[row]);
+    }
+
+    int64 armed = -1;
+    if (attrs->getInt(kMidiArmedAttr, armed) != kResultOk)
+        armed = -1;
+    mArmedRow = (armed >= 0 && armed < kMidiLearnRowCount) ? static_cast<int>(armed) : -1;
+
+    if (mView)
+        mView->FilesChanged();
+    return kResultOk;
 }
 
 } // namespace Rations

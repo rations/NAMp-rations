@@ -476,6 +476,8 @@ set(RATIONS_PLUGIN_SOURCES
     src/channelrack.cpp
     src/irblend.h
     src/irblend.cpp
+    src/midilearn.h
+    src/midilearn.cpp
     src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
@@ -616,6 +618,31 @@ target_compile_options(rations_offline PRIVATE -Wall)
 add_dependencies(rations_offline Rations)
 
 # ---------------------------------------------------------------------------
+# rations_midicheck - the offline proof for the MIDI learn table and the channel
+# switching it drives. Drives the BUILT BUNDLE, because the three routes a
+# footswitch's messages take into a VST3 plug-in are not alike and only two of
+# them are MIDI-shaped by the time they arrive: a CC and a Program Change come
+# in as parameter changes, and only a Note On comes in as an event. Testing the
+# table in isolation would test the one part that was never in doubt.
+#
+# The phase's real gate is the author's own footswitch with the editor closed;
+# this covers everything between the pedal and the audio.
+# ---------------------------------------------------------------------------
+add_executable(rations_midicheck
+    ${RATIONS_ROOT}/tools/rations_midicheck.cpp
+    ${RATIONS_MODULE_LOADER}
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+)
+target_include_directories(rations_midicheck PRIVATE ${RATIONS_ROOT}/src)
+target_link_libraries(rations_midicheck PRIVATE sdk_hosting)
+target_compile_features(rations_midicheck PRIVATE cxx_std_17)
+target_compile_options(rations_midicheck PRIVATE -Wall)
+add_dependencies(rations_midicheck Rations)
+
+# ---------------------------------------------------------------------------
 # rations_ircheck — the offline proof for the cabinet's two IR slots (D10).
 # Drives the BUILT BUNDLE, loading IRs through the same IConnectionPoint
 # messages the editor sends and turning the blend through the same parameter
@@ -734,6 +761,7 @@ if(NOT RATIONS_WINDOWS)
 add_executable(rations_rtcheck
     ${RATIONS_ROOT}/tools/rations_rtcheck.cpp
     ${RATIONS_ROOT}/src/irblend.cpp
+    ${RATIONS_ROOT}/src/midilearn.cpp
     ${RATIONS_ROOT}/src/capturesource.cpp
     ${RATIONS_ROOT}/src/modelbank.cpp
     ${RATIONS_ROOT}/src/crossfadeengine.cpp
@@ -746,7 +774,13 @@ add_executable(rations_rtcheck
     ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
     ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp
 )
-target_include_directories(rations_rtcheck PRIVATE ${RATIONS_ROOT}/src ${NAM_CORE_DIR}/tools)
+# The SDK is on the include path here for headers only - nothing from it is
+# linked and no VST3 object is created. midilearn.h names ParamID, because what
+# a learned pedal performs is a parameter, and a counted path that could not see
+# that header would be counting a copy of the matcher rather than the one that
+# ships.
+target_include_directories(rations_rtcheck
+    PRIVATE ${RATIONS_ROOT}/src ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
 target_link_libraries(rations_rtcheck
     PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
 target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
@@ -755,7 +789,11 @@ target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
 target_compile_options(rations_rtcheck PRIVATE -Wall -O0 -UNDEBUG)
 endif()
 
-add_executable(panelrender ${RATIONS_ROOT}/tools/panelrender.cpp)
+# midilearn.cpp comes along because the settings page's text is not decoration:
+# what a binding reads as is what the audit has to measure, so the tool formats
+# it with the same function the panel does rather than with a mock string.
+add_executable(panelrender ${RATIONS_ROOT}/tools/panelrender.cpp
+                           ${RATIONS_ROOT}/src/midilearn.cpp)
 target_link_libraries(panelrender PRIVATE RationsGfx)
 target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
 target_compile_options(panelrender PRIVATE -Wall)

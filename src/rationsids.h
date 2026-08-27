@@ -83,14 +83,31 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     // lamp never lights over a channel the audio has not reached yet.
     kActiveChannelId = 204,
 
-    // RESERVED, not yet declared: the MIDI-mapped parameter block. IDs 1000 + cc for CC 0 .. 127,
-    // and 1128 for Program Change. They exist because VST3 delivers CC and Program Change ONLY as
-    // parameter changes through IMidiMapping, so a footswitch needs a real parameter to land on.
-    // Declared with the MIDI phase, in their own Unit, with flags 0 (not kIsHidden, which the SDK
-    // documents as implying kIsReadOnly and would make them unwritable).
+    // The MIDI-mapped parameter block: 1000 + cc for CC 0 .. 127, and 1128 for Program Change.
+    // These exist because a footswitch's messages do not arrive as MIDI at all - they arrive as
+    // parameter changes, so they need real parameters to land on. Both routes are documented at
+    // the top of midilearn.h, with the SDK sites they were verified against.
+    //
+    // The CC parameters carry flags 0 - NOT kIsHidden, which the SDK documents as implying
+    // kIsReadOnly and would make them unwritable, defeating the whole point. Flags 0 is the SDK's
+    // own pattern for MIDI-mapped parameters (public.sdk/samples/vst/mda-vst3/source/
+    // mdaJX10Controller.cpp:147-159). They live in kMidiUnitId so hosts group them out of the way.
     kMidiCcBaseId = 1000,
+    kMidiCcLastId = kMidiCcBaseId + 127,
+    // Program Change. Also the ProgramListID, which is not a coincidence and not free choice:
+    // EditControllerEx1's ProgramList builds its parameter with the list's own id as the ParamID
+    // (public.sdk/source/vst/vsteditcontroller.cpp:603-606), so the two numbers are the same
+    // number by construction.
     kMidiProgramChangeId = 1128,
 };
+
+// Units. The root unit is everything a player touches; the MIDI unit holds the 129 parameters
+// that exist only so that CC and Program Change have somewhere to arrive, and exists so a host
+// can fold them away instead of listing them beside Bass and Treble.
+inline constexpr Steinberg::Vst::UnitID kMidiUnitId = 1;
+inline constexpr Steinberg::Vst::ProgramListID kMidiProgramListId = kMidiProgramChangeId;
+inline constexpr int kMidiCcCount = 128;
+inline constexpr int kMidiProgramCount = 128;
 
 // Channel, kChannelCount and kChannelDirName are defined in engineconfig.h, which carries no VST3
 // dependency, because the channel rack and the offline switch proof both name channels without
@@ -112,6 +129,13 @@ inline constexpr double kToneMin = 0.0, kToneMax = 10.0, kToneDefault = 5.0;
 inline constexpr double kMeterMinDb = -70.0, kMeterMaxDb = 0.0;
 } // namespace ranges
 
+// Version of the state blob written by getState and accepted by setState / setComponentState.
+// Version 1 ended after the two IR paths; version 2 appends the MIDI learn table. An older blob
+// is still loaded - it is a project saved before the pedal could do anything - so this is a
+// minimum-compatible marker rather than a gate, and the readers check the version before reading
+// anything that a version 1 writer would not have written.
+inline constexpr Steinberg::int32 kStateVersion = 2;
+
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.
 inline constexpr int kIrSlotCount = 2;
@@ -129,6 +153,25 @@ inline constexpr const char *kMsgLoadIr[kIrSlotCount] = {kMsgLoadIrA, kMsgLoadIr
 // not exist yet and the first caps message necessarily reports zero. The reply that carries the
 // real counts is the one to this request, made once the workers have caught up.
 inline constexpr const char *kMsgRequestCaps = "RationsRequestCaps";
+
+// MIDI learn, editor <-> processor. The table lives in the processor, because a footswitch has to
+// work with the editor closed; these messages are how the editor arms a row, clears one, and finds
+// out what the table now says. The reply is polled rather than pushed for the same reason the
+// capture names are: the processor cannot call the controller, and the moment a learn completes is
+// on the audio thread.
+//   kMsgMidiLearn   controller -> processor, int "row": arm that row, or -1 to disarm.
+//   kMsgMidiClear   controller -> processor, int "row": forget that row's binding.
+//   kMsgRequestMidi controller -> processor: send the table.
+//   kMsgMidiTable   processor -> controller: the packed bindings, plus which row is armed.
+inline constexpr const char *kMsgMidiLearn = "RationsMidiLearn";
+inline constexpr const char *kMsgMidiClear = "RationsMidiClear";
+inline constexpr const char *kMsgRequestMidi = "RationsRequestMidi";
+inline constexpr const char *kMsgMidiTable = "RationsMidiTable";
+inline constexpr const char *kMidiRowAttr = "row";
+// The bindings, as kMidiLearnRowCount little-endian uint32 words in row order - the same packing
+// midilearn.h defines and the state blob stores, so there is one layout and not three.
+inline constexpr const char *kMidiTableAttr = "table";
+inline constexpr const char *kMidiArmedAttr = "armed";
 
 // Capabilities travel processor -> controller after every load or clear, so the editor can name
 // the capture each dial is sitting on and can disable what the current capture set does not

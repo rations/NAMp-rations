@@ -126,11 +126,14 @@ private:
     void startDrag(Steinberg::Vst::ParamID id, float y);
     bool handleHeadClick(float x, float y);
     bool handleCabinetClick(float x, float y);
+    bool handleSettingsClick(float x, float y);
     bool handleIrRowClick(int slot, float x, float y);
     // Load the previous (-1) or next (+1) IR in slot `slot`'s own folder.
     void stepIr(int slot, int dir);
     void openIrBrowser(int slot);
     void pollCaps();
+    // Ask the processor what the learn table now says, while a row is waiting to be taught.
+    void pollMidi();
 
     //--- helpers ---------------------------------------------------------
     double paramValue(Steinberg::Vst::ParamID id) const;
@@ -156,6 +159,11 @@ private:
     static bool hitCircle(float x, float y, float cx, float cy, float r);
     static Rect buttonRect(const geo::ButtonSpec &b);
     static Rect irRowRect(int slot);
+    // One settings row, and its Learn (clear = false) or Clear (clear = true) button. Shared by
+    // the painter and the hit test so a button that is only drawn on a learned row cannot become
+    // clickable on one that is not.
+    static Rect midiRowRect(int row);
+    geo::ButtonSpec midiButton(int row, bool clear) const;
     static Rect rowClearBox(const geo::FileRow &row);
     static const geo::FileRow &irRow(int slot);
 
@@ -202,6 +210,7 @@ private:
     bool mProgressComplete = false;
     int mCapsPollTicks = 0;
     int mCapsPolls = 0;
+    int mMidiPollTicks = 0;
 };
 
 } // namespace Rations

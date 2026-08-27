@@ -5,7 +5,7 @@
 // larger than the size it was Reset with — none of those are visible by reading. So this counts
 // them, using the DSP core's own malloc/free interception harness.
 //
-// Four things are measured, and the last two are the ones most likely to be wrong:
+// Six things are measured, and the middle ones are those most likely to be wrong:
 //
 //   1. The crossfade engine, sweeping the knob across a whole bank so branches bind, swap and
 //      collapse while the count is running.
@@ -26,11 +26,16 @@
 //      running each IR once off-thread when it loads it (the same pass that profiles it for the
 //      blend). That is a claim about a lazy allocation inside someone else's class, which is
 //      exactly the kind of claim inspection gets wrong, so it is counted here instead.
+//   6. The MIDI learn table, matching a stream of every message type against every row. Small,
+//      and counted anyway: a footswitch is evaluated on the audio thread, and this is the one
+//      piece of RT code here whose natural expression - a struct with a string in it, looked up
+//      in a map - would allocate.
 
 #include "channelrack.h"
 #include "crossfadeengine.h"
 #include "engineconfig.h"
 #include "irblend.h"
+#include "midilearn.h"
 #include "modelbank.h"
 #include "nativeresampler.h"
 
@@ -283,6 +288,44 @@ int main(int argc, char **argv)
         allocation_tracking::run_allocation_test_no_allocations(
             nullptr, [&] { sweepCabinet(200); }, nullptr,
             "cabinet, both IR slots filled, blend sweeping");
+    }
+
+    // --- 6. the MIDI learn table ------------------------------------------------------------
+    //
+    // Small, and counted anyway. A footswitch is evaluated on the audio thread, and the table is
+    // the one piece of RT code in this plug-in whose natural expression - a struct with a string
+    // in it, looked up in a map - would allocate. What ships is a packed word per row read out of
+    // an atomic, and this is the check that it stayed that way rather than drifting back toward
+    // the natural expression the next time a row type is added.
+    {
+        std::atomic<std::uint32_t> table[Rations::kMidiLearnRowCount];
+        for (int r = 0; r < Rations::kMidiLearnRowCount; ++r) {
+            Rations::MidiBinding b;
+            b.msg = (r % 2) ? Rations::MidiMsg::ControlChange : Rations::MidiMsg::NoteOn;
+            b.channel = (r % 2) ? Rations::kMidiAnyChannel : r;
+            b.data1 = 60 + r;
+            table[r].store(Rations::packBinding(b));
+        }
+
+        printf("counting       MIDI learn table, matching every message type\n");
+        allocation_tracking::run_allocation_test_no_allocations(
+            nullptr,
+            [&] {
+                volatile int hits = 0;
+                for (int i = 0; i < 20000; ++i) {
+                    const Rations::MidiMsg msg = static_cast<Rations::MidiMsg>(1 + (i % 3));
+                    const int channel = (i % 17 == 0) ? Rations::kMidiAnyChannel : (i % 16);
+                    const int data1 = i % 128;
+                    for (int r = 0; r < Rations::kMidiLearnRowCount; ++r) {
+                        const Rations::MidiBinding bound =
+                            Rations::unpackBinding(table[r].load(std::memory_order_acquire));
+                        if (Rations::bindingMatches(bound, msg, channel, data1))
+                            hits = hits + 1;
+                    }
+                }
+                (void)hits;
+            },
+            nullptr, "MIDI learn table, matching every message type");
     }
 
     // Teardown happens off the counted path, which is the point of the whole retirement design.

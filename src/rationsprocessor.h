@@ -14,7 +14,8 @@
 // each has its own dial sweeping that bank, and kChannelId picks which one sounds. The rack owns
 // the switch between them and the input history that makes it click-free; the processor's job is
 // only to keep it fed and to hand the host back which channel is ACTUALLY sounding, which is not
-// always the one the parameter asks for. The second IR slot and its blend are still stubbed.
+// always the one the parameter asks for. Both IR slots and their blend are wired, and so is the
+// MIDI learn table that lets a footswitch change the channel with the editor closed.
 //
 // Output is pinned to Normalized. It is not a user choice here, so there is no parameter for it
 // and the engine is told once — see the setOutputMode call in setupProcessing.
@@ -29,6 +30,7 @@
 
 #include "channelrack.h"
 #include "irblend.h"
+#include "midilearn.h"
 #include "nativeresampler.h"
 #include "rationsids.h"
 
@@ -79,6 +81,14 @@ public:
 
 private:
     void handleParameterChanges(Steinberg::Vst::IParameterChanges *changes);
+    // The MIDI half of a block, both on the audio thread. A CC or Program Change arrives as a
+    // parameter change and is picked out of handleParameterChanges; a Note On arrives as a real
+    // event and comes through here. Both end at midiTrigger().
+    void handleInputEvents(Steinberg::Vst::IEventList *events);
+    // One incoming message, already decoded. Either captures it into the row being learned or
+    // matches it against the table and performs what that row says. Audio thread; allocates
+    // nothing, takes no lock, and never calls the controller.
+    void midiTrigger(MidiMsg msg, int channel, int data1);
     void applyDsp(const float *in, float *out, Steinberg::int32 numSamples);
     bool loadIr(int slot, const std::string &path); // message thread only
     // Run a unit impulse through a freshly loaded IR to capture what it actually does - after
@@ -88,6 +98,7 @@ private:
     void profileIr(int slot); // message thread only
     void remeasureBlend();    // message thread only
     void sendModelCaps();     // message thread only
+    void sendMidiTable();     // message thread only
     void allocateBuffers();   // message thread only
     // The bundled bank for one channel: <resources>/captures/<Clean|Crunch|OD1|OD2>. Message
     // thread only — it touches the filesystem.
@@ -112,6 +123,31 @@ private:
     std::atomic<double> mChannelGainNorm[kChannelCount] = {{0.0}, {0.0}, {0.0}, {0.0}};
 
     std::atomic<double> mIrBlendNorm{0.0}; // 0 = IR A; inert unless both slots are filled
+
+    // --- MIDI learn ---------------------------------------------------------------------
+    //
+    // The table lives here rather than in the controller because a footswitch has to work with
+    // the editor closed, and it is read on the audio thread. One packed word per row (midilearn.h
+    // does the packing) so a row is published in a single atomic store and the audio thread can
+    // never read half of an edit. Only the BINDING is published: what a row performs is fixed at
+    // compile time in kMidiLearnRows, so there is no target to hand across a thread boundary.
+    std::atomic<std::uint32_t> mMidiBinding[kMidiLearnRowCount] = {};
+    // Which row is waiting to be taught, or -1. Armed from the editor on the message thread,
+    // cleared by the audio thread the moment it captures something.
+    std::atomic<int> mMidiLearnRow{-1};
+    // Last value seen on each controller number, so a learned CC fires on the press and not again
+    // on the release, and not once per block for as long as a pedal is held down. Audio thread
+    // only. uint8 rather than a float: what matters is which side of 64 it was on.
+    std::uint8_t mCcLast[kMidiCcCount] = {};
+    // Parameter changes this plug-in made to itself this block, to be echoed to the host so its
+    // automation lane and the editor agree with the audio. Fixed capacity, filled and drained
+    // inside one process() call, so it never grows on the audio thread.
+    struct ParamEcho {
+        Steinberg::Vst::ParamID id;
+        double value;
+    };
+    ParamEcho mEcho[kMidiLearnRowCount];
+    int mEchoCount = 0;
 
     // Four banks, four crossfade engines, one input ring and the switch between them. The single
     // native-rate block processor the shared resampler drives.

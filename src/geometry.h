@@ -486,11 +486,44 @@ constexpr int kMidiRowY0 = 76;
 constexpr int kMidiRowPitch = 40;
 constexpr int kMidiRowCount = kChannelToggleCount;
 constexpr int kMidiRowTextSize = 15;
-// The Learn button, as an offset from a row's right edge.
-constexpr int kMidiLearnW = 92;
+// Where the learned binding is written, as an offset from the row's left edge.
+// Far enough right to clear the widest channel name at kMidiRowTextSize, which
+// the art audit measures rather than assumes.
+constexpr int kMidiTextX = 116;
+// The Learn button, as an offset from a row's right edge, and the Clear button
+// to its left. Clear is drawn only on a row that HAS a binding: an always-there
+// Clear on an unlearned row is a control with nothing to do, and the row is not
+// wide enough to spend on one.
+constexpr int kMidiLearnW = 108;
 constexpr int kMidiLearnInset = 6;
-constexpr int kSettingsFootnoteY = 254;
+constexpr int kMidiClearW = 70;
+constexpr int kMidiButtonGap = 6;
+// The widest the binding text may be: from kMidiTextX to the Clear button, since
+// Clear is the one that appears once there is a binding to describe.
+constexpr int kMidiTextW =
+    kMidiRowW - kMidiLearnInset - kMidiLearnW - kMidiButtonGap - kMidiClearW - kMidiTextX - 8;
+constexpr int kSettingsFootnoteY = 248;
+constexpr int kSettingsFootnote2Y = 266;
 constexpr int kSettingsFootnoteSize = 12;
+
+// The Learn button's two states, named here so the panel and the art audit
+// cannot disagree about which strings have to fit inside it.
+constexpr const char *kMidiLearnLabel = "Learn";
+constexpr const char *kMidiListenLabel = "Listening";
+constexpr const char *kMidiClearLabel = "Clear";
+// What an armed row says while it waits. It replaces the binding text rather
+// than sitting beside it, so it shares that space and that allowance.
+constexpr const char *kMidiListeningText = "press a pedal...";
+
+// The two footnotes, here rather than at the draw site so the art audit measures
+// the strings the panel actually paints. The second is not decoration: a learned
+// CC or Program Change answers on EVERY MIDI channel, because VST3 hands those
+// over as parameter changes with the channel already discarded, and a player
+// needs to know that before they discover it by playing.
+constexpr const char *kSettingsFootnote =
+    "The gate switch is not learnable and stays where you leave it.";
+constexpr const char *kSettingsFootnote2 =
+    "CC and Program Change answer on any MIDI channel; a note answers on its own.";
 
 // --- File browser overlay ---------------------------------------------------
 // Drawn over the cabinet page (the only page with anything to load), so it is

@@ -5,6 +5,7 @@
 
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
+#include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstmessage.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
 
@@ -142,6 +143,12 @@ tresult PLUGIN_API RationsProcessor::initialize(FUnknown *context)
 
     addAudioInput(STR16("Input"), SpeakerArr::kMono);
     addAudioOutput(STR16("Output"), SpeakerArr::kStereo);
+    // Without this bus NO MIDI arrives at all - not the notes that come through inputEvents, and
+    // not the CC and Program Change that come through the parameter queues either, because a host
+    // that sees no event input has no reason to route MIDI here in the first place. One bus, all
+    // sixteen channels, which is also what IUnitInfo::getUnitByBus is answering for on the
+    // controller side.
+    addEventInput(STR16("MIDI In"), 16);
 
     mRack.start();
     // The captures ship inside the bundle, so there is nothing for a user to load and no reason
@@ -303,7 +310,47 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
         if (queue->getPoint(points - 1, offset, value) != kResultTrue)
             continue;
 
-        switch (queue->getParameterId()) {
+        const ParamID id = queue->getParameterId();
+
+        // The MIDI block. These parameters exist for no other purpose than to be the place a
+        // footswitch's messages land, so they are decoded back into the message they came from
+        // and handed to the learn table rather than being stored as values.
+        if (id >= kMidiCcBaseId && id <= kMidiCcLastId) {
+            const int cc = static_cast<int>(id - kMidiCcBaseId);
+            const int ccValue = std::clamp(static_cast<int>(std::lround(value * 127.0)), 0, 127);
+            const int last = mCcLast[cc];
+            mCcLast[cc] = static_cast<std::uint8_t>(ccValue);
+
+            // Matching fires on the PRESS: not on the release, and not once per block while a
+            // foot rests on a latching pedal. 64 is the MIDI switch threshold, and the rising
+            // edge is what makes a momentary pedal and a latching one behave the same way.
+            //
+            // LEARNING asks a different question, and gating it on the same edge is a bug that
+            // only shows up in the most ordinary re-mapping there is: moving a pedal that is
+            // already bound onto a different row. That pedal was last seen pressed, so its next
+            // press is not an edge, so nothing is learned and the pedal reads as dead. While a
+            // row is listening, any change is an answer - "which pedal is this" does not care
+            // which way it moved - and so is a press, which is what covers a pedal that keeps
+            // sending the same value. A host flushing initial zeroes at a parameter that was
+            // already zero is neither, and does not teach anything.
+            const bool learning = mMidiLearnRow.load(std::memory_order_relaxed) >= 0;
+            const bool fire =
+                learning ? (ccValue != last || ccValue >= 64) : (ccValue >= 64 && last < 64);
+            if (fire)
+                midiTrigger(MidiMsg::ControlChange, kMidiAnyChannel, cc);
+            continue;
+        }
+        if (id == kMidiProgramChangeId) {
+            // The parameter is the program list's own, so its value is the program number over
+            // the list's step count - 127 steps for 128 programs. A Program Change has no
+            // release, so there is no edge to look for.
+            const int program =
+                std::clamp(static_cast<int>(std::lround(value * (kMidiProgramCount - 1))), 0, 127);
+            midiTrigger(MidiMsg::ProgramChange, kMidiAnyChannel, program);
+            continue;
+        }
+
+        switch (id) {
             case kBypassId:
                 mBypass.store(value, std::memory_order_relaxed);
                 break;
@@ -335,7 +382,6 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             case kCrunchGainId:
             case kOd1GainId:
             case kOd2GainId: {
-                const ParamID id = queue->getParameterId();
                 for (int c = 0; c < kChannelCount; ++c)
                     if (kChannelGainId[c] == id)
                         mChannelGainNorm[c].store(value, std::memory_order_relaxed);
@@ -351,11 +397,88 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
 }
 
 //------------------------------------------------------------------------
+// Note On, the one of the three message types that arrives as an actual MIDI event and the one
+// that therefore still knows which MIDI channel it came from.
+void RationsProcessor::handleInputEvents(IEventList *events)
+{
+    if (!events)
+        return;
+    const int32 count = events->getEventCount();
+    for (int32 i = 0; i < count; ++i) {
+        Event e = {};
+        if (events->getEvent(i, e) != kResultOk)
+            continue;
+        if (e.type != Event::kNoteOnEvent)
+            continue;
+        // A note on with zero velocity is a note OFF - the oldest convention in MIDI, and one a
+        // pedal is entitled to use. Acting on it would switch the channel again when the foot came
+        // up, which is the same defect the CC edge test exists to prevent.
+        if (e.noteOn.velocity <= 0.0f)
+            continue;
+        midiTrigger(MidiMsg::NoteOn, e.noteOn.channel, e.noteOn.pitch);
+    }
+}
+
+//------------------------------------------------------------------------
+// One decoded message. Audio thread: no allocation, no lock, no destructor, and no call into the
+// controller - what the plug-in does to itself here is reported to the host through the output
+// parameter queue like every other RT-to-outside message in this file.
+void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
+{
+    MidiBinding incoming;
+    incoming.msg = msg;
+    incoming.channel = channel;
+    incoming.data1 = data1;
+    const std::uint32_t word = packBinding(incoming);
+
+    const int learning = mMidiLearnRow.load(std::memory_order_relaxed);
+    if (learning >= 0 && learning < kMidiLearnRowCount) {
+        // A button can only mean one thing. Teaching a message that some other row already
+        // answers to takes it away from that row, rather than leaving two rows fighting over one
+        // press and the winner decided by loop order.
+        for (int r = 0; r < kMidiLearnRowCount; ++r)
+            if (r != learning && mMidiBinding[r].load(std::memory_order_relaxed) == word)
+                mMidiBinding[r].store(0, std::memory_order_relaxed);
+        mMidiBinding[learning].store(word, std::memory_order_release);
+        mMidiLearnRow.store(-1, std::memory_order_release);
+        // The press that taught a row does not also perform it. Otherwise learning "OD2" would
+        // switch to OD2 as a side effect of being taught, which is a channel change the user did
+        // not ask for while their attention is on the pedal.
+        return;
+    }
+
+    for (int r = 0; r < kMidiLearnRowCount; ++r) {
+        const MidiBinding bound = unpackBinding(mMidiBinding[r].load(std::memory_order_acquire));
+        if (!bindingMatches(bound, msg, channel, data1))
+            continue;
+
+        const MidiLearnTarget &target = kMidiLearnRows[r];
+        if (target.param == kChannelId)
+            mChannelNorm.store(target.value, std::memory_order_relaxed);
+        // Remember to tell the host. A parameter the plug-in changed by itself and did not report
+        // leaves the host's automation lane and the editor's copy disagreeing with the audio,
+        // until the next thing that writes it snaps the channel back under the player's feet.
+        if (mEchoCount < kMidiLearnRowCount) {
+            mEcho[mEchoCount].id = target.param;
+            mEcho[mEchoCount].value = target.value;
+            ++mEchoCount;
+        }
+    }
+}
+
+//------------------------------------------------------------------------
 tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
 {
     rations_set_denormal_mode();
 
+    // Anything the MIDI table makes this plug-in do to itself is collected here and reported
+    // before the first early return below, so a message that lands on a block with no audio in it
+    // is not silently dropped.
+    mEchoCount = 0;
     handleParameterChanges(data.inputParameterChanges);
+    handleInputEvents(data.inputEvents);
+    for (int i = 0; i < mEchoCount; ++i)
+        writeOutputPoint(data.outputParameterChanges, mEcho[i].id, mEcho[i].value, 0);
 
     // Take delivery of newly published banks and hand the old ones back to their workers. Never a
     // delete here: a delete is a free(), which takes the allocator lock.
@@ -660,6 +783,28 @@ void RationsProcessor::sendModelCaps()
 }
 
 //------------------------------------------------------------------------
+// The learn table, as the editor sees it. Sent in reply to a request and after every edit; the
+// editor polls while a row is armed, because the moment a learn completes is on the audio thread
+// and the audio thread cannot send a message.
+void RationsProcessor::sendMidiTable()
+{
+    IPtr<IMessage> message = owned(allocateMessage());
+    if (!message)
+        return;
+    message->setMessageID(kMsgMidiTable);
+    IAttributeList *attrs = message->getAttributes();
+    if (!attrs)
+        return;
+
+    std::uint32_t words[kMidiLearnRowCount] = {};
+    for (int row = 0; row < kMidiLearnRowCount; ++row)
+        words[row] = mMidiBinding[row].load(std::memory_order_acquire);
+    attrs->setBinary(kMidiTableAttr, words, static_cast<uint32>(sizeof(words)));
+    attrs->setInt(kMidiArmedAttr, mMidiLearnRow.load(std::memory_order_acquire));
+    sendMessage(message);
+}
+
+//------------------------------------------------------------------------
 tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
 {
     if (!message)
@@ -671,6 +816,37 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
     // worker, so the caps sent when the plug-in was created could not know the counts yet.
     if (id && strcmp(id, kMsgRequestCaps) == 0) {
         sendModelCaps();
+        return kResultOk;
+    }
+
+    // MIDI learn. All three are message-thread work on message-thread state, except that the
+    // table itself is also read by the audio thread - which is why every write below is a single
+    // atomic store of a packed word rather than an edit of a struct.
+    if (id && strcmp(id, kMsgMidiLearn) == 0) {
+        int64 row = -1;
+        if (message->getAttributes()->getInt(kMidiRowAttr, row) != kResultOk)
+            row = -1;
+        const bool valid = row >= 0 && row < kMidiLearnRowCount;
+        mMidiLearnRow.store(valid ? static_cast<int>(row) : -1, std::memory_order_release);
+        sendMidiTable();
+        return kResultOk;
+    }
+    if (id && strcmp(id, kMsgMidiClear) == 0) {
+        int64 row = -1;
+        if (message->getAttributes()->getInt(kMidiRowAttr, row) == kResultOk && row >= 0 &&
+            row < kMidiLearnRowCount) {
+            mMidiBinding[static_cast<int>(row)].store(0, std::memory_order_release);
+            // Clearing the row that is listening also stops it listening: the user has just said
+            // what they want that row to be, and it is nothing.
+            int armed = static_cast<int>(row);
+            mMidiLearnRow.compare_exchange_strong(armed, -1, std::memory_order_release,
+                                                  std::memory_order_relaxed);
+        }
+        sendMidiTable();
+        return kResultOk;
+    }
+    if (id && strcmp(id, kMsgRequestMidi) == 0) {
+        sendMidiTable();
         return kResultOk;
     }
 
@@ -712,7 +888,7 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
     IBStreamer streamer(state, kLittleEndian);
 
     int32 version = 0;
-    if (!streamer.readInt32(version) || version < 1 || version > 1)
+    if (!streamer.readInt32(version) || version < 1 || version > kStateVersion)
         return kResultFalse;
 
     double values[8] = {0};
@@ -771,6 +947,26 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
             mIrPath[slot].clear(); // a path that no longer resolves is an empty slot, not a lie
     }
 
+    // The MIDI learn table, added in state version 2. A version 1 blob has nothing here and that
+    // is not a failure - it is a project saved before the pedal could do anything - so it opens
+    // with an unlearned table rather than being rejected.
+    //
+    // Every word goes through unpackBinding, which is where an out-of-range message type or
+    // channel from an untrusted blob becomes an unlearned row instead of a row that answers to
+    // something nobody can name. Learning is disarmed either way: a project cannot open with the
+    // plug-in already listening for a pedal the user has not asked it to listen for.
+    mMidiLearnRow.store(-1, std::memory_order_release);
+    for (int row = 0; row < kMidiLearnRowCount; ++row) {
+        std::uint32_t word = 0;
+        if (version >= 2) {
+            int32 raw = 0;
+            if (!streamer.readInt32(raw))
+                return kResultFalse;
+            word = packBinding(unpackBinding(static_cast<std::uint32_t>(raw)));
+        }
+        mMidiBinding[row].store(word, std::memory_order_release);
+    }
+
     return kResultOk;
 }
 
@@ -781,8 +977,7 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
         return kResultFalse;
     IBStreamer streamer(state, kLittleEndian);
 
-    // State version 1.
-    streamer.writeInt32(1);
+    streamer.writeInt32(kStateVersion);
 
     streamer.writeDouble(mBypass.load(std::memory_order_relaxed));
     streamer.writeDouble(mInputGainNorm.load(std::memory_order_relaxed));
@@ -800,6 +995,13 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
 
     for (int slot = 0; slot < kIrSlotCount; ++slot)
         streamer.writeStr8(mIrPath[slot].c_str());
+
+    // Version 2 onwards: the MIDI learn table, one packed word per row. Which row is currently
+    // ARMED is deliberately not written - it is a transient state of the editor's, not a property
+    // of the session, and a project that reopened still listening for a pedal would learn
+    // whatever the player happened to press next.
+    for (int row = 0; row < kMidiLearnRowCount; ++row)
+        streamer.writeInt32(static_cast<int32>(mMidiBinding[row].load(std::memory_order_acquire)));
     return kResultOk;
 }
 
