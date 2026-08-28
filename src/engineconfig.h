@@ -159,6 +159,13 @@ inline constexpr double kSwitchModelBudget = 2.4;
 // resume the instant the sounding channel collapses back to a single branch.
 inline constexpr double kCatchupMinRate = 1.0;
 
+// How often the prime worker looks for new input. It is not signalled by the audio thread at all
+// - RT publishes the ring's write head and nothing else - so this is the whole of the coupling
+// between the two threads, and it is one atomic load. Well under a block period at 128 frames
+// (2.67 ms), so the worker never has more than a fraction of a block to catch up on, and cheap
+// enough that a tick which finds nothing to do costs a load and a sleep.
+inline constexpr int kPrimeTickUs = 500;
+
 // The fade between two channels, once the incoming one is exact. Both signals are true responses
 // to the same input by the time this runs, so there is no discontinuity to mask and no curve to
 // tune; the fade is here because the two channels are different amps at different levels, and a
