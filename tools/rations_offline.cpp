@@ -277,43 +277,126 @@ int main(int argc, char **argv)
     double bankProgress = 0.0;
     double activeIndex = 0.0;
 
+    // One pass over the input at a given channel trim, writing into `output`. A lambda rather
+    // than straight-line code because the trim check below has to render the SAME material twice
+    // at two trims and compare, and a second copy of the render loop would be a second thing to
+    // keep correct.
+    bool renderFailed = false;
+    auto renderPass = [&](double levelNorm) {
+        for (size_t pos = 0; pos < total; pos += static_cast<size_t>(callBlock)) {
+            const size_t n = std::min(static_cast<size_t>(callBlock), total - pos);
+            // Poison the output buffers. If the plug-in only fills part of an over-sized block, the
+            // poison survives into the result and the stale-tail check below catches it.
+            std::fill(outBlockL.begin(), outBlockL.end(), 7.0f);
+            std::fill(outBlockR.begin(), outBlockR.end(), 7.0f);
+            std::fill(inBlock.begin(), inBlock.end(), 0.0f);
+            memcpy(inBlock.data(), input.data() + pos, n * sizeof(float));
+
+            const double sweepPos =
+                opt.sweep ? static_cast<double>(pos) / static_cast<double>(total) : opt.gain;
+            paramChanges.clearQueue();
+            int32 queueIndex = 0;
+            if (Vst::IParamValueQueue *q =
+                    paramChanges.addParameterData(Rations::kCleanGainId, queueIndex)) {
+                int32 pointIndex = 0;
+                q->addPoint(0, sweepPos, pointIndex);
+            }
+            if (Vst::IParamValueQueue *q =
+                    paramChanges.addParameterData(Rations::kCleanLevelId, queueIndex)) {
+                int32 pointIndex = 0;
+                q->addPoint(0, levelNorm, pointIndex);
+            }
+            outParamChanges.clearQueue();
+            data.inputParameterChanges = &paramChanges;
+            data.outputParameterChanges = &outParamChanges;
+
+            data.numSamples = static_cast<int32>(n);
+            if (processor->process(data) != kResultOk) {
+                fprintf(stderr, "rations_offline: process() failed at sample %zu\n", pos);
+                renderFailed = true;
+                return;
+            }
+            memcpy(output.data() + pos, outBlockL.data(), n * sizeof(float));
+
+            // What the plug-in says about its own bank. This is the only route the information
+            // takes — the processor never calls the controller directly — so reading it here is
+            // reading exactly what the editor would show.
+            bankProgress = readOutputParam(outParamChanges, Rations::kBankProgressId, bankProgress);
+            activeIndex = readOutputParam(outParamChanges, Rations::kActiveIndexId, activeIndex);
+        }
+    };
+
     const clock_t t0 = clock();
-    for (size_t pos = 0; pos < total; pos += static_cast<size_t>(callBlock)) {
-        const size_t n = std::min(static_cast<size_t>(callBlock), total - pos);
-        // Poison the output buffers. If the plug-in only fills part of an over-sized block, the
-        // poison survives into the result and the stale-tail check below catches it.
-        std::fill(outBlockL.begin(), outBlockL.end(), 7.0f);
-        std::fill(outBlockR.begin(), outBlockR.end(), 7.0f);
-        std::fill(inBlock.begin(), inBlock.end(), 0.0f);
-        memcpy(inBlock.data(), input.data() + pos, n * sizeof(float));
-
-        const double sweepPos =
-            opt.sweep ? static_cast<double>(pos) / static_cast<double>(total) : opt.gain;
-        paramChanges.clearQueue();
-        int32 queueIndex = 0;
-        if (Vst::IParamValueQueue *q =
-                paramChanges.addParameterData(Rations::kCleanGainId, queueIndex)) {
-            int32 pointIndex = 0;
-            q->addPoint(0, sweepPos, pointIndex);
-        }
-        outParamChanges.clearQueue();
-        data.inputParameterChanges = &paramChanges;
-        data.outputParameterChanges = &outParamChanges;
-
-        data.numSamples = static_cast<int32>(n);
-        if (processor->process(data) != kResultOk) {
-            fprintf(stderr, "rations_offline: process() failed at sample %zu\n", pos);
-            return 1;
-        }
-        memcpy(output.data() + pos, outBlockL.data(), n * sizeof(float));
-
-        // What the plug-in says about its own bank. This is the only route the information takes
-        // — the processor never calls the controller directly — so reading it here is reading
-        // exactly what the editor would show.
-        bankProgress = readOutputParam(outParamChanges, Rations::kBankProgressId, bankProgress);
-        activeIndex = readOutputParam(outParamChanges, Rations::kActiveIndexId, activeIndex);
-    }
+    renderPass(0.5); // 0 dB: the trim's default, so this pass is the plug-in as it ships
+    if (renderFailed)
+        return 1;
     const double wallMs = 1000.0 * static_cast<double>(clock() - t0) / CLOCKS_PER_SEC;
+
+    // --- the channel trim ---------------------------------------------------------------------
+    // A trim of X dB must move the channel by X dB, end to end: parameter -> denormalize ->
+    // dB-to-linear -> the ramp inside the rack -> the output. Every one of those is a place a
+    // wrong constant hides while still producing a control that visibly does something, which is
+    // why this is measured rather than left to the fact that the slider moves.
+    //
+    // It runs HERE, while the component is still active, and that is not a detail: process() after
+    // setActive(false) is outside the contract and the plug-in does not produce comparable audio
+    // through it - measured 0.78 dB down, uniformly, which reads exactly like a broken trim and is
+    // not one. Pass one's output is kept and put back, because the report below is about that
+    // render rather than about whichever trim was measured last.
+    int trimFailures = 0;
+    {
+        const std::vector<float> reference = output;
+        auto rmsOfOutput = [&]() {
+            double sq = 0.0;
+            for (size_t i = 0; i < total; ++i)
+                if (std::isfinite(output[i]))
+                    sq += static_cast<double>(output[i]) * output[i];
+            return std::sqrt(sq / static_cast<double>(total));
+        };
+
+        // The 0 dB reference is rendered AGAIN rather than taken from the pass above, and that is
+        // the whole of what makes this measurable. The first pass renders its opening pick attack
+        // through a model with no convolution history, every later pass renders it through one
+        // holding the tail of the pass before, and this material puts almost all of its energy in
+        // that attack - second one of the take is fifty times the RMS of second two. So pass one
+        // is not comparable with pass two at all, and comparing them reads as a 0.8 dB trim error
+        // that is not there. Every pass from the second on IS comparable with every other,
+        // because the trim is applied AFTER the model: it cannot change what the model is fed, so
+        // it cannot change the history the next pass inherits.
+        renderPass(0.5);
+        if (renderFailed)
+            return 1;
+        const double refRms = rmsOfOutput();
+
+        // Both ends of the range rather than some middling value: a range constant that
+        // disagreed between the controller and the processor would be at its most visible there.
+        // The tolerance is 0.02 dB - the ramp travels in 15 ms and this is an RMS over seconds,
+        // so the ramp's own contribution is far below it.
+        const double kTrials[] = {Rations::ranges::kLevelMin, Rations::ranges::kLevelMax};
+        for (double db : kTrials) {
+            const double norm = (db - Rations::ranges::kLevelMin) /
+                                (Rations::ranges::kLevelMax - Rations::ranges::kLevelMin);
+            // Twice, and the second one is the measurement: the trim RAMPS to its new value
+            // over 15 ms, and 15 ms of a take whose energy is almost all in one pick attack is
+            // worth about 0.1 dB of the answer. The second pass begins already at the value, so
+            // what it measures is the trim rather than the trim plus its own arrival.
+            renderPass(norm);
+            renderPass(norm);
+            if (renderFailed)
+                return 1;
+            const double measured = 20.0 * std::log10(rmsOfOutput() / refRms);
+            printf("channel trim   %+.1f dB asked, %+.3f dB measured\n", db, measured);
+            if (std::fabs(measured - db) > 0.02) {
+                fprintf(stderr,
+                        "FAIL: a %+.1f dB channel trim moved the output %+.3f dB - the trim's "
+                        "range or its dB conversion disagrees somewhere between the parameter "
+                        "and the rack\n",
+                        db, measured);
+                ++trimFailures;
+            }
+        }
+        output = reference;
+    }
 
     processor->setProcessing(false);
     component->setActive(false);
@@ -360,7 +443,7 @@ int main(int argc, char **argv)
     printf("unwritten      %zu\n", stale);
     printf("wall           %.1f ms  (RTF %.4f)\n", wallMs, wallMs / (opt.seconds * 1000.0));
 
-    int failures = 0;
+    int failures = trimFailures;
     if (nonFinite) {
         fprintf(stderr, "FAIL: %zu non-finite output samples\n", nonFinite);
         ++failures;
@@ -388,6 +471,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "FAIL: output is identical to the input — the chain is not in circuit\n");
         ++failures;
     }
+
     printf("%s\n", failures ? "FAILED" : "PASSED");
     return failures ? 1 : 0;
 }

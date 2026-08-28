@@ -73,6 +73,12 @@ void ChannelRack::prepare(int maxNativeFrames, double nativeSampleRate)
     const double fadeSamples = std::max(1.0, engine::kChannelFadeMs * 0.001 * mNativeSampleRate);
     mFadeStep = 1.0 / fadeSamples;
 
+    // dB per second -> a per-sample amplitude multiplier, and its reciprocal for the way down.
+    mLevelStepUp = std::pow(10.0, engine::kLevelRampDbPerSec / (20.0 * mNativeSampleRate));
+    mLevelStepDown = 1.0 / mLevelStepUp;
+    for (int c = 0; c < kChannelCount; ++c)
+        mLevelCurrent[c] = mLevelTarget[c];
+
     mFading = false;
     mFadeMix = 0.0;
     mTarget = kNoChannel;
@@ -175,6 +181,44 @@ void ChannelRack::setPositionNorm(Channel ch, double norm)
     const bool midSwitch = (i == mTarget) || (mFading && i == mTo);
     if (rtOwns(i) && !midSwitch)
         mEngine[i].setPositionNorm(norm);
+}
+
+//------------------------------------------------------------------------
+// The per-channel trim. Stored as a target; the ramp toward it runs in applyLevel() below.
+void ChannelRack::setLevel(Channel ch, double linearGain)
+{
+    const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
+    mLevelTarget[i] = linearGain;
+}
+
+//------------------------------------------------------------------------
+// One channel's trim, ramped, applied to that channel's own output block.
+//
+// The ramp exists for the slider being dragged, not for the switch: a channel that is about to
+// start sounding has its ramp SNAPPED to target when the fade begins (see startFadeIfReady), so a
+// channel change opens at the level the user set rather than sliding up to it over 15 ms.
+void ChannelRack::applyLevel(int channel, NAM_SAMPLE *buf, int numFrames)
+{
+    double g = mLevelCurrent[channel];
+    const double target = mLevelTarget[channel];
+    if (g == target) {
+        if (g == 1.0)
+            return; // unity and not moving: the ordinary case costs one compare
+        for (int i = 0; i < numFrames; ++i)
+            buf[i] *= g;
+        return;
+    }
+    // Multiplicative, so the ramp covers a constant number of dB per second: the same musical
+    // change takes the same time wherever in the range it starts, and this file needs to know
+    // nothing about what the trim's range in dB actually is - that lives with the parameter.
+    for (int i = 0; i < numFrames; ++i) {
+        if (g < target)
+            g = std::min(target, g * mLevelStepUp);
+        else
+            g = std::max(target, g * mLevelStepDown);
+        buf[i] *= g;
+    }
+    mLevelCurrent[channel] = g;
 }
 
 //------------------------------------------------------------------------
@@ -650,6 +694,11 @@ void ChannelRack::startFadeIfReady()
     mFading = true;
     mTarget = kNoChannel;
     mPrimed = false;
+    // The incoming channel starts at the level the player set for it, not at whatever its ramp
+    // was left holding when it last stopped sounding. Ramping here would put a 15 ms level slide
+    // on top of every channel change, which is the one thing this feature must not add to the
+    // switch.
+    mLevelCurrent[mTo] = mLevelTarget[mTo];
 }
 
 //------------------------------------------------------------------------
@@ -703,13 +752,20 @@ void ChannelRack::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames
     resolveRequest(numFrames);
     startFadeIfReady();
 
-    // The sounding channel processes the live block. Idle channels are not processed at all —
-    // that is what makes four resident banks cost memory and nothing else.
+    // The sounding channel processes the live block. No idle channel is processed on THIS thread,
+    // which is what keeps the audio thread's steady-state cost at one model however many banks
+    // are resident. The prime worker does feed the idle three, on its own thread, so that they
+    // are already exact when the footswitch is stomped.
     mEngine[mFrom].processNative(in, out, numFrames);
+    applyLevel(mFrom, dst, numFrames);
 
     if (mFading) {
         NAM_SAMPLE *mix = mMixPtr;
         mEngine[mTo].processNative(in, &mix, numFrames);
+        // Each channel is trimmed BEFORE the fade mixes them, so a switch between two channels
+        // the player has set to different levels travels between those levels over the fade
+        // rather than stepping between them when mFrom changes.
+        applyLevel(mTo, mMix.data(), numFrames);
         mixFade(dst, numFrames);
     }
 

@@ -196,6 +196,20 @@ inline constexpr int kPrimeTickUs = 500;
 // and a round number carried over from the plan is no longer good enough for it.
 inline constexpr double kChannelFadeMs = 5.0;
 
+// How fast a per-channel trim travels, in dB per second.
+//
+// A trim change is ramped rather than applied as a per-block scalar: a level that steps once per
+// block zips audibly while the slider is being dragged. Stated as dB per second rather than as a
+// ramp length, because a ramp length would need to know how wide the trim's range is, and the
+// range belongs with the parameter rather than with the engine - this header has no VST3
+// dependency and should not learn one to hold a number the panel owns.
+//
+// 1600 dB/s crosses the whole of the shipped +/-12 dB trim in 15 ms, which is the same length as
+// the bypass ramp below and inaudible for the same reason. Nothing about the switch depends on
+// it: an incoming channel's ramp is SNAPPED to its target as the fade begins, so a channel change
+// opens at the level the player set rather than sliding up to it.
+inline constexpr double kLevelRampDbPerSec = 1600.0;
+
 // Bypass and start-up ramp length in milliseconds. Long enough to be inaudible, and never a hard
 // mute — a hard bypass switch is itself a click.
 inline constexpr double kBypassRampMs = 15.0;

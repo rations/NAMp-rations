@@ -89,6 +89,19 @@ public:
     // The channel kChannelId asks for. Acted on immediately, never queued, and HELD rather than
     // faked while the capture it names is still being built.
     void requestChannel(Channel ch);
+    // Per-channel output trim, as a linear gain. Applied to that channel's OUTPUT, inside this
+    // class, for two reasons that are both about the switch:
+    //
+    //   * it has to be per-channel at the point the fade mixes, or a channel change would step
+    //     the level at the instant the sounding channel changes - which is precisely the
+    //     discontinuity the catch-up and the fade exist to remove. A single trim applied after
+    //     the resampler cannot do that: there is only one signal left by then.
+    //   * it must not be on the model's INPUT. Models are fed from the ring, the ring is what the
+    //     priming replays, and the proof that a switched channel is exact is a proof about that
+    //     input. A trim on the output is outside all of it.
+    //
+    // Pushed for all four every block, like the dial positions.
+    void setLevel(Channel ch, double linearGain);
 
     void processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames) override;
 
@@ -156,6 +169,7 @@ private:
     void beginCatchup(int ch, int numFrames);
     void runCatchup(int numFrames);
     void startFadeIfReady();
+    void applyLevel(int channel, NAM_SAMPLE *buf, int numFrames);
     void mixFade(NAM_SAMPLE *dst, int numFrames);
     // Exchange the two ends of a running fade and complement its position, so the output is
     // continuous across the instant the direction changes.
@@ -175,6 +189,16 @@ private:
     int mFrom = kChannelClean;
     int mTo = kChannelClean;
     bool mFading = false;
+
+    // Per-channel output trim, and its ramp. Ramped rather than applied as a per-block scalar,
+    // because a level that steps once per block zips audibly while the slider is being dragged.
+    // The ramp is per channel, but at most two channels are producing output at once, so at most
+    // two of these advance in a block.
+    double mLevelTarget[kChannelCount] = {1.0, 1.0, 1.0, 1.0};
+    double mLevelCurrent[kChannelCount] = {1.0, 1.0, 1.0, 1.0};
+    // Per-sample multipliers, one each way, so neither direction costs a divide on the audio path.
+    double mLevelStepUp = 1.0;
+    double mLevelStepDown = 1.0;
     double mFadeMix = 0.0;
     double mFadeStep = 1.0;
 

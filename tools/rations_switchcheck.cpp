@@ -54,6 +54,10 @@
 #include "crossfadeengine.h"
 #include "engineconfig.h"
 #include "modelbank.h"
+// For the trim's range. Headers only - nothing here links the plug-in - but the fade sweep has to
+// score the fade at the widest level difference the trims actually permit, and that number lives
+// with the parameter rather than being restated here.
+#include "rationsids.h"
 
 #include <algorithm>
 #include <chrono>
@@ -150,6 +154,11 @@ bool waitForBank(Rations::ModelBank &loader, const char *what)
     return true;
 }
 
+double dbToGain(double db)
+{
+    return std::pow(10.0, db / 20.0);
+}
+
 // Largest single-sample step within a window.
 double maxStep(const std::vector<double> &x, size_t from, size_t to)
 {
@@ -200,7 +209,7 @@ struct FadeScore {
 };
 
 FadeScore scoreFade(const std::vector<double> &a, const std::vector<double> &b, double ms,
-                    size_t from, size_t to, size_t hop, double stepFloor)
+                    size_t from, size_t to, size_t hop, double stepFloor, double gA, double gB)
 {
     FadeScore r;
     r.ms = ms;
@@ -212,26 +221,28 @@ FadeScore scoreFade(const std::vector<double> &a, const std::vector<double> &b, 
         const size_t lo = s - guard;
         const size_t hi = s + static_cast<size_t>(len) + guard;
 
-        // The material's own step, here rather than in general. Below the floor nothing is
-        // playing and a ratio would be a statement about the noise floor.
-        const double local = std::max(maxStep(a, lo, hi), maxStep(b, lo, hi));
+        // The material's own step, here rather than in general, and AFTER the trims: what the
+        // fade has to hide under is the level the listener actually hears from each channel.
+        // Below the floor nothing is playing and a ratio would be a statement about the noise
+        // floor.
+        const double local = std::max(gA * maxStep(a, lo, hi), gB * maxStep(b, lo, hi));
         if (local < stepFloor)
             continue;
 
-        double prev = a[lo];
+        double prev = gA * a[lo];
         double worst = 0.0;
         double w = 0.0;
         for (size_t i = lo + 1; i < hi; ++i) {
             double y;
             if (i < s) {
-                y = a[i];
+                y = gA * a[i];
             } else if (w < 1.0) {
                 w += step;
                 if (w > 1.0)
                     w = 1.0;
-                y = (1.0 - w) * a[i] + w * b[i];
+                y = (1.0 - w) * gA * a[i] + w * gB * b[i];
             } else {
-                y = b[i];
+                y = gB * b[i];
             }
             worst = std::max(worst, std::fabs(y - prev));
             prev = y;
@@ -265,24 +276,54 @@ void fadeSweep(const std::vector<double> &a, const std::vector<double> &b, int t
     static const double kCandidates[] = {0.0, 0.25, 0.5, 0.75, 1.0,  1.5, 2.0,
                                          3.0, 4.0,  5.0, 7.5,  10.0, 15.0};
 
+    // The per-channel trims are part of this question, not a separate one. Two channels the player
+    // has pushed to opposite ends of the trim range are further apart in level than any two
+    // captures naturally are, and the step the fade has to cross is the difference between them.
+    // So the sweep is run at the two worst trim settings the plug-in permits as well as at unity,
+    // and the worst of the three is what each candidate is scored on.
+    const double kTrimHigh = dbToGain(Rations::ranges::kLevelMax);
+    const double kTrimLow = dbToGain(Rations::ranges::kLevelMin);
+    struct TrimCase {
+        double gA, gB;
+        const char *what;
+    };
+    const TrimCase kTrims[] = {
+        {1.0, 1.0, "0/0"},
+        {kTrimHigh, kTrimLow, "+/-"},
+        {kTrimLow, kTrimHigh, "-/+"},
+    };
+
     printf("\n--- fade length, measured ---------------------------------------------------\n");
     printf("landing points %zu per direction, %.1f ms apart, over %.1f s of material\n",
            (to - from) / hop, 1000.0 * hop / kNativeRate, (to - from) / kNativeRate);
+    printf("trims          unity, and both channels at opposite ends of the %+.0f/%+.0f dB range\n",
+           Rations::ranges::kLevelMin, Rations::ranges::kLevelMax);
     printf("threshold      a fade may not step more than 1.50x the material's own step, which is\n"
            "               the same threshold the no-click assertion above is gated on\n\n");
     printf("   fade ms     worst step / material's own      verdict\n");
 
     double shortestClean = -1.0;
     for (double ms : kCandidates) {
-        const FadeScore fwd = scoreFade(a, b, ms, from, to, hop, floorStep);
-        const FadeScore rev = scoreFade(b, a, ms, from, to, hop, floorStep);
-        const bool forward = fwd.worstRatio >= rev.worstRatio;
-        const FadeScore &w = forward ? fwd : rev;
-        const bool clean = w.worstRatio <= 1.5;
+        FadeScore worst;
+        worst.ms = ms;
+        const char *dir = "A->B";
+        const char *trim = kTrims[0].what;
+        for (const TrimCase &t : kTrims) {
+            const FadeScore fwd = scoreFade(a, b, ms, from, to, hop, floorStep, t.gA, t.gB);
+            const FadeScore rev = scoreFade(b, a, ms, from, to, hop, floorStep, t.gB, t.gA);
+            const bool forward = fwd.worstRatio >= rev.worstRatio;
+            const FadeScore &w = forward ? fwd : rev;
+            if (w.worstRatio > worst.worstRatio) {
+                worst = w;
+                dir = forward ? "A->B" : "B->A";
+                trim = t.what;
+            }
+        }
+        const bool clean = worst.worstRatio <= 1.5;
         if (clean && shortestClean < 0.0)
             shortestClean = ms;
-        printf("   %6.2f      x%-7.2f (%.4f, at %.2f s, %s)   %s\n", ms, w.worstRatio, w.worstStep,
-               w.atSeconds, forward ? "A->B" : "B->A", clean ? "clean" : "CLICKS");
+        printf("   %6.2f      x%-7.2f (%.4f, at %.2f s, %s, trim %s)   %s\n", ms, worst.worstRatio,
+               worst.worstStep, worst.atSeconds, dir, trim, clean ? "clean" : "CLICKS");
     }
 
     if (shortestClean >= 0.0)

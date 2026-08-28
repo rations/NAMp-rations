@@ -210,15 +210,23 @@ int main(int argc, char **argv)
                 rack.pollBanks();
                 rack.setPositionNorm(Rations::kChannelClean, 0.0);
                 rack.setPositionNorm(Rations::kChannelOd1, 0.0);
+                // Both trims moving, so the per-channel level ramp is running on the audio path
+                // rather than sitting at unity where it costs one compare and takes no branch.
+                // Opposite directions, so a stomp that lands mid-drag mixes two ramps at once.
+                const double t = static_cast<double>(b) / 40.0;
+                rack.setLevel(Rations::kChannelClean,
+                              0.25 + 0.5 * std::fabs(std::fmod(t, 2.0) - 1.0));
+                rack.setLevel(Rations::kChannelOd1, 4.0 - 3.0 * std::fabs(std::fmod(t, 2.0) - 1.0));
                 rack.requestChannel(want);
                 rack.processNative(&ip, &op, kBlock);
             }
         };
         drive(8); // warm anything lazily sized before the count starts
 
-        printf("counting       channel rack, stomping between two channels\n");
+        printf("counting       channel rack, stomping between two channels, trims moving\n");
         allocation_tracking::run_allocation_test_no_allocations(
-            nullptr, [&] { drive(200); }, nullptr, "channel rack, stomping between two channels");
+            nullptr, [&] { drive(200); }, nullptr,
+            "channel rack, stomping between two channels, trims moving");
 
         rack.stop();
         rack.releaseBanks();

@@ -387,6 +387,15 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
                         mChannelGainNorm[c].store(value, std::memory_order_relaxed);
                 break;
             }
+            case kCleanLevelId:
+            case kCrunchLevelId:
+            case kOd1LevelId:
+            case kOd2LevelId: {
+                for (int c = 0; c < kChannelCount; ++c)
+                    if (kChannelLevelId[c] == id)
+                        mChannelLevelNorm[c].store(value, std::memory_order_relaxed);
+                break;
+            }
             case kIrBlendId:
                 mIrBlendNorm.store(value, std::memory_order_relaxed);
                 break;
@@ -518,9 +527,16 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     // Where every dial is, before any audio is touched. All four are pushed, not just the
     // sounding one: an idle channel's dial decides which capture a switch to it would land on,
     // and which capture its worker should build first.
-    for (int c = 0; c < kChannelCount; ++c)
+    for (int c = 0; c < kChannelCount; ++c) {
         mRack.setPositionNorm(static_cast<Channel>(c),
                               mChannelGainNorm[c].load(std::memory_order_relaxed));
+        // And how loud each channel is. Pushed for all four for the same reason: the rack ramps
+        // whichever ones are producing output, and an idle channel's trim has to be in place
+        // before a switch lands on it, not applied afterwards.
+        mRack.setLevel(static_cast<Channel>(c),
+                       dbToLinear(denorm(mChannelLevelNorm[c].load(std::memory_order_relaxed),
+                                         ranges::kLevelMin, ranges::kLevelMax)));
+    }
     // And which channel the host wants. The rack decides when the audio can follow.
     mRack.requestChannel(channelFromNorm(mChannelNorm.load(std::memory_order_relaxed)));
 
@@ -967,6 +983,16 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
         mMidiBinding[row].store(word, std::memory_order_release);
     }
 
+    // The per-channel trims, added in state version 3. A version 1 or 2 project has nothing here
+    // and opens with every trim at 0 dB - which is the level it was mixed at, so the older project
+    // sounds exactly as it did.
+    for (int c = 0; c < kChannelCount; ++c) {
+        double level = 0.5;
+        if (version >= 3 && !streamer.readDouble(level))
+            return kResultFalse;
+        mChannelLevelNorm[c].store(std::clamp(level, 0.0, 1.0), std::memory_order_relaxed);
+    }
+
     return kResultOk;
 }
 
@@ -1002,6 +1028,10 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     // whatever the player happened to press next.
     for (int row = 0; row < kMidiLearnRowCount; ++row)
         streamer.writeInt32(static_cast<int32>(mMidiBinding[row].load(std::memory_order_acquire)));
+
+    // Version 3 onwards: the four channel trims.
+    for (int c = 0; c < kChannelCount; ++c)
+        streamer.writeDouble(mChannelLevelNorm[c].load(std::memory_order_relaxed));
     return kResultOk;
 }
 

@@ -258,6 +258,20 @@ std::pair<Vst::ParamID, double> cc(int number, int value)
     return {static_cast<Vst::ParamID>(kMidiCcBaseId + number), value / 127.0};
 }
 
+// The four channel trims are the last thing a version 3 blob holds, so they are read off the tail
+// rather than by re-parsing everything in front of them - which would make this a second copy of
+// the state layout, and a second place for it to be wrong.
+bool readTrims(MemoryStream &s, double out[kChannelCount])
+{
+    const int64 size = s.getSize();
+    const char *data = s.getData();
+    const int64 want = static_cast<int64>(sizeof(double)) * kChannelCount;
+    if (!data || size < want)
+        return false;
+    memcpy(out, data + (size - want), static_cast<size_t>(want));
+    return true;
+}
+
 std::pair<Vst::ParamID, double> pc(int program)
 {
     return {static_cast<Vst::ParamID>(kMidiProgramChangeId),
@@ -559,6 +573,56 @@ int main(int argc, char **argv)
         press.params.push_back(cc(80, 127));
         rig.run(press);
         check(!press.sawChannelEcho, "... and loads with an empty table, not a stale one");
+
+        // The same blob is the check that a project written before the trims existed opens with
+        // them at 0 dB rather than at whatever the plug-in happened to be holding - which is the
+        // whole promise of a version marker: an old project sounds as it did.
+        MemoryStream after;
+        check(component->getState(&after) == kResultOk, "state saves after a version 1 load");
+        double trims[kChannelCount] = {};
+        check(readTrims(after, trims), "the saved blob carries four trims");
+        bool allDefault = true;
+        for (double t : trims)
+            allDefault = allDefault && near(t, 0.5);
+        check(allDefault, "a version 1 project opens with every channel trim at 0 dB");
+    }
+
+    // --- 5b. the channel trims survive a save and reload --------------------------------------
+    // Written and read as the last four doubles of the blob, which is where version 3 appends
+    // them. Distinct values per channel, and both ends of the range among them, so a reader that
+    // silently dropped one or transposed two would not pass by accident.
+    printf("channel trims\n");
+    {
+        static const double kWanted[kChannelCount] = {0.0, 0.25, 0.75, 1.0};
+        Block set;
+        for (int c = 0; c < kChannelCount; ++c)
+            set.params.push_back({kChannelLevelId[c], kWanted[c]});
+        rig.run(set);
+
+        MemoryStream saved;
+        check(component->getState(&saved) == kResultOk, "state saves with the trims set");
+        double trims[kChannelCount] = {};
+        check(readTrims(saved, trims), "the saved blob carries four trims");
+        bool exact = true;
+        for (int c = 0; c < kChannelCount; ++c)
+            exact = exact && near(trims[c], kWanted[c]);
+        check(exact, "each channel's trim is saved as its own value");
+
+        // Move them all somewhere else, then reload and read them back out.
+        Block clobber;
+        for (int c = 0; c < kChannelCount; ++c)
+            clobber.params.push_back({kChannelLevelId[c], 0.5});
+        rig.run(clobber);
+        saved.seek(0, IBStream::kIBSeekSet, nullptr);
+        check(component->setState(&saved) == kResultOk, "state reloads with the trims");
+        MemoryStream again;
+        check(component->getState(&again) == kResultOk, "state saves again");
+        double back[kChannelCount] = {};
+        check(readTrims(again, back), "the reloaded blob carries four trims");
+        bool restored = true;
+        for (int c = 0; c < kChannelCount; ++c)
+            restored = restored && near(back[c], kWanted[c]);
+        check(restored, "the trims survive save and reload");
     }
 
     // --- 6. it reaches the audio -------------------------------------------------------------

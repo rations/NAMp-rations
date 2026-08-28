@@ -121,6 +121,10 @@ private:
     // one representation the host does; channelFromNorm() is the only place it is decoded.
     std::atomic<double> mChannelNorm{0.0}; // Clean
     std::atomic<double> mChannelGainNorm[kChannelCount] = {{0.0}, {0.0}, {0.0}, {0.0}};
+    // Per-channel output trim, normalized. 0.5 is 0 dB, which is what the range's centre
+    // denormalizes to and what every one of these has to start at: an amp that came up with a
+    // channel quieter than the player left it would be worse than one with no trim at all.
+    std::atomic<double> mChannelLevelNorm[kChannelCount] = {{0.5}, {0.5}, {0.5}, {0.5}};
 
     std::atomic<double> mIrBlendNorm{0.0}; // 0 = IR A; inert unless both slots are filled
 

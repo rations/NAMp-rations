@@ -62,6 +62,20 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
         parameters.addParameter(g);
     }
 
+    // Per-channel output trim, on the settings page. The captures are already loudness-normalized
+    // per capture, so what this corrects is the perceptual residual: a high-gain channel is far
+    // more compressed than a clean one and reads louder at the same measured loudness. Narrow on
+    // purpose - see the range's own note.
+    static const Vst::TChar *kLevelTitles[kChannelCount] = {
+        STR16("Clean Level"), STR16("Crunch Level"), STR16("OD1 Level"), STR16("OD2 Level")};
+    for (int c = 0; c < kChannelCount; ++c) {
+        auto *l =
+            new Vst::RangeParameter(kLevelTitles[c], kChannelLevelId[c], STR16("dB"),
+                                    ranges::kLevelMin, ranges::kLevelMax, ranges::kLevelDefault);
+        l->setPrecision(1);
+        parameters.addParameter(l);
+    }
+
     auto *ngThresh = new Vst::RangeParameter(STR16("Gate"), kNoiseGateThresholdId, STR16("dB"),
                                              ranges::kNgMin, ranges::kNgMax, ranges::kNgDefault);
     ngThresh->setPrecision(1);
@@ -266,6 +280,15 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
                 return kResultFalse;
             mMidiTable[row] = unpackBinding(static_cast<std::uint32_t>(word));
         }
+    }
+
+    // The per-channel trims, added in state version 3. A version 1 or 2 project has nothing here
+    // and opens with every trim at its default, which is 0 dB.
+    for (int c = 0; c < kChannelCount; ++c) {
+        double level = 0.5;
+        if (version >= 3 && !streamer.readDouble(level))
+            return kResultFalse;
+        setParamNormalized(kChannelLevelId[c], level);
     }
 
     if (mView)

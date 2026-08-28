@@ -64,6 +64,21 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     // with B silent would attenuate a one-IR user at every position but one.
     kIrBlendId = 130,
 
+    // Per-channel output trim, on the settings page. A separate block from the gain dials above
+    // rather than 125..128 beside them, because they are a different control: 121..124 say where
+    // along a bank of captures a channel sits, and these say how loud that channel is once it has
+    // been chosen. Order matches Channel.
+    //
+    // These exist because the captures are already loudness-normalized per capture (see the
+    // Normalized decision in the notes) and are still not level-MATCHED: a high-gain channel is
+    // far more compressed than a clean one, so it reads louder at the same measured loudness. The
+    // residual is perceptual, it is a few dB, and no metadata field can tell the plug-in what it
+    // is - only the player can.
+    kCleanLevelId = 140,
+    kCrunchLevelId = 141,
+    kOd1LevelId = 142,
+    kOd2LevelId = 143,
+
     // Hidden, read-only parameters (processor -> editor via output parameter changes; never
     // automated, never persisted). The meters carry the per-block peak level mapped to 0 .. 1
     // over the meter dB range below.
@@ -117,6 +132,10 @@ inline constexpr int kMidiProgramCount = 128;
 inline constexpr Steinberg::Vst::ParamID kChannelGainId[kChannelCount] = {
     kCleanGainId, kCrunchGainId, kOd1GainId, kOd2GainId};
 
+// The per-channel output trim, indexed by Channel.
+inline constexpr Steinberg::Vst::ParamID kChannelLevelId[kChannelCount] = {
+    kCleanLevelId, kCrunchLevelId, kOd1LevelId, kOd2LevelId};
+
 // Plain-value ranges shared by the processor (denormalization) and the controller
 // (RangeParameter setup). Keep the two sides in sync via these.
 namespace ranges
@@ -127,14 +146,22 @@ inline constexpr double kToneMin = 0.0, kToneMax = 10.0, kToneDefault = 5.0;
 // Level-meter display range (dB): a linear peak is mapped to 0 .. 1 across this window before
 // travelling to the editor.
 inline constexpr double kMeterMinDb = -70.0, kMeterMaxDb = 0.0;
+// Per-channel trim (dB). Deliberately NARROW, and the narrowness is the design: what this control
+// corrects is the perceptual residual left after per-capture loudness normalization, which is a
+// few dB, so a wider range would spend most of the slider's travel on values nobody wants and
+// leave the useful part of it a third the size. Widening it before a release costs nothing;
+// widening it after one changes what saved automation means, so it starts narrow.
+inline constexpr double kLevelMin = -12.0, kLevelMax = 12.0, kLevelDefault = 0.0;
 } // namespace ranges
 
 // Version of the state blob written by getState and accepted by setState / setComponentState.
-// Version 1 ended after the two IR paths; version 2 appends the MIDI learn table. An older blob
-// is still loaded - it is a project saved before the pedal could do anything - so this is a
-// minimum-compatible marker rather than a gate, and the readers check the version before reading
-// anything that a version 1 writer would not have written.
-inline constexpr Steinberg::int32 kStateVersion = 2;
+// Version 1 ended after the two IR paths; version 2 appends the MIDI learn table; version 3
+// appends the four channel trims. An older blob is still loaded - it is a project saved before
+// the pedal or the trims could do anything - so this is a minimum-compatible marker rather than a
+// gate, and the readers check the version before reading anything an older writer would not have
+// written. A version 1 or 2 project therefore loads with every trim at 0 dB, which is exactly the
+// level it was mixed at.
+inline constexpr Steinberg::int32 kStateVersion = 3;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.

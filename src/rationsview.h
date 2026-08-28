@@ -123,7 +123,7 @@ private:
     //--- interaction -----------------------------------------------------
     void editParam(Steinberg::Vst::ParamID id, double norm);
     void nudgeParam(Steinberg::Vst::ParamID id, double delta);
-    void startDrag(Steinberg::Vst::ParamID id, float y);
+    void startDrag(Steinberg::Vst::ParamID id, float x, float y, bool horizontal = false);
     bool handleHeadClick(float x, float y);
     bool handleCabinetClick(float x, float y);
     bool handleSettingsClick(float x, float y);
@@ -164,6 +164,9 @@ private:
     // clickable on one that is not.
     static Rect midiRowRect(int row);
     geo::ButtonSpec midiButton(int row, bool clear) const;
+    static Rect levelRowRect(int row);
+    static Rect levelSliderRect(int row);
+    void drawLevelRow(Canvas &c, int row);
     static Rect rowClearBox(const geo::FileRow &row);
     static const geo::FileRow &irRow(int slot);
 
@@ -189,6 +192,10 @@ private:
     Steinberg::Vst::ParamID mDragParam = 0; // 0 = no active drag
     float mDragStartY = 0;
     double mDragStartNorm = 0;
+    // A knob is dragged vertically and a level slider horizontally, so the drag carries which
+    // axis it is on rather than the hit test having to leave a knob's coordinate in a Y field.
+    bool mDragHorizontal = false;
+    float mDragStartX = 0;
     float mMouseX = 0, mMouseY = 0;
 
     // Meter display state: fast attack from ParamChanged, exponential release in onTick, plus a

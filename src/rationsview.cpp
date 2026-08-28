@@ -422,7 +422,22 @@ void RationsEditorView::composeSettings(Canvas &c)
     c.setFont(Font::Title);
     c.setFontSize(geo::kSettingsHeadingSize);
     c.setColor(geo::kTextColor);
-    c.drawString("MIDI Learn", cx - c.stringWidth("MIDI Learn") * 0.5f,
+    c.drawString(geo::kLevelHeading, cx - c.stringWidth(geo::kLevelHeading) * 0.5f,
+                 static_cast<float>(geo::kLevelHeadingY));
+
+    for (int i = 0; i < geo::kLevelRowCount; ++i)
+        drawLevelRow(c, i);
+
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kSettingsFootnoteSize);
+    c.setColor(geo::kDimColor);
+    c.drawString(geo::kLevelFootnote, cx - c.stringWidth(geo::kLevelFootnote) * 0.5f,
+                 static_cast<float>(geo::kLevelFootnoteY));
+
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kSettingsHeadingSize);
+    c.setColor(geo::kTextColor);
+    c.drawString(geo::kMidiHeading, cx - c.stringWidth(geo::kMidiHeading) * 0.5f,
                  static_cast<float>(geo::kSettingsHeadingY));
 
     const int armed = mController ? mController->armedMidiRow() : -1;
@@ -444,11 +459,17 @@ void RationsEditorView::composeSettings(Canvas &c)
         const MidiBinding binding = mController ? mController->midiBinding(i) : MidiBinding();
         // The mapping is data, not a legend, so it is the body face. An armed row says what it is
         // waiting for rather than what it was, because that is the question the user has open.
-        const std::string text =
-            (i == armed) ? std::string(geo::kMidiListeningText) : describeBinding(binding);
-        c.setFont(Font::Body);
-        c.setColor(binding.learned() && i != armed ? geo::kTextColor : geo::kDimColor);
-        c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);
+        //
+        // An unlearned row says NOTHING. It used to say "not learned", and that was one label per
+        // row restating what the Learn button beside it already means - four lines of text on a
+        // page whose whole job is to be read at a glance, none of which told anyone anything.
+        if (i == armed || binding.learned()) {
+            const std::string text =
+                (i == armed) ? std::string(geo::kMidiListeningText) : describeBinding(binding);
+            c.setFont(Font::Body);
+            c.setColor(i == armed ? geo::kDimColor : geo::kTextColor);
+            c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);
+        }
 
         if (binding.learned())
             drawButton(c, midiButton(i, true));
@@ -467,6 +488,92 @@ void RationsEditorView::composeSettings(Canvas &c)
     for (int i = 0; i < 2; ++i)
         c.drawString(notes[i], cx - c.stringWidth(notes[i]) * 0.5f, static_cast<float>(noteY[i]));
     drawButton(c, geo::kBackButton);
+}
+
+//------------------------------------------------------------------------
+// One channel-level row: the channel's name, a horizontal slider centred on 0 dB, and the trim
+// in dB beside it.
+//
+// A slider rather than a knob, and on this page rather than the faceplate, because there is no
+// room for four more knobs on a 1133x403 head and because these are set once when a rig is put
+// together rather than played. The centre mark is drawn through the track so the default is
+// findable by eye; the readout is there because a level a player cannot name is a level they
+// cannot repeat on the other channel.
+Rect RationsEditorView::levelRowRect(int row)
+{
+    return Rect(static_cast<float>(geo::kMidiRowX),
+                static_cast<float>(geo::kLevelRowY0 + row * geo::kMidiRowPitch),
+                static_cast<float>(geo::kMidiRowW), static_cast<float>(geo::kMidiRowH));
+}
+
+Rect RationsEditorView::levelSliderRect(int row)
+{
+    const Rect r = levelRowRect(row);
+    return Rect(r.x + static_cast<float>(geo::kLevelSliderX),
+                r.centerY() - static_cast<float>(geo::kLevelThumbH) * 0.5f,
+                static_cast<float>(geo::kLevelSliderW), static_cast<float>(geo::kLevelThumbH));
+}
+
+void RationsEditorView::drawLevelRow(Canvas &c, int row)
+{
+    const Rect r = levelRowRect(row);
+    c.setColor(0x0C0B0A);
+    c.fillRoundRect(r, 4.0f);
+    c.setColor(geo::kGold, 190);
+    c.setPenSize(1.0f);
+    c.strokeRoundRect(r, 4.0f);
+
+    const float base = r.centerY() + geo::kMidiRowTextSize * 0.36f;
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kMidiRowTextSize);
+    c.setColor(geo::kTextColor);
+    c.drawString(kMidiLearnRows[row].label, r.x + 12.0f, base);
+
+    const double norm = paramValue(kChannelLevelId[row]);
+    const Rect slider = levelSliderRect(row);
+    const float trackY = slider.centerY() - static_cast<float>(geo::kLevelTrackH) * 0.5f;
+    const Rect track(slider.x, trackY, slider.w, static_cast<float>(geo::kLevelTrackH));
+
+    c.setColor(0x000000, 170);
+    c.fillRoundRect(track, static_cast<float>(geo::kLevelTrackH) * 0.5f);
+    c.setColor(geo::kGold, 90);
+    c.setPenSize(1.0f);
+    c.strokeRoundRect(track, static_cast<float>(geo::kLevelTrackH) * 0.5f);
+
+    // The centre mark, and the bar from it to the thumb: a trim reads as a departure from 0 dB,
+    // so what is drawn is the departure rather than a fill from one end.
+    const float travelX = slider.x + static_cast<float>(geo::kLevelThumbW) * 0.5f;
+    const float centreX = travelX + geo::kLevelTravel * 0.5f;
+    const float thumbX = travelX + geo::kLevelTravel * static_cast<float>(norm);
+    if (std::fabs(thumbX - centreX) > 1.0f) {
+        const Rect bar(std::min(centreX, thumbX), trackY, std::fabs(thumbX - centreX),
+                       static_cast<float>(geo::kLevelTrackH));
+        c.setColor(geo::kGold, 170);
+        c.fillRect(bar);
+    }
+    c.setColor(geo::kGold, 200);
+    c.setPenSize(1.0f);
+    c.strokeLine(centreX, slider.centerY() - geo::kLevelCentreTickH * 0.5f, centreX,
+                 slider.centerY() + geo::kLevelCentreTickH * 0.5f);
+
+    const Rect thumb(thumbX - static_cast<float>(geo::kLevelThumbW) * 0.5f, slider.y,
+                     static_cast<float>(geo::kLevelThumbW), static_cast<float>(geo::kLevelThumbH));
+    c.setColor(0x2A2724);
+    c.fillRoundRect(thumb, 3.0f);
+    c.setColor(geo::kGold, 230);
+    c.setPenSize(1.0f);
+    c.strokeRoundRect(thumb, 3.0f);
+
+    // The readout, right-aligned so the decimal points line up down the four rows and a level
+    // that is one channel louder than another is visible as a column rather than read as text.
+    const double db = ranges::kLevelMin + norm * (ranges::kLevelMax - ranges::kLevelMin);
+    char text[24];
+    snprintf(text, sizeof(text), "%+.1f dB", db);
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kMidiRowTextSize);
+    c.setColor(std::fabs(db) < 0.05 ? geo::kDimColor : geo::kTextColor);
+    c.drawString(
+        text, r.right() - static_cast<float>(geo::kLevelReadoutInset) - c.stringWidth(text), base);
 }
 
 //------------------------------------------------------------------------
@@ -505,6 +612,16 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
 {
     if (!mController)
         return false;
+    for (int i = 0; i < geo::kLevelRowCount; ++i) {
+        // The whole row is the target, not just the thumb: this is a relative drag, so where
+        // inside the row it starts makes no difference, and a 12 px thumb is not something to
+        // make anyone aim at.
+        if (levelRowRect(i).contains(x, y)) {
+            startDrag(kChannelLevelId[i], x, y, true);
+            invalidate();
+            return true;
+        }
+    }
     for (int i = 0; i < geo::kMidiRowCount; ++i) {
         if (mController->midiBinding(i).learned() &&
             buttonRect(midiButton(i, true)).contains(x, y)) {
@@ -903,12 +1020,14 @@ void RationsEditorView::nudgeParam(Vst::ParamID id, double delta)
     invalidate();
 }
 
-void RationsEditorView::startDrag(Vst::ParamID id, float y)
+void RationsEditorView::startDrag(Vst::ParamID id, float x, float y, bool horizontal)
 {
     if (!mController)
         return;
     mDragParam = id;
+    mDragStartX = x;
     mDragStartY = y;
+    mDragHorizontal = horizontal;
     mDragStartNorm = paramValue(id);
     mController->beginEdit(id);
     // No explicit pointer grab is needed here: X delivers an implicit grab to the window that saw
@@ -930,12 +1049,33 @@ double RationsEditorView::wheelStep(Vst::ParamID id) const
 //------------------------------------------------------------------------
 void RationsEditorView::onMouseDown(int x, int y, int button)
 {
-    if (button != 1) // left button only
-        return;
     // Physical pixels in, logical units out: this is the only place the page transform is undone,
     // and everything below hit-tests against geometry.h directly.
     const float fx = static_cast<float>((x - mOffX) / mScale);
     const float fy = static_cast<float>((y - mOffY) / mScale);
+
+    // Right-click resets a channel trim to exactly 0 dB. The one gesture this editor answers on a
+    // button other than the left, and it is here rather than on a double-click because neither
+    // window class delivers double-clicks: the X11 view sees two ordinary presses and the Win32
+    // one deliberately does not set CS_DBLCLKS, so that the two platforms behave the same.
+    if (button == 3) {
+        if (mPage == geo::Page::Settings && !mBrowser.isOpen() && mController) {
+            for (int i = 0; i < geo::kLevelRowCount; ++i) {
+                if (!levelRowRect(i).contains(fx, fy))
+                    continue;
+                const Vst::ParamID id = kChannelLevelId[i];
+                mController->beginEdit(id);
+                mController->setParamNormalized(id, 0.5);
+                mController->performEdit(id, 0.5);
+                mController->endEdit(id);
+                invalidate();
+                return;
+            }
+        }
+        return;
+    }
+    if (button != 1) // left button otherwise
+        return;
     mMouseX = fx;
     mMouseY = fy;
 
@@ -987,7 +1127,7 @@ bool RationsEditorView::handleHeadClick(float x, float y)
     for (int i = 0; i < geo::kKnobCount; ++i) {
         const geo::KnobSpec &k = geo::kKnobs[i];
         if (hitCircle(x, y, k.cx, k.cy, k.r)) {
-            startDrag(k.id, y);
+            startDrag(k.id, x, y);
             invalidate(); // the readout appears
             return true;
         }
@@ -995,7 +1135,7 @@ bool RationsEditorView::handleHeadClick(float x, float y)
     for (int i = 0; i < 2; ++i) {
         const geo::KnobSpec &k = geo::kIoKnobs[i];
         if (hitCircle(x, y, k.cx, k.cy, k.r)) {
-            startDrag(k.id, y);
+            startDrag(k.id, x, y);
             invalidate();
             return true;
         }
@@ -1038,7 +1178,7 @@ bool RationsEditorView::handleHeadClick(float x, float y)
 bool RationsEditorView::handleCabinetClick(float x, float y)
 {
     if (blendActive() && hitCircle(x, y, geo::kBlendCX, geo::kBlendCY, geo::kBlendHitR)) {
-        startDrag(kIrBlendId, y);
+        startDrag(kIrBlendId, x, y);
         invalidate();
         return true;
     }
@@ -1091,7 +1231,19 @@ void RationsEditorView::onMouseMove(int x, int y)
     mMouseY = static_cast<float>((y - mOffY) / mScale);
     if (!mDragParam || !mController)
         return;
-    const double norm = clampNorm(mDragStartNorm + (mDragStartY - mMouseY) / kKnobDragRange);
+    double norm;
+    if (mDragHorizontal) {
+        // Relative, never absolute: a slider that jumped to wherever it was clicked would let a
+        // mis-click throw a channel's level by the whole range, and this control's whole job is
+        // small corrections. The drag also snaps to exactly 0 dB near the centre, because a trim
+        // has to be returnable to its default by hand.
+        norm = clampNorm(mDragStartNorm + (mMouseX - mDragStartX) / geo::kLevelDragRange);
+        const double centre = 0.5;
+        if (std::fabs(norm - centre) * geo::kLevelDragRange < geo::kLevelCentreSnap)
+            norm = centre;
+    } else {
+        norm = clampNorm(mDragStartNorm + (mDragStartY - mMouseY) / kKnobDragRange);
+    }
     mController->setParamNormalized(mDragParam, norm);
     mController->performEdit(mDragParam, norm);
     invalidate();
@@ -1123,6 +1275,20 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
     if (mPage == geo::Page::Cabinet) {
         if (blendActive() && hitCircle(fx, fy, geo::kBlendCX, geo::kBlendCY, geo::kBlendHitR))
             nudgeParam(kIrBlendId, delta * 0.05);
+        return;
+    }
+    if (mPage == geo::Page::Settings) {
+        // One click is kLevelWheelDb, so a trim can be set to a round number without aiming: a
+        // drag lands wherever the pointer does, and these are values a player wants to be able
+        // to repeat on the other three channels.
+        for (int i = 0; i < geo::kLevelRowCount; ++i) {
+            if (levelRowRect(i).contains(fx, fy)) {
+                nudgeParam(kChannelLevelId[i],
+                           delta * geo::kLevelWheelDb /
+                               (ranges::kLevelMax - ranges::kLevelMin));
+                return;
+            }
+        }
         return;
     }
     if (mPage != geo::Page::Head)

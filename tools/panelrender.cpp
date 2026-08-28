@@ -327,18 +327,84 @@ void renderPedalboard(Canvas &c, ImageCache &, SvgCache &)
 }
 
 //------------------------------------------------------------------------
-// The MIDI settings page. Four rows, one per channel; the gate is absent
-// because it is deliberately not on the MIDI path. The bindings drawn here are
-// stand-ins - this tool has no processor to ask - chosen so that all three
-// states the row can be in are on screen at once: learned, listening, and
-// unlearned, since each is a different width and a different set of buttons.
+// The settings page: the channel trims, then MIDI learn. The values drawn here
+// are stand-ins - this tool has no processor to ask - chosen so that every state
+// each kind of row can be in is on screen at once, since each is a different
+// width and a different set of controls. For the trims that means both extremes,
+// the default, and a value in between; for MIDI it means learned, listening and
+// unlearned.
 void renderSettings(Canvas &c, ImageCache &, SvgCache &)
 {
     const float cx = static_cast<float>(geo::pageCX(geo::Page::Settings));
     c.setColor(geo::kBgColor);
     c.fillRect(c.bounds());
-    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, "MIDI Learn", cx,
-                     static_cast<float>(geo::kSettingsHeadingY));
+
+    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, geo::kLevelHeading,
+                     cx, static_cast<float>(geo::kLevelHeadingY));
+
+    // Both ends of the range, the default, and one off it: the readout is widest
+    // at the negative extreme and the thumb is at a different edge in each.
+    const double kLevels[geo::kLevelRowCount] = {0.5, 0.0, 1.0, 0.68};
+    for (int i = 0; i < geo::kLevelRowCount; ++i) {
+        const Rect r(geo::kMidiRowX, geo::kLevelRowY0 + i * geo::kMidiRowPitch, geo::kMidiRowW,
+                     geo::kMidiRowH);
+        c.setColor(0x0C0B0A);
+        c.fillRoundRect(r, 4.0f);
+        c.setColor(geo::kGold, 190);
+        c.setPenSize(1.0f);
+        c.strokeRoundRect(r, 4.0f);
+
+        const float base = r.centerY() + geo::kMidiRowTextSize * 0.36f;
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(kMidiLearnRows[i].label, r.x + 12.0f, base);
+
+        const Rect slider(r.x + geo::kLevelSliderX, r.centerY() - geo::kLevelThumbH * 0.5f,
+                          geo::kLevelSliderW, geo::kLevelThumbH);
+        const float trackY = slider.centerY() - geo::kLevelTrackH * 0.5f;
+        const Rect track(slider.x, trackY, slider.w, geo::kLevelTrackH);
+        c.setColor(0x000000, 170);
+        c.fillRoundRect(track, geo::kLevelTrackH * 0.5f);
+        c.setColor(geo::kGold, 90);
+        c.setPenSize(1.0f);
+        c.strokeRoundRect(track, geo::kLevelTrackH * 0.5f);
+
+        const float travelX = slider.x + geo::kLevelThumbW * 0.5f;
+        const float centreX = travelX + geo::kLevelTravel * 0.5f;
+        const float thumbX = travelX + geo::kLevelTravel * static_cast<float>(kLevels[i]);
+        if (std::fabs(thumbX - centreX) > 1.0f) {
+            c.setColor(geo::kGold, 170);
+            c.fillRect(Rect(std::min(centreX, thumbX), trackY, std::fabs(thumbX - centreX),
+                            geo::kLevelTrackH));
+        }
+        c.setColor(geo::kGold, 200);
+        c.setPenSize(1.0f);
+        c.strokeLine(centreX, slider.centerY() - geo::kLevelCentreTickH * 0.5f, centreX,
+                     slider.centerY() + geo::kLevelCentreTickH * 0.5f);
+
+        const Rect thumb(thumbX - geo::kLevelThumbW * 0.5f, slider.y, geo::kLevelThumbW,
+                         geo::kLevelThumbH);
+        c.setColor(0x2A2724);
+        c.fillRoundRect(thumb, 3.0f);
+        c.setColor(geo::kGold, 230);
+        c.setPenSize(1.0f);
+        c.strokeRoundRect(thumb, 3.0f);
+
+        const double db = ranges::kLevelMin + kLevels[i] * (ranges::kLevelMax - ranges::kLevelMin);
+        char text[24];
+        snprintf(text, sizeof(text), "%+.1f dB", db);
+        c.setFont(Font::Body);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(std::fabs(db) < 0.05 ? geo::kDimColor : geo::kTextColor);
+        c.drawString(text, r.right() - geo::kLevelReadoutInset - c.stringWidth(text), base);
+    }
+
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor, geo::kLevelFootnote,
+                     cx, static_cast<float>(geo::kLevelFootnoteY));
+
+    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, geo::kMidiHeading,
+                     cx, static_cast<float>(geo::kSettingsHeadingY));
 
     // The widest each kind of binding gets, not a typical one: this page is a
     // measurement, so what it draws is the worst case the row has to hold.
@@ -365,12 +431,15 @@ void renderSettings(Canvas &c, ImageCache &, SvgCache &)
         c.setColor(geo::kTextColor);
         c.drawString(kMidiLearnRows[i].label, r.x + 12.0f, base);
 
-        // The mapping itself is data, not a legend, so it is the body face.
-        const std::string text =
-            (i == kArmed) ? std::string(geo::kMidiListeningText) : describeBinding(kShown[i]);
-        c.setFont(Font::Body);
-        c.setColor(kShown[i].learned() && i != kArmed ? geo::kTextColor : geo::kDimColor);
-        c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);
+        // The mapping itself is data, not a legend, so it is the body face. An unlearned row
+        // draws nothing: the Learn button beside it already says what the row is for.
+        if (i == kArmed || kShown[i].learned()) {
+            const std::string text =
+                (i == kArmed) ? std::string(geo::kMidiListeningText) : describeBinding(kShown[i]);
+            c.setFont(Font::Body);
+            c.setColor(i == kArmed ? geo::kDimColor : geo::kTextColor);
+            c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);
+        }
 
         const int learnX = static_cast<int>(r.right()) - geo::kMidiLearnInset - geo::kMidiLearnW;
         const int by = static_cast<int>(r.y) + geo::kMidiLearnInset;
@@ -601,6 +670,25 @@ bool auditText(FontStack &fonts)
     for (int i = 0; i < kMidiLearnRowCount; ++i)
         fits.push_back({"midi row", Font::Title, geo::kMidiRowTextSize, kMidiLearnRows[i].label,
                         static_cast<float>(geo::kMidiTextX) - 20.0f});
+    // The channel-level section. The name shares the MIDI section's allowance because both
+    // columns start at the same x, and the readout is measured at the widest value it can hold -
+    // which is the negative extreme, since the minus sign is wider than the plus.
+    fits.push_back({"level heading", Font::Title, geo::kSettingsHeadingSize, geo::kLevelHeading,
+                    static_cast<float>(geo::kMidiRowW)});
+    for (int i = 0; i < kMidiLearnRowCount; ++i)
+        fits.push_back({"level row", Font::Title, geo::kMidiRowTextSize, kMidiLearnRows[i].label,
+                        static_cast<float>(geo::kLevelSliderX) - 20.0f});
+    static char levelReadout[2][24];
+    snprintf(levelReadout[0], sizeof(levelReadout[0]), "%+.1f dB", ranges::kLevelMin);
+    snprintf(levelReadout[1], sizeof(levelReadout[1]), "%+.1f dB", ranges::kLevelMax);
+    for (const char *t : levelReadout)
+        fits.push_back({"level readout", Font::Body, geo::kMidiRowTextSize, t,
+                        static_cast<float>(geo::kLevelReadoutW)});
+    fits.push_back({"level footnote", Font::Body, geo::kSettingsFootnoteSize, geo::kLevelFootnote,
+                    static_cast<float>(geo::kMidiRowW)});
+    fits.push_back({"midi heading", Font::Title, geo::kSettingsHeadingSize, geo::kMidiHeading,
+                    static_cast<float>(geo::kMidiRowW)});
+
     fits.push_back({"midi learn button", Font::Title, geo::kPageButtonTextSize,
                     geo::kMidiLearnLabel, geo::kMidiLearnW - 16.0f});
     // The Learn button does not resize when it starts listening, so the longer of its two
@@ -612,11 +700,11 @@ bool auditText(FontStack &fonts)
                     geo::kMidiClearLabel, geo::kMidiClearW - 16.0f});
     // Every shape a binding can be written in, against the space between the channel name and the
     // Clear button. The widest of each kind rather than a typical one.
+    // An unlearned row is not in this list because it no longer draws anything.
     static const MidiBinding kWidest[] = {
         {MidiMsg::ControlChange, kMidiAnyChannel, 127},
         {MidiMsg::ProgramChange, kMidiAnyChannel, 127},
         {MidiMsg::NoteOn, 15, 1},
-        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
     };
     static std::vector<std::string> bindingText;
     bindingText.clear();

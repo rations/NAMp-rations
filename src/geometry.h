@@ -75,9 +75,11 @@ constexpr int kCabPageH = 460;
 constexpr int kPedalPageW = 480;
 constexpr int kPedalPageH = 220;
 
-// MIDI settings: four learn rows and a footnote.
+// Settings: four channel-level rows, four MIDI learn rows, and two footnotes.
+// The levels are first because every user has four channels and only some own a
+// footswitch.
 constexpr int kSettingsPageW = 560;
-constexpr int kSettingsPageH = 280;
+constexpr int kSettingsPageH = 512;
 
 struct PageSize {
     int w, h;
@@ -473,19 +475,61 @@ constexpr int kPedalPlaceholderY = 112;
 constexpr int kPedalCaptionSize = 14;
 constexpr int kPedalCaptionDY = 28;
 
-// --- Settings page (MIDI learn) ---------------------------------------------
-// Four rows, one per channel, each showing what that channel is currently
-// learned to and carrying a Learn button. The gate is deliberately absent: it is
-// not on the MIDI path at all.
+// --- Settings page ----------------------------------------------------------
+// Two sections, each four rows: the channel trims, then MIDI learn. Levels are
+// on top because every user has four channels to balance and only some own a
+// footswitch, so the section that is always useful is the one that does not
+// have to be scrolled past.
+//
+// Both sections share kMidiRowX / kMidiRowW / kMidiRowH / kMidiRowPitch and the
+// same kMidiTextX for their second column, so the channel names and the controls
+// beside them line up down the whole page rather than forming two grids that
+// nearly agree.
 constexpr int kSettingsHeadingSize = 18;
-constexpr int kSettingsHeadingY = 58;
 constexpr int kMidiRowX = 24;
 constexpr int kMidiRowW = kSettingsPageW - 2 * kMidiRowX; // 512
 constexpr int kMidiRowH = 32;
-constexpr int kMidiRowY0 = 76;
 constexpr int kMidiRowPitch = 40;
 constexpr int kMidiRowCount = kChannelToggleCount;
 constexpr int kMidiRowTextSize = 15;
+
+// Section 1: channel levels.
+constexpr int kLevelHeadingY = 58;
+constexpr int kLevelRowY0 = 76;
+constexpr int kLevelRowCount = kChannelToggleCount;
+// The slider's track, as an offset from the row's left edge. Starts at
+// kMidiTextX so it begins where the MIDI section's binding text does.
+constexpr int kLevelSliderX = 116;
+constexpr int kLevelSliderW = 302;
+constexpr int kLevelTrackH = 5;
+constexpr int kLevelThumbW = 12;
+constexpr int kLevelThumbH = 20;
+// The centre mark, drawn through the track at 0 dB so the default position is
+// findable by eye rather than only by the readout.
+constexpr int kLevelCentreTickH = 13;
+// The dB readout, right-aligned to the row's right edge less this inset.
+constexpr int kLevelReadoutInset = 12;
+constexpr int kLevelReadoutW = 70;
+// The thumb's centre travels over the track less its own width, so it never
+// overhangs either end of the track. That travel is also the drag range, so the
+// pointer and the thumb move one for one.
+constexpr float kLevelTravel = static_cast<float>(kLevelSliderW - kLevelThumbW);
+constexpr float kLevelDragRange = kLevelTravel;
+// Within this many logical units of the centre, a drag snaps to exactly 0 dB.
+// A trim whose default is the middle has to be returnable to the middle by hand;
+// right-clicking the row does it exactly, and this makes dragging do it too.
+constexpr float kLevelCentreSnap = 4.0f;
+// One wheel click on a level row, in dB. Half a decibel: fine enough to land on
+// a round number, coarse enough that the whole range is a manageable number of
+// clicks away.
+constexpr double kLevelWheelDb = 0.5;
+// The levels' own footnote, between the two sections.
+constexpr int kLevelFootnoteY = 248;
+
+// Section 2: MIDI learn. The gate is deliberately absent from it: the gate is not
+// on the MIDI path at all.
+constexpr int kSettingsHeadingY = 278;
+constexpr int kMidiRowY0 = 296;
 // Where the learned binding is written, as an offset from the row's left edge.
 // Far enough right to clear the widest channel name at kMidiRowTextSize, which
 // the art audit measures rather than assumes.
@@ -502,8 +546,8 @@ constexpr int kMidiButtonGap = 6;
 // Clear is the one that appears once there is a binding to describe.
 constexpr int kMidiTextW =
     kMidiRowW - kMidiLearnInset - kMidiLearnW - kMidiButtonGap - kMidiClearW - kMidiTextX - 8;
-constexpr int kSettingsFootnoteY = 248;
-constexpr int kSettingsFootnote2Y = 266;
+constexpr int kSettingsFootnoteY = 470;
+constexpr int kSettingsFootnote2Y = 488;
 constexpr int kSettingsFootnoteSize = 12;
 
 // The Learn button's two states, named here so the panel and the art audit
@@ -522,6 +566,13 @@ constexpr const char *kMidiListeningText = "press a pedal...";
 // needs to know that before they discover it by playing.
 constexpr const char *kSettingsFootnote =
     "The gate switch is not learnable and stays where you leave it.";
+// The two headings, here rather than at the draw site so the art audit measures
+// what the panel paints.
+constexpr const char *kLevelHeading = "Channel Levels";
+constexpr const char *kMidiHeading = "MIDI Learn";
+// Said once, under the levels, because a trim that can only be reset by dragging
+// back to the middle is a trim nobody quite returns to zero.
+constexpr const char *kLevelFootnote = "Right-click a slider to return it to 0.0 dB.";
 constexpr const char *kSettingsFootnote2 =
     "CC and Program Change answer on any MIDI channel; a note answers on its own.";
 
