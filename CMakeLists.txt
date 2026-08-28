@@ -745,6 +745,39 @@ target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
 target_compile_options(rations_switchcheck PRIVATE -Wall)
 
 # ---------------------------------------------------------------------------
+# rations_racecheck - the ThreadSanitizer gate for the prime worker.
+#
+# Background priming is the first genuine concurrent access to the DSP objects
+# in this tree, and RULES.md requires the handover to be proved by a sanitizer
+# rather than by reading. Built normally it is a useful stress test; built with
+# -DRATIONS_ENABLE_TSAN=ON in its own build directory it is the gate.
+#
+# TSan instruments the whole program, so this cannot share a build directory
+# with anything else, and it is deliberately built at -O1 rather than -Ofast:
+# TSan needs the accesses it is watching to actually happen.
+# ---------------------------------------------------------------------------
+option(RATIONS_ENABLE_TSAN "Build rations_racecheck with ThreadSanitizer" OFF)
+
+add_executable(rations_racecheck
+    ${RATIONS_ROOT}/tools/rations_racecheck.cpp
+    ${RATIONS_ROOT}/src/capturesource.cpp
+    ${RATIONS_ROOT}/src/modelbank.cpp
+    ${RATIONS_ROOT}/src/crossfadeengine.cpp
+    ${RATIONS_ROOT}/src/channelrack.cpp
+    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
+)
+target_include_directories(rations_racecheck PRIVATE ${RATIONS_ROOT}/src ${VST3_SDK_DIR})
+target_link_libraries(rations_racecheck
+    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+target_compile_features(rations_racecheck PRIVATE cxx_std_20)
+target_compile_options(rations_racecheck PRIVATE -Wall)
+if(RATIONS_ENABLE_TSAN)
+    target_compile_options(rations_racecheck PRIVATE -fsanitize=thread -g -O1)
+    target_link_options(rations_racecheck PRIVATE -fsanitize=thread)
+endif()
+
+# ---------------------------------------------------------------------------
 # rations_rtcheck — counts allocations on the audio path using the DSP core's
 # own malloc/free interception harness. Built without optimisation and with
 # assertions live, as that harness requires.

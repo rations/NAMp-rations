@@ -159,11 +159,42 @@ inline constexpr double kSwitchModelBudget = 2.4;
 // resume the instant the sounding channel collapses back to a single branch.
 inline constexpr double kCatchupMinRate = 1.0;
 
+// How often the prime worker looks for new input. It is not signalled by the audio thread at all
+// - RT publishes the ring's write head and nothing else - so this is the whole of the coupling
+// between the two threads, and it is one atomic load. Well under a block period at 128 frames
+// (2.67 ms), so the worker never has more than a fraction of a block to catch up on, and cheap
+// enough that a tick which finds nothing to do costs a load and a sleep.
+inline constexpr int kPrimeTickUs = 500;
+
 // The fade between two channels, once the incoming one is exact. Both signals are true responses
 // to the same input by the time this runs, so there is no discontinuity to mask and no curve to
 // tune; the fade is here because the two channels are different amps at different levels, and a
 // step between two correct signals is still a step.
-inline constexpr double kChannelFadeMs = 10.0;
+//
+// MEASURED, not chosen, by rations_switchcheck --fade-sweep, which asks the question of the two
+// continuously-running references directly: it applies mixFade()'s own arithmetic to them at two
+// thousand landing points spread across the take, in both directions, and scores the largest step
+// the fade produces against the material's own step in the window that fade lands in — the same
+// metric, and the same 1.5x threshold, the no-click assertion is gated on. A local yardstick
+// rather than a global one, because a fade that lands in a dying note would otherwise hide behind
+// a pick attack elsewhere in the take, and a dying note is where a short fade shows. Worst score
+// over all six channel pairs at six combinations of the two dials, 36 runs:
+//
+//     fade ms   0.00    0.25   0.50   0.75   1.00   1.50   2.00   3.00   4.00   5.00   7.50  10.00
+//     worst    x225    x16.2   x8.99  x4.42  x3.41  x2.35  x1.95  x1.56  x1.35  x1.28  x1.14  x1.10
+//
+// A one-sample fade is the hard switch, so the sweep carries its own control: x225 is a click by
+// any measure, and the curve is that click being spread out. The knee is between 3 ms, which
+// fails, and 4 ms, which passes everywhere. 5.0 is taken rather than 4.0 because the failing case
+// and the marginal one are the same channel pair, the material is one synthetic take, and the
+// extra millisecond costs 1 ms of an 18 ms switch — margin this constant can afford to buy, unlike
+// kSwitchModelBudget above, where every step bought hundreds of milliseconds and the value had to
+// be taken at the cliff.
+//
+// It was 10.0 while the catch-up took a third of a second, where nothing about it was noticeable.
+// Now that the catch-up is over in thirteen milliseconds the fade is a real share of the switch,
+// and a round number carried over from the plan is no longer good enough for it.
+inline constexpr double kChannelFadeMs = 5.0;
 
 // Bypass and start-up ramp length in milliseconds. Long enough to be inaudible, and never a hard
 // mute — a hard bypass switch is itself a click.

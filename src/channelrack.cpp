@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 namespace Rations
 {
@@ -42,12 +44,31 @@ void ChannelRack::prepare(int maxNativeFrames, double nativeSampleRate)
                   "the input ring is indexed with a mask, so its size must be a power of two");
     mRing.assign(static_cast<size_t>(engine::kInputRingSamples), 0.0);
     mWritePos = 0;
+    mWriteHead.store(0, std::memory_order_relaxed);
     mCursor = 0;
 
     mFeed.assign(static_cast<size_t>(engine::kChunk), 0.0);
     mSink.assign(std::max(frames, static_cast<size_t>(engine::kChunk)), 0.0);
     mMix.assign(frames, 0.0);
     mMixPtr = mMix.data();
+
+    // The worker's own staging, separate from the audio thread's. Two threads feeding two
+    // different engines through the same scratch buffer would be a data race in the one place
+    // that looks most like shared plumbing.
+    mPrimeFeed.assign(static_cast<size_t>(engine::kChunk), 0.0);
+    mPrimeSink.assign(static_cast<size_t>(engine::kChunk), 0.0);
+
+    // The sounding channel belongs to the audio thread from the start; everything else belongs to
+    // the worker. prepare() runs before start(), so there is no thread to race with here.
+    for (int c = 0; c < kChannelCount; ++c) {
+        mOwner[c].store(c == mFrom ? kOwnerRT : kOwnerWorker, std::memory_order_relaxed);
+        mPrimedThrough[c].store(0, std::memory_order_relaxed);
+        mPrimedFrom[c].store(0, std::memory_order_relaxed);
+        mWarm[c].store(false, std::memory_order_relaxed);
+        mRestPrewarmPub[c].store(0, std::memory_order_relaxed);
+        mRestIndexPub[c].store(-1, std::memory_order_relaxed);
+    }
+    mWorstPrimeLag.store(0, std::memory_order_relaxed);
 
     const double fadeSamples = std::max(1.0, engine::kChannelFadeMs * 0.001 * mNativeSampleRate);
     mFadeStep = 1.0 / fadeSamples;
@@ -63,10 +84,24 @@ void ChannelRack::start()
 {
     for (int c = 0; c < kChannelCount; ++c)
         mLoader[c].start();
+
+    // One prime thread for all three idle channels rather than one each. Three models running
+    // continuously is RTF ~0.15 on this machine, which leaves the thread better than 80% idle,
+    // and three threads would triple the wake count and the scheduling jitter to buy nothing.
+    if (!mPrimeThread.joinable()) {
+        mPrimeRunning.store(true, std::memory_order_release);
+        mPrimeThread = std::thread([this] { primeLoop(); });
+    }
 }
 
 void ChannelRack::stop()
 {
+    // The prime thread first: it touches the engines, and the loaders own the models underneath
+    // them. Stopping in the other order would leave it feeding a bank being torn down.
+    mPrimeRunning.store(false, std::memory_order_release);
+    if (mPrimeThread.joinable())
+        mPrimeThread.join();
+
     for (int c = 0; c < kChannelCount; ++c)
         mLoader[c].stop();
 }
@@ -107,15 +142,88 @@ void ChannelRack::releaseBanks()
 //------------------------------------------------------------------------
 void ChannelRack::pollBanks()
 {
+    // Only the channels this thread owns. A worker-owned engine has its bank polled by the
+    // worker, in the same tick that it primes it - which is also where a republish makes that
+    // channel go cold, so the two can never be observed out of step.
     for (int c = 0; c < kChannelCount; ++c)
-        mBankChanged[c] = mEngine[c].pollBank();
+        mBankChanged[c] = rtOwns(c) ? mEngine[c].pollBank() : false;
 }
 
 //------------------------------------------------------------------------
+// PUBLISHED, not applied. The processor hands the rack all four dial positions every block, and
+// three of those engines belong to the worker; writing straight into them from the audio thread
+// is exactly the shared access the ownership rule exists to forbid. Each position is stored here
+// and applied by whichever thread owns that engine.
 void ChannelRack::setPositionNorm(Channel ch, double norm)
 {
     const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
-    mEngine[i].setPositionNorm(norm);
+    mPosNorm[i].store(norm, std::memory_order_relaxed);
+
+    // A channel in the middle of a switch keeps the position beginCatchup() gave it and does not
+    // follow its dial until the switch is over. D5 says an incoming channel snaps to a whole
+    // capture so that exactly ONE branch needs priming rather than two, and applying a moving dial
+    // to it breaks that invariant silently: the engine un-detents, binds a second branch, and the
+    // fade that follows costs three models instead of two in a block that has no room for a third.
+    //
+    // Found by measurement, not by reading. The hole predates the prime worker - the budget bounds
+    // the catch-up and has never bounded the fade - but it was unreachable while a switch under a
+    // moving dial was held for over a second, because the auto-detent always collapsed the extra
+    // branch first. Making switches fast is what made it reachable, and it xruns.
+    //
+    // Freezing the dial for the ~13 ms a switch takes costs nothing anybody can hear: the capture
+    // the switch lands on is chosen from this same published value at the moment of the claim.
+    const bool midSwitch = (i == mTarget) || (mFading && i == mTo);
+    if (rtOwns(i) && !midSwitch)
+        mEngine[i].setPositionNorm(norm);
+}
+
+//------------------------------------------------------------------------
+bool ChannelRack::warm(Channel ch) const
+{
+    const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
+    return mWarm[i].load(std::memory_order_acquire);
+}
+
+//------------------------------------------------------------------------
+// The audio thread asking for a channel. Never waits: a claim that has not been acknowledged
+// yet returns false and the caller holds the switch for another block, which is the same thing
+// the rack already does when the target capture is not built.
+bool ChannelRack::claimForRT(int c)
+{
+    int owner = mOwner[c].load(std::memory_order_acquire);
+    if (owner == kOwnerRT)
+        return true;
+    if (owner == kOwnerWorker) {
+        // Only ever Worker -> ClaimedByRT from this thread. compare_exchange rather than a bare
+        // store so a release the worker made in the same instant cannot be overwritten.
+        mOwner[c].compare_exchange_strong(owner, kOwnerClaimedByRT, std::memory_order_acq_rel,
+                                          std::memory_order_acquire);
+    }
+    return false;
+}
+
+//------------------------------------------------------------------------
+// Handing a channel back. Its engine is exact as of the write head at this instant, so the
+// worker is told where it got to and continues from there rather than priming from scratch.
+void ChannelRack::releaseToWorker(int c)
+{
+    // ONLY a channel this thread actually owns. A channel in kOwnerClaimedByRT is a claim in
+    // flight, not an unused engine: releasing it would undo the claim that the switch is waiting
+    // on, and since the claim is re-made next block the two would alternate forever and the
+    // switch would never arrive. The offline switch proof caught exactly that, and nothing about
+    // reading this loop did.
+    if (mOwner[c].load(std::memory_order_relaxed) != kOwnerRT)
+        return;
+    // Deliberately conservative: the priming run restarts NOW rather than claiming the engine is
+    // already exact. It usually is - a channel that has just finished fading out was sounding, so
+    // it has heard everything - but a channel that was claimed and then turned out to be
+    // unusable was not fed at all while the audio thread held it, and the two cases are not
+    // distinguishable here. Re-priming a receptive field costs the worker about seven
+    // milliseconds; getting this wrong costs a click.
+    mPrimedThrough[c].store(mWritePos, std::memory_order_relaxed);
+    mPrimedFrom[c].store(mWritePos, std::memory_order_relaxed);
+    mWarm[c].store(false, std::memory_order_relaxed);
+    mOwner[c].store(kOwnerWorker, std::memory_order_release);
 }
 
 //------------------------------------------------------------------------
@@ -160,10 +268,15 @@ void ChannelRack::writeRing(const NAM_SAMPLE *src, int numFrames)
     for (int i = 0; i < numFrames; ++i)
         mRing[static_cast<size_t>(mWritePos + i) & mask] = src[i];
     mWritePos += numFrames;
+    // Released AFTER the samples are written, so a worker that acquires this head is guaranteed
+    // to see every sample it counts. This store is the entire signal from the audio thread to the
+    // prime worker - there is no condition variable, no notify and no syscall on this path.
+    mWriteHead.store(mWritePos, std::memory_order_release);
 }
 
 //------------------------------------------------------------------------
-void ChannelRack::feedFromRing(CrossfadeEngine &target, long long from, long long count)
+void ChannelRack::feedFromRing(CrossfadeEngine &target, long long from, long long count,
+                               NAM_SAMPLE *feed, NAM_SAMPLE *sink)
 {
     const size_t mask = mRing.size() - 1;
     long long pos = from;
@@ -171,15 +284,136 @@ void ChannelRack::feedFromRing(CrossfadeEngine &target, long long from, long lon
     while (left > 0) {
         const int n = static_cast<int>(std::min<long long>(left, engine::kChunk));
         for (int i = 0; i < n; ++i)
-            mFeed[static_cast<size_t>(i)] = mRing[static_cast<size_t>(pos + i) & mask];
-        NAM_SAMPLE *in = mFeed.data();
-        NAM_SAMPLE *out = mSink.data();
+            feed[static_cast<size_t>(i)] = mRing[static_cast<size_t>(pos + i) & mask];
+        NAM_SAMPLE *in = feed;
+        NAM_SAMPLE *out = sink;
         // The output goes nowhere. What matters is that the model's convolution history now holds
         // these samples, which is the whole of the state a feed-forward network has.
         target.processNative(&in, &out, n);
         pos += n;
         left -= n;
     }
+}
+
+//------------------------------------------------------------------------
+// The prime worker. One thread, all the channels the audio thread is not using, keeping each one
+// fed with the same input the audio thread is hearing so that its convolution history is current
+// and a switch to it has nothing left to prime.
+//
+// It is woken by nothing. RT publishes the ring's write head and the worker watches it on a tick
+// well under a block period, which keeps the entire coupling between the two threads to one
+// release store and one acquire load. A condition variable would put a futex on the audio path
+// to save a thread wake that costs nothing.
+void ChannelRack::primeLoop()
+{
+    while (mPrimeRunning.load(std::memory_order_acquire)) {
+        const long long head = mWriteHead.load(std::memory_order_acquire);
+
+        for (int c = 0; c < kChannelCount; ++c) {
+            const int owner = mOwner[c].load(std::memory_order_acquire);
+
+            // A claim is acknowledged BETWEEN channels and never inside one. That is the whole
+            // safety property: at the instant the audio thread observes kOwnerRT, this thread is
+            // provably not inside that engine, and it will not enter it again because the loop
+            // above will not see kOwnerWorker for it any more.
+            if (owner == kOwnerClaimedByRT) {
+                // Warmth is deliberately NOT cleared here. The engine is exact as of
+                // mPrimedThrough[c] at this instant, and that fact is the entire value of the
+                // handover: the audio thread reads both after it observes kOwnerRT, and the
+                // release store below is what makes them visible to it. Phase A cleared warmth
+                // here to keep the handover conservative while only the concurrency was under
+                // test; leaving it set is the change that makes the switch fast.
+                mOwner[c].store(kOwnerRT, std::memory_order_release);
+                continue;
+            }
+            if (owner != kOwnerWorker)
+                continue;
+
+            primeChannel(c, head);
+        }
+
+        std::this_thread::sleep_for(std::chrono::microseconds(engine::kPrimeTickUs));
+    }
+}
+
+//------------------------------------------------------------------------
+// One idle channel, brought up to the write head. Everything the audio thread would have done for
+// this engine is done here instead, because the audio thread is not allowed to touch it.
+void ChannelRack::primeChannel(int c, long long head)
+{
+    // Anything that makes the history this engine has accumulated worthless. Collected as one
+    // flag because they all have the same consequence - the priming run has to start again from a
+    // whole receptive field - and handling them separately is how one of them gets forgotten.
+    bool invalidated = false;
+
+    // A republished bank replaces every model pointer in this channel.
+    if (mEngine[c].pollBank())
+        invalidated = true;
+
+    // The dial, applied here rather than by the audio thread that was handed it. An idle channel
+    // whose dial has crossed into a different capture is now bound to a model with no history at
+    // all, which is the same situation as never having been primed.
+    const int wasIndex = mEngine[c].restIndex();
+    mEngine[c].setPositionNorm(mPosNorm[c].load(std::memory_order_relaxed));
+    mEngine[c].hintPriority();
+
+    const int prewarm = mEngine[c].restPrewarmSamples();
+    const int index = mEngine[c].restIndex();
+    mRestPrewarmPub[c].store(prewarm, std::memory_order_relaxed);
+    mRestIndexPub[c].store(index, std::memory_order_relaxed);
+    if (index != wasIndex)
+        invalidated = true;
+
+    // Nothing to bind yet: the capture this channel's dial names has not been built. Priming an
+    // engine with no model would feed the ring to nobody.
+    if (prewarm <= 0 || index < 0) {
+        mWarm[c].store(false, std::memory_order_relaxed);
+        mPrimedThrough[c].store(head, std::memory_order_relaxed);
+        mPrimedFrom[c].store(head, std::memory_order_relaxed);
+        return;
+    }
+
+    // Park on the capture a switch would land on. An idle channel is always at rest, so this
+    // costs one bound branch and there is exactly one model to keep warm rather than two.
+    mEngine[c].snapToRest();
+
+    long long from = mPrimedThrough[c].load(std::memory_order_relaxed);
+
+    // How far behind the worker has fallen. Recorded rather than reasoned about, because it is
+    // the number kInputRingSamples has to be sized against: a worker lapped by the ring has lost
+    // the history it needed and the channel it was keeping warm goes cold.
+    const long long lag = head - from;
+    long long worst = mWorstPrimeLag.load(std::memory_order_relaxed);
+    while (lag > worst &&
+           !mWorstPrimeLag.compare_exchange_weak(worst, lag, std::memory_order_relaxed))
+        ;
+
+    // Lapped, or never started. The samples this engine still needed have been written over, so
+    // the only recoverable state is the last receptive field.
+    const long long oldest = head - static_cast<long long>(mRing.size());
+    if (from < oldest || from > head)
+        invalidated = true;
+
+    if (invalidated) {
+        from = std::max<long long>(0, head - prewarm);
+        mPrimedFrom[c].store(from, std::memory_order_relaxed);
+        mWarm[c].store(false, std::memory_order_relaxed);
+    }
+
+    const long long count = head - from;
+    if (count > 0) {
+        feedFromRing(mEngine[c], from, count, mPrimeFeed.data(), mPrimeSink.data());
+        mPrimedThrough[c].store(head, std::memory_order_relaxed);
+    }
+
+    // Warm once the engine has consumed an UNBROKEN receptive field ending at the write head.
+    // Measured from where the current run began, not from the last tick: the worker normally
+    // feeds a few hundred samples per tick, so comparing a tick's own gap against the receptive
+    // field would mean warmth was never reached at all - which is exactly what the first version
+    // of this did, silently, and the race test caught by asking whether anything was ever warm.
+    const long long run = head - mPrimedFrom[c].load(std::memory_order_relaxed);
+    if (run >= prewarm)
+        mWarm[c].store(mEngine[c].fullyOpen(), std::memory_order_release);
 }
 
 //------------------------------------------------------------------------
@@ -204,15 +438,36 @@ void ChannelRack::beginCatchup(int ch, int numFrames)
     if (mFading)
         return;
 
-    // R comes off the entry the worker read it off the model. Zero means the capture this
-    // channel's dial names is not built yet, and the answer to that is to HOLD the request: the
-    // audio does not move, the LED does not move, and the next block tries again. Sounding a
-    // neighbouring capture instead would put an amp under the player's hands that they did not
-    // select, which is worse than a switch that takes another instant to arrive.
+    // Is this channel even switchable? Asked of the worker's published copy rather than of the
+    // engine, because the engine is not ours yet and the answer decides whether to claim it at
+    // all. Zero means the capture this channel's dial names is not built, and the answer to that
+    // is to HOLD the request: the audio does not move, the LED does not move, and the next block
+    // tries again. Sounding a neighbouring capture instead would put an amp under the player's
+    // hands that they did not select, which is worse than a switch that arrives an instant late.
+    if (!rtOwns(ch) && mRestPrewarmPub[ch].load(std::memory_order_relaxed) <= 0)
+        return;
+
+    // Take the engine off the worker. Never waits: until the worker acknowledges, the switch is
+    // simply held for another block - the same hold as a capture that is not built yet, and a
+    // path this function already had.
+    if (!claimForRT(ch))
+        return;
+
     const int prewarm = mEngine[ch].restPrewarmSamples();
     if (prewarm <= 0)
         return;
 
+    // What the worker achieved before it let go, read only now that this thread owns the engine.
+    // Both were published before the worker's release store on mOwner, and claimForRT() observed
+    // that store with acquire, so these two reads see a consistent snapshot of what it left.
+    const bool wasWarm = mWarm[ch].load(std::memory_order_relaxed);
+    const long long primedThrough = mPrimedThrough[ch].load(std::memory_order_relaxed);
+    const int primedIndex = mEngine[ch].restIndex();
+    mWarm[ch].store(false, std::memory_order_relaxed); // consumed; this thread owns it now
+
+    // The dial this channel was handed while the worker owned it. Applied now that it is ours,
+    // so a switch lands on the capture the player's dial actually names.
+    mEngine[ch].setPositionNorm(mPosNorm[ch].load(std::memory_order_relaxed));
     mEngine[ch].snapToRest();
     mTarget = ch;
     mPrimed = false;
@@ -220,10 +475,29 @@ void ChannelRack::beginCatchup(int ch, int numFrames)
     // the entry it was read from may not be the one bound by then.
     mCatchupLag = prewarm;
 
-    // Lag the cursor one whole receptive field behind the live block. Before the block, not
-    // including it: the block itself is fed at the end of the catch-up, so the last sample the
-    // incoming model sees is the same last sample the outgoing one saw.
-    long long start = mWritePos - numFrames - prewarm;
+    // A dial that moved between the worker's last tick and this claim binds a DIFFERENT capture,
+    // and bindBranches only preserves a branch's priming when the index is unchanged. So the
+    // model this thread now holds may be a fresh one with no history at all, and the warmth the
+    // worker reported was about a model that is no longer bound. Compared rather than assumed,
+    // because the failure it prevents is silent: an unprimed model faded into as though it were
+    // exact, which is the click this whole design exists to avoid.
+    const bool stillTheSameCapture = mEngine[ch].restIndex() == primedIndex;
+
+    long long start;
+    if (wasWarm && stillTheSameCapture && primedThrough <= mWritePos) {
+        // The worker has already fed this model every sample up to primedThrough, so it is exact
+        // there and the only thing left is the handful of samples that arrived while the handover
+        // was happening - a block or two, against a receptive field of six thousand. This one
+        // line is what turns a 340 ms switch into a fast one; everything else in this phase
+        // exists to make it safe to write.
+        start = primedThrough;
+    } else {
+        // Cold: no warmth, a rebound capture, or a published position this thread cannot trust.
+        // Lag the cursor one whole receptive field behind the live block, which is exactly what
+        // this function did before there was a worker. Slower, and correct.
+        start = mWritePos - numFrames - prewarm;
+    }
+
     const long long oldest = mWritePos - static_cast<long long>(mRing.size());
     if (start < oldest)
         start = oldest; // defensive; kInputRingSamples is sized so this cannot bind
@@ -251,8 +525,13 @@ void ChannelRack::resolveRequest(int numFrames)
     // channel could sound is still being built. There is no click to prevent when there is no
     // sound to click, so adopt the channel outright rather than spending a catch-up on it.
     if (!mFading && mTarget == kNoChannel && !mEngine[mFrom].sounding()) {
-        if (mEngine[want].restIndex() < 0)
+        const int restIndex = rtOwns(want) ? mEngine[want].restIndex()
+                                           : mRestIndexPub[want].load(std::memory_order_relaxed);
+        if (restIndex < 0)
             return; // held
+        if (!claimForRT(want))
+            return; // held one block while the worker lets go
+        mEngine[want].setPositionNorm(mPosNorm[want].load(std::memory_order_relaxed));
         mEngine[want].snapToRest();
         mFrom = want;
         mTo = want;
@@ -306,7 +585,8 @@ void ChannelRack::runCatchup(int numFrames)
         return;
     // beginCatchup() refuses to start one while a fade is running, and startFadeIfReady() clears
     // the target in the same breath as it starts a fade, so these two are never both live.
-    assert(!mFading && "a catch-up and a fade are running at once; the model budget is not bounded");
+    assert(!mFading &&
+           "a catch-up and a fade are running at once; the model budget is not bounded");
 
     // What the audio thread is already committed to this block: one model for the sounding channel
     // at its detent, two while its dial is moving. The catch-up gets what is left of the budget
@@ -344,7 +624,7 @@ void ChannelRack::runCatchup(int numFrames)
         std::max<long long>(1, std::llround(static_cast<double>(numFrames) * rate));
     const long long feed = std::min(mWritePos - mCursor, budget);
     if (feed > 0) {
-        feedFromRing(mEngine[mTarget], mCursor, feed);
+        feedFromRing(mEngine[mTarget], mCursor, feed, mFeed.data(), mSink.data());
         mCursor += feed;
     }
     if (mCursor < mWritePos)
@@ -435,12 +715,28 @@ void ChannelRack::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames
 
     runCatchup(numFrames);
 
-    // Keep every channel nobody is listening to building the capture its own dial names, so a
-    // switch lands on the right capture rather than waiting for it. setPriority() otherwise only
-    // happens inside processNative(), which an idle engine never reaches.
-    for (int c = 0; c < kChannelCount; ++c)
-        if (c != mFrom && c != mTo && c != mTarget)
-            mEngine[c].hintPriority();
+    // Hand back everything this thread is no longer using. Three cases end up here: the channel
+    // that has just finished fading out, a catch-up that was abandoned when the player stomped
+    // somewhere else, and a claim that turned out not to be usable because the capture was not
+    // built after all. All three are the same act - this thread is done with that engine - so
+    // they are one loop rather than three release calls scattered through the branches above,
+    // which is how a channel ends up owned by nobody and silently never primed again.
+    //
+    // Keeping idle channels building the capture their own dial names moved here with them: the
+    // worker hints priority for what it owns, in the same tick it primes it.
+    for (int c = 0; c < kChannelCount; ++c) {
+        if (c == mFrom || (mFading && c == mTo) || c == mTarget)
+            continue;
+        // The channel the player is ASKING for is never handed back, even though nothing is using
+        // it yet. A claim is acknowledged by the worker within half a millisecond and a block is
+        // nearly three, so without this the acknowledgement usually lands before the end of the
+        // very block that made the claim - and this loop would then hand the engine straight back,
+        // the next block would claim it again, and the switch would never arrive. The offline
+        // switch proof caught it; the loop reads perfectly correct without it.
+        if (c == mRequested)
+            continue;
+        releaseToWorker(c);
+    }
 }
 
 } // namespace Rations

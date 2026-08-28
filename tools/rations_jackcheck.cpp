@@ -6,10 +6,11 @@
 // channel gets whatever of the budget the sounding channel is not already using, and closes a
 // receptive-field gap at (that - 1) samples per sample. So the only question is how many models
 // this machine can run inside one JACK period without missing the deadline, and that has to be
-// measured under the conditions a plug-in is actually used in — which on this machine means the CPU governor left at powersave, where a 2.67 ms burst
-// of work every 2.67 ms never raises the clock off its 800 MHz floor while a sustained offline
-// render ramps it to 4800. An offline RTF is therefore about 5.7x too optimistic and is the wrong
-// number to budget against; this tool produces the right one.
+// measured under the conditions a plug-in is actually used in — which on this machine means the CPU
+// governor left at powersave, where a 2.67 ms burst of work every 2.67 ms never raises the clock
+// off its 800 MHz floor while a sustained offline render ramps it to 4800. An offline RTF is
+// therefore about 5.7x too optimistic and is the wrong number to budget against; this tool produces
+// the right one.
 //
 // What it runs is the BUILT BUNDLE, loaded the way a DAW loads it, driven from a real JACK process
 // callback, with kChannelId stomped on a timer through a parameter-change queue — the same route a
@@ -95,9 +96,23 @@ struct Rig {
     int stompFrames = 0;
     int restompFrames = 0;
     bool sweepGain = false;
-    int channel = 0;      // the channel most recently asked for
-    int lastChannel = 0;  // where a re-stomp goes back to
+    int channel = 0;     // the channel most recently asked for
+    int lastChannel = 0; // where a re-stomp goes back to
     long long stomps = 0;
+
+    // Switch latency, measured where it actually means something. kChannelId is the REQUEST and
+    // kActiveChannelId is the answer - the channel that is genuinely sounding - so the latency is
+    // the distance between the block that asked and the block where the answer arrived. Measured
+    // here rather than in the offline proof because the offline harness runs the audio thread as
+    // fast as it can, which leaves the prime worker permanently behind a "real time" twenty times
+    // faster than real time and makes every number it produces about the switch meaningless.
+    long long pendingSince = -1; // frame position of the request still unanswered, or -1
+    int pendingChannel = -1;
+    long long switchCount = 0;
+    long long switchFramesTotal = 0;
+    std::atomic<long long> switchFramesWorst{0};
+    std::atomic<long long> switchFramesMean{0};
+    std::atomic<long long> switchesMeasured{0};
 
     // Worst process() call seen, in nanoseconds, and the period it had to fit in.
     std::atomic<long long> worstNs{0};
@@ -167,8 +182,8 @@ int processCallback(jack_nframes_t nframes, void *)
         if (Vst::IParamValueQueue *q =
                 r.paramChanges.addParameterData(Rations::kChannelId, queueIndex)) {
             int32 pointIndex = 0;
-            q->addPoint(0, static_cast<double>(want) /
-                               static_cast<double>(Rations::kChannelCount - 1),
+            q->addPoint(0,
+                        static_cast<double>(want) / static_cast<double>(Rations::kChannelCount - 1),
                         pointIndex);
         }
         ++r.stomps;
@@ -178,8 +193,8 @@ int processCallback(jack_nframes_t nframes, void *)
         // A dial that never stops moving, so the auto-detent never collapses the second branch.
         const double phase = static_cast<double>(r.framePos % 96000) / 96000.0;
         int32 queueIndex = 0;
-        if (Vst::IParamValueQueue *q = r.paramChanges.addParameterData(
-                Rations::kChannelGainId[r.channel], queueIndex)) {
+        if (Vst::IParamValueQueue *q =
+                r.paramChanges.addParameterData(Rations::kChannelGainId[r.channel], queueIndex)) {
             int32 pointIndex = 0;
             q->addPoint(0, phase, pointIndex);
         }
@@ -190,9 +205,34 @@ int processCallback(jack_nframes_t nframes, void *)
     r.processor->process(r.data);
 
     r.lastProgressPermille.store(
-        static_cast<long long>(1000.0 * readOutputParam(r.outParamChanges,
-                                                        Rations::kBankProgressId, 0.0)),
+        static_cast<long long>(1000.0 *
+                               readOutputParam(r.outParamChanges, Rations::kBankProgressId, 0.0)),
         std::memory_order_relaxed);
+
+    // Where the request was made, and where the audio actually got to.
+    if (stomped) {
+        r.pendingSince = r.framePos;
+        r.pendingChannel = want;
+    }
+    if (r.pendingSince >= 0) {
+        const double activeNorm =
+            readOutputParam(r.outParamChanges, Rations::kActiveChannelId, -1.0);
+        if (activeNorm >= 0.0) {
+            const int active = static_cast<int>(
+                std::lround(activeNorm * static_cast<double>(Rations::kChannelCount - 1)));
+            if (active == r.pendingChannel) {
+                const long long took = r.framePos + nframes - r.pendingSince;
+                ++r.switchCount;
+                r.switchFramesTotal += took;
+                if (took > r.switchFramesWorst.load(std::memory_order_relaxed))
+                    r.switchFramesWorst.store(took, std::memory_order_relaxed);
+                r.switchFramesMean.store(r.switchFramesTotal / r.switchCount,
+                                         std::memory_order_relaxed);
+                r.switchesMeasured.store(r.switchCount, std::memory_order_relaxed);
+                r.pendingSince = -1;
+            }
+        }
+    }
 
     r.framePos += nframes;
 
@@ -367,9 +407,8 @@ int main(int argc, char **argv)
         return 1;
     }
     if (opt.connect) {
-        const char **playback =
-            jack_get_ports(client, nullptr, JACK_DEFAULT_AUDIO_TYPE, JackPortIsPhysical |
-                                                                         JackPortIsInput);
+        const char **playback = jack_get_ports(client, nullptr, JACK_DEFAULT_AUDIO_TYPE,
+                                               JackPortIsPhysical | JackPortIsInput);
         if (playback && playback[0])
             jack_connect(client, jack_port_name(r.portOut), playback[0]);
         if (playback)
@@ -406,9 +445,25 @@ int main(int argc, char **argv)
     printf("\nbanks          %.0f%% built\n", progress);
     printf("stomps         %lld in %d s\n", stomps, seconds);
     printf("dsp load       mean %.1f%%, peak %.1f%%\n", loadN ? loadSum / loadN : 0.0, loadMax);
-    printf("worst block    %.2f ms of a %.2f ms period (%.0f%% of the deadline)\n",
-           worstNs / 1e6, periodMs, 100.0 * (worstNs / 1e6) / periodMs);
+    printf("worst block    %.2f ms of a %.2f ms period (%.0f%% of the deadline)\n", worstNs / 1e6,
+           periodMs, 100.0 * (worstNs / 1e6) / periodMs);
     printf("xruns          %d\n", xruns);
+
+    // The number this phase exists to produce. Measured from the block that carried the parameter
+    // change to the block in which the plug-in reported that channel as the one SOUNDING, so it
+    // includes the ownership handover, whatever priming was left, and the fade - everything a
+    // player's foot has to wait through.
+    const long long measured = g_rig.switchesMeasured.load(std::memory_order_relaxed);
+    if (measured > 0) {
+        const double toMs = 1000.0 / rate;
+        printf("switch latency mean %.1f ms, worst %.1f ms over %lld completed switches\n",
+               static_cast<double>(g_rig.switchFramesMean.load(std::memory_order_relaxed)) * toMs,
+               static_cast<double>(g_rig.switchFramesWorst.load(std::memory_order_relaxed)) * toMs,
+               measured);
+    } else {
+        printf("switch latency no switch completed - the target channel never became the one "
+               "sounding\n");
+    }
 
     if (progress < 99.9) {
         printf("\nFAILED - the banks never finished building; raise --settle-ms\n");

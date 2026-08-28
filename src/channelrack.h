@@ -44,7 +44,9 @@
 #include "modelbank.h"
 #include "nativeresampler.h"
 
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Rations
@@ -104,7 +106,50 @@ public:
     // what the editor shows is one progress line.
     float progress() const;
 
+    // --- the prime worker ----------------------------------------------------------------
+    // Worst gap, in native samples, that the worker has ever had to close in one tick. The ring
+    // must be larger than this plus one receptive field or the worker gets lapped and the channel
+    // it was keeping warm goes cold. Read from the message thread for reporting; it is the
+    // measurement that decides whether kInputRingSamples has to grow.
+    long long worstPrimeLag() const
+    {
+        return mWorstPrimeLag.load(std::memory_order_relaxed);
+    }
+    // Whether channel c is exact right now and could be switched to without priming. Phase A
+    // publishes this and deliberately does not act on it: the audio thread still primes from a
+    // whole receptive field, so what ships in this phase sounds exactly as it did before and the
+    // only thing under test is whether the concurrency is correct.
+    bool warm(Channel ch) const;
+
 private:
+    // Which thread owns a channel's engine. Exactly one at any instant, with no object either may
+    // "just read": the handover is the whole safety property, so it is one atomic per channel and
+    // three states rather than a bool.
+    //
+    // Worker -> ClaimedByRT is written by the audio thread. ClaimedByRT -> RT is written by the
+    // worker, and only ever BETWEEN channels, so at the moment RT observes RT the worker is
+    // provably not inside that engine. RT -> Worker is written by the audio thread when it has
+    // finished with a channel. RT never waits for any of these: a claim that has not been
+    // acknowledged yet simply holds the switch for another block, which is what the rack already
+    // does for a capture that is not built.
+    enum Owner : int {
+        kOwnerWorker = 0,
+        kOwnerClaimedByRT = 1,
+        kOwnerRT = 2,
+    };
+
+    bool rtOwns(int c) const
+    {
+        return mOwner[c].load(std::memory_order_acquire) == kOwnerRT;
+    }
+    // Ask for a channel. Returns true once RT owns it; false means "not yet, hold the switch".
+    bool claimForRT(int c);
+    // Hand a channel back once RT has no further use for it. Its engine is exact at this instant,
+    // so the worker is told where it got to rather than having to prime from scratch.
+    void releaseToWorker(int c);
+    void primeLoop();
+    void primeChannel(int c, long long head);
+
     void writeRing(const NAM_SAMPLE *src, int numFrames);
     // Acts on mRequested. Never queues: a stomp inside the switch window is resolved in place.
     void resolveRequest(int numFrames);
@@ -116,8 +161,11 @@ private:
     // continuous across the instant the direction changes.
     void reverseFade();
     // Feed one engine `count` samples of input history starting at absolute position `from`, in
-    // fixed chunks, with the output thrown away. This IS the priming.
-    void feedFromRing(CrossfadeEngine &target, long long from, long long count);
+    // fixed chunks, with the output thrown away. This IS the priming, and both threads do it
+    // through this one function; the scratch buffers are passed in because the caller's thread
+    // owns them and two threads must never share a staging buffer.
+    void feedFromRing(CrossfadeEngine &target, long long from, long long count, NAM_SAMPLE *feed,
+                      NAM_SAMPLE *sink);
 
     ModelBank mLoader[kChannelCount];
     CrossfadeEngine mEngine[kChannelCount];
@@ -144,9 +192,46 @@ private:
     int mRequested = kChannelClean;
 
     // The input history. mWritePos counts every native-rate sample ever written, so a cursor is
-    // an absolute position and the wrap is only ever an indexing detail.
+    // an absolute position and the wrap is only ever an indexing detail. It stays a plain long
+    // long because only the audio thread advances it; mWriteHead is the same number PUBLISHED,
+    // stored release-ordered after the ring writes so a worker that acquires it is guaranteed to
+    // see the samples it counts.
     std::vector<NAM_SAMPLE> mRing;
     long long mWritePos = 0;
+    std::atomic<long long> mWriteHead{0};
+
+    // --- cross-thread state --------------------------------------------------------------
+    std::atomic<int> mOwner[kChannelCount];
+    // How far the owner has fed each engine, as an absolute ring position. Published by whichever
+    // thread owns the channel and read by the other at the handover, so RT can compute the
+    // remaining gap exactly instead of assuming a whole receptive field.
+    std::atomic<long long> mPrimedThrough[kChannelCount];
+    // Where the CURRENT continuous priming run began. Warmth is not "the worker fed this engine
+    // recently"; it is "this engine has consumed an unbroken receptive field ending at the write
+    // head", and the only way to know that is to remember where the run started. Anything that
+    // invalidates the history - a rebind, a republish, being lapped by the ring, a handover from
+    // the audio thread - restarts the run here.
+    std::atomic<long long> mPrimedFrom[kChannelCount];
+    // True when mPrimedThrough[c] has reached the write head and the entry it was primed against
+    // is still the one a switch would bind. Goes false on a bank republish, a dial move that
+    // rebinds an idle channel, and a worker that has been lapped by the ring.
+    std::atomic<bool> mWarm[kChannelCount];
+    // Every dial, published rather than applied. The audio thread must not touch an engine it
+    // does not own, and it is handed all four positions every block, so it writes them here and
+    // whichever thread owns each engine applies it.
+    std::atomic<double> mPosNorm[kChannelCount];
+    // What the worker knows about the capture each idle channel would land on, so the audio
+    // thread can decide whether a switch is even possible before it owns the engine to ask.
+    std::atomic<int> mRestPrewarmPub[kChannelCount];
+    std::atomic<int> mRestIndexPub[kChannelCount];
+
+    std::thread mPrimeThread;
+    std::atomic<bool> mPrimeRunning{false};
+    std::atomic<long long> mWorstPrimeLag{0};
+    // The worker's own staging. Sized in prepare() and never resized afterwards, because the
+    // worker allocates nothing once it is running.
+    std::vector<NAM_SAMPLE> mPrimeFeed;
+    std::vector<NAM_SAMPLE> mPrimeSink;
 
     // Pre-allocated staging. mFeed gathers a contiguous chunk out of the (wrapping) ring, mSink
     // takes the output nobody listens to, and mMix takes the incoming channel's live output while
