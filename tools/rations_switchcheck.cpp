@@ -80,7 +80,7 @@ constexpr int kGateOpenSamples = 4096;
 struct Options {
     std::string dirA;
     std::string dirB;
-    int block = 128;      // host block size, in native-rate samples
+    int block = 128; // host block size, in native-rate samples
     double seconds = 4.0;
     // Just past a pick attack, not in the tail of one. A stomp is something a player does while
     // playing, and it is also where the artefact is largest and the evidence therefore strongest:
@@ -89,6 +89,7 @@ struct Options {
     double restompMs = 5.0;
     double posA = 0.0; // dial position of each channel, normalized
     double posB = 0.0;
+    bool fadeSweep = false; // measure how long the channel fade has to be, rather than assume it
 };
 
 // A pick attack, a sustained chord and a decay into the noise floor. The decay matters most: an
@@ -169,6 +170,128 @@ double maxDiff(const std::vector<double> &a, const std::vector<double> &b, size_
     return worst;
 }
 
+// --- how long the channel fade actually has to be ---------------------------------------------
+//
+// engine::kChannelFadeMs was carried over from the plan as a round number, back when it sat behind
+// a switch that took a third of a second and so cost nothing anyone could notice. Now that the
+// catch-up finishes in about thirteen milliseconds the fade is a real share of the switch, and a
+// number that is merely plausible is no longer good enough for it.
+//
+// The question is unusually clean, because by the time the fade runs both channels are exact
+// responses to the same input — the catch-up guarantees that, and the convergence assertion above
+// proves it. So the fade is not masking a discontinuity; it is there only because two different
+// amps sit at two different levels, and stepping between two correct signals is still a step. That
+// makes the length a question about the two continuously-running references and nothing else, and
+// it can be asked of them directly, with the same arithmetic mixFade() runs: w advances by 1/L per
+// sample, is used after it advances, and snaps to exactly 1.0. A fade of one sample is therefore
+// the hard switch, which is why the table below is its own control.
+//
+// The metric is the one the no-click assertion already uses — the largest sample-to-sample step —
+// but taken LOCALLY. Each candidate fade is scored against the material's own step in the window
+// it lands in, and the worst score over several hundred landing points spread across the take is
+// kept, in both directions. A single global yardstick would let a fade that lands in a dying note
+// hide behind a pick attack somewhere else in the take, and a dying note is exactly where a short
+// fade shows.
+struct FadeScore {
+    double ms = 0.0;
+    double worstRatio = 0.0; // worst local (fade step / material step)
+    double worstStep = 0.0;  // the step itself, at that point
+    double atSeconds = 0.0;  // where it happened
+};
+
+FadeScore scoreFade(const std::vector<double> &a, const std::vector<double> &b, double ms,
+                    size_t from, size_t to, size_t hop, double stepFloor)
+{
+    FadeScore r;
+    r.ms = ms;
+    const int len = std::max(1, static_cast<int>(ms * 0.001 * kNativeRate));
+    const double step = 1.0 / static_cast<double>(len);
+    const size_t guard = 32; // enough either side to catch the corner the ramp puts in
+
+    for (size_t s = from; s + static_cast<size_t>(len) + guard < to; s += hop) {
+        const size_t lo = s - guard;
+        const size_t hi = s + static_cast<size_t>(len) + guard;
+
+        // The material's own step, here rather than in general. Below the floor nothing is
+        // playing and a ratio would be a statement about the noise floor.
+        const double local = std::max(maxStep(a, lo, hi), maxStep(b, lo, hi));
+        if (local < stepFloor)
+            continue;
+
+        double prev = a[lo];
+        double worst = 0.0;
+        double w = 0.0;
+        for (size_t i = lo + 1; i < hi; ++i) {
+            double y;
+            if (i < s) {
+                y = a[i];
+            } else if (w < 1.0) {
+                w += step;
+                if (w > 1.0)
+                    w = 1.0;
+                y = (1.0 - w) * a[i] + w * b[i];
+            } else {
+                y = b[i];
+            }
+            worst = std::max(worst, std::fabs(y - prev));
+            prev = y;
+        }
+
+        if (worst / local > r.worstRatio) {
+            r.worstRatio = worst / local;
+            r.worstStep = worst;
+            r.atSeconds = static_cast<double>(s) / kNativeRate;
+        }
+    }
+    return r;
+}
+
+void fadeSweep(const std::vector<double> &a, const std::vector<double> &b, int total)
+{
+    // Skip the first second: the engine's own first-sound ramp lives there and is not material.
+    const size_t from = static_cast<size_t>(kNativeRate);
+    const size_t to = static_cast<size_t>(total);
+    if (to <= from + kNativeRate / 2) {
+        printf("fade sweep     skipped, the run is too short — raise --seconds\n");
+        return;
+    }
+    const size_t hop = static_cast<size_t>(kNativeRate / 400); // a landing point every 2.5 ms
+
+    // A floor below which the material is not playing, taken from the take itself rather than
+    // chosen: one thousandth of the largest step anywhere in it.
+    const double loudest = std::max(maxStep(a, from, to), maxStep(b, from, to));
+    const double floorStep = loudest * 0.001;
+
+    static const double kCandidates[] = {0.0, 0.25, 0.5, 0.75, 1.0,  1.5, 2.0,
+                                         3.0, 4.0,  5.0, 7.5,  10.0, 15.0};
+
+    printf("\n--- fade length, measured ---------------------------------------------------\n");
+    printf("landing points %zu per direction, %.1f ms apart, over %.1f s of material\n",
+           (to - from) / hop, 1000.0 * hop / kNativeRate, (to - from) / kNativeRate);
+    printf("threshold      a fade may not step more than 1.50x the material's own step, which is\n"
+           "               the same threshold the no-click assertion above is gated on\n\n");
+    printf("   fade ms     worst step / material's own      verdict\n");
+
+    double shortestClean = -1.0;
+    for (double ms : kCandidates) {
+        const FadeScore fwd = scoreFade(a, b, ms, from, to, hop, floorStep);
+        const FadeScore rev = scoreFade(b, a, ms, from, to, hop, floorStep);
+        const bool forward = fwd.worstRatio >= rev.worstRatio;
+        const FadeScore &w = forward ? fwd : rev;
+        const bool clean = w.worstRatio <= 1.5;
+        if (clean && shortestClean < 0.0)
+            shortestClean = ms;
+        printf("   %6.2f      x%-7.2f (%.4f, at %.2f s, %s)   %s\n", ms, w.worstRatio, w.worstStep,
+               w.atSeconds, forward ? "A->B" : "B->A", clean ? "clean" : "CLICKS");
+    }
+
+    if (shortestClean >= 0.0)
+        printf("\n               shortest clean fade = %.2f ms; shipped kChannelFadeMs = %.2f ms\n",
+               shortestClean, Rations::engine::kChannelFadeMs);
+    else
+        printf("\n               nothing in the sweep was clean\n");
+}
+
 bool parseArgs(int argc, char **argv, Options &o)
 {
     int positional = 0;
@@ -196,6 +319,8 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!(v = next()))
                 return false;
             o.posA = atof(v);
+        } else if (a == "--fade-sweep") {
+            o.fadeSweep = true;
         } else if (a == "--pos-b") {
             if (!(v = next()))
                 return false;
@@ -214,7 +339,8 @@ bool parseArgs(int argc, char **argv, Options &o)
     if (o.dirA.empty() || o.dirB.empty() || o.block <= 0) {
         fprintf(stderr,
                 "usage: rations_switchcheck <captures/A> <captures/B> [--block N] [--seconds S]\n"
-                "       [--stomp S] [--restomp-ms MS] [--pos-a 0..1] [--pos-b 0..1]\n");
+                "       [--stomp S] [--restomp-ms MS] [--pos-a 0..1] [--pos-b 0..1]\n"
+                "       [--fade-sweep]\n");
         return false;
     }
     return true;
@@ -252,8 +378,7 @@ void renderRack(Rations::ChannelRack &rack, const Options &o, const std::vector<
             // Channel A's own gain dial, moving. That holds TWO of its captures bound, which is
             // the state in which the rack has no model budget left to catch anyone up with and
             // must hold the switch rather than take it.
-            const double phase =
-                static_cast<double>(off % 48000) / 48000.0;
+            const double phase = static_cast<double>(off % 48000) / 48000.0;
             rack.setPositionNorm(kSlotA, phase);
         } else {
             rack.setPositionNorm(kSlotA, o.posA);
@@ -324,6 +449,12 @@ int main(int argc, char **argv)
            1000.0 * prewarm / ((restRate - 1.0) * kNativeRate), Rations::engine::kChannelFadeMs);
     printf("host block     %d samples    stomp at %d (%.3f s)\n\n", opt.block, stompAt,
            opt.stompAt);
+
+    // Opt-in, because it is a measurement rather than an assertion: it is what SET
+    // engine::kChannelFadeMs, and it is kept so that the number can be re-derived rather than
+    // taken on trust.
+    if (opt.fadeSweep)
+        fadeSweep(outRefA, outRefB, total);
 
     // --- the control: a hard model swap, B never fed before it is heard -------------------------
     // A fresh loader and engine, so B's models have no convolution history whatever at the moment
@@ -416,8 +547,8 @@ int main(int argc, char **argv)
     const double kEps = 1e-6;
     int leftA = -1, reachedB = -1;
     for (int i = stompAt; i < total; ++i) {
-        if (leftA < 0 && std::fabs(outSwitched[static_cast<size_t>(i)] -
-                                   outRefA[static_cast<size_t>(i)]) > kEps)
+        if (leftA < 0 &&
+            std::fabs(outSwitched[static_cast<size_t>(i)] - outRefA[static_cast<size_t>(i)]) > kEps)
             leftA = i;
     }
     for (int i = total - 1; i >= stompAt; --i) {
@@ -485,8 +616,9 @@ int main(int argc, char **argv)
     printf("\nstep size      typical %.4f | switched %.4f (x%.2f) | hard %.4f (x%.2f)\n", typical,
            stepSwitched, stepSwitched / typical, stepHard, stepHard / typical);
     if (!(stepSwitched <= typical * 1.5)) {
-        fprintf(stderr, "FAIL: the switch produced a step %.2fx the track's own — that is the "
-                        "click this design exists to prevent.\n",
+        fprintf(stderr,
+                "FAIL: the switch produced a step %.2fx the track's own — that is the "
+                "click this design exists to prevent.\n",
                 stepSwitched / typical);
         ++failures;
     }
