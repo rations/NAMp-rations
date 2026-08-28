@@ -158,7 +158,22 @@ void ChannelRack::setPositionNorm(Channel ch, double norm)
 {
     const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
     mPosNorm[i].store(norm, std::memory_order_relaxed);
-    if (rtOwns(i))
+
+    // A channel in the middle of a switch keeps the position beginCatchup() gave it and does not
+    // follow its dial until the switch is over. D5 says an incoming channel snaps to a whole
+    // capture so that exactly ONE branch needs priming rather than two, and applying a moving dial
+    // to it breaks that invariant silently: the engine un-detents, binds a second branch, and the
+    // fade that follows costs three models instead of two in a block that has no room for a third.
+    //
+    // Found by measurement, not by reading. The hole predates the prime worker - the budget bounds
+    // the catch-up and has never bounded the fade - but it was unreachable while a switch under a
+    // moving dial was held for over a second, because the auto-detent always collapsed the extra
+    // branch first. Making switches fast is what made it reachable, and it xruns.
+    //
+    // Freezing the dial for the ~13 ms a switch takes costs nothing anybody can hear: the capture
+    // the switch lands on is chosen from this same published value at the moment of the claim.
+    const bool midSwitch = (i == mTarget) || (mFading && i == mTo);
+    if (rtOwns(i) && !midSwitch)
         mEngine[i].setPositionNorm(norm);
 }
 
@@ -302,7 +317,12 @@ void ChannelRack::primeLoop()
             // provably not inside that engine, and it will not enter it again because the loop
             // above will not see kOwnerWorker for it any more.
             if (owner == kOwnerClaimedByRT) {
-                mWarm[c].store(false, std::memory_order_relaxed);
+                // Warmth is deliberately NOT cleared here. The engine is exact as of
+                // mPrimedThrough[c] at this instant, and that fact is the entire value of the
+                // handover: the audio thread reads both after it observes kOwnerRT, and the
+                // release store below is what makes them visible to it. Phase A cleared warmth
+                // here to keep the handover conservative while only the concurrency was under
+                // test; leaving it set is the change that makes the switch fast.
                 mOwner[c].store(kOwnerRT, std::memory_order_release);
                 continue;
             }
@@ -437,6 +457,14 @@ void ChannelRack::beginCatchup(int ch, int numFrames)
     if (prewarm <= 0)
         return;
 
+    // What the worker achieved before it let go, read only now that this thread owns the engine.
+    // Both were published before the worker's release store on mOwner, and claimForRT() observed
+    // that store with acquire, so these two reads see a consistent snapshot of what it left.
+    const bool wasWarm = mWarm[ch].load(std::memory_order_relaxed);
+    const long long primedThrough = mPrimedThrough[ch].load(std::memory_order_relaxed);
+    const int primedIndex = mEngine[ch].restIndex();
+    mWarm[ch].store(false, std::memory_order_relaxed); // consumed; this thread owns it now
+
     // The dial this channel was handed while the worker owned it. Applied now that it is ours,
     // so a switch lands on the capture the player's dial actually names.
     mEngine[ch].setPositionNorm(mPosNorm[ch].load(std::memory_order_relaxed));
@@ -447,10 +475,29 @@ void ChannelRack::beginCatchup(int ch, int numFrames)
     // the entry it was read from may not be the one bound by then.
     mCatchupLag = prewarm;
 
-    // Lag the cursor one whole receptive field behind the live block. Before the block, not
-    // including it: the block itself is fed at the end of the catch-up, so the last sample the
-    // incoming model sees is the same last sample the outgoing one saw.
-    long long start = mWritePos - numFrames - prewarm;
+    // A dial that moved between the worker's last tick and this claim binds a DIFFERENT capture,
+    // and bindBranches only preserves a branch's priming when the index is unchanged. So the
+    // model this thread now holds may be a fresh one with no history at all, and the warmth the
+    // worker reported was about a model that is no longer bound. Compared rather than assumed,
+    // because the failure it prevents is silent: an unprimed model faded into as though it were
+    // exact, which is the click this whole design exists to avoid.
+    const bool stillTheSameCapture = mEngine[ch].restIndex() == primedIndex;
+
+    long long start;
+    if (wasWarm && stillTheSameCapture && primedThrough <= mWritePos) {
+        // The worker has already fed this model every sample up to primedThrough, so it is exact
+        // there and the only thing left is the handful of samples that arrived while the handover
+        // was happening - a block or two, against a receptive field of six thousand. This one
+        // line is what turns a 340 ms switch into a fast one; everything else in this phase
+        // exists to make it safe to write.
+        start = primedThrough;
+    } else {
+        // Cold: no warmth, a rebound capture, or a published position this thread cannot trust.
+        // Lag the cursor one whole receptive field behind the live block, which is exactly what
+        // this function did before there was a worker. Slower, and correct.
+        start = mWritePos - numFrames - prewarm;
+    }
+
     const long long oldest = mWritePos - static_cast<long long>(mRing.size());
     if (start < oldest)
         start = oldest; // defensive; kInputRingSamples is sized so this cannot bind
