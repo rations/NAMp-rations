@@ -35,8 +35,15 @@ void ChannelRack::prepare(int maxNativeFrames, double nativeSampleRate)
     mNativeSampleRate = nativeSampleRate > 0.0 ? nativeSampleRate : kNativeSampleRate;
     const size_t frames = static_cast<size_t>(std::max(maxNativeFrames, engine::kChunk));
 
-    for (int c = 0; c < kChannelCount; ++c)
+    for (int c = 0; c < kChannelCount; ++c) {
         mEngine[c].prepare(maxNativeFrames, mNativeSampleRate);
+        // prepare() rebuilds each engine's own state, so whatever it had applied of the output
+        // section is gone with it. Rewinding the applied generation is what makes every channel
+        // re-read it on its next visit; the processor also republishes after prepare(), and the
+        // two together mean neither ordering can leave an engine at its default compensation.
+        mAppliedOutputGen[c].store(mOutputGen.load(std::memory_order_relaxed) - 1u,
+                                   std::memory_order_relaxed);
+    }
 
     // The ring is a power of two so the wrap is a mask. Sized by engineconfig against one whole
     // receptive field plus what arrives while the catch-up drains it — see kInputRingSamples.
@@ -117,18 +124,44 @@ void ChannelRack::stop()
 // without any cross-channel scheduling: each worker serves its own channel's dial position first
 // (the engine hints it every block, sounding or not), so every channel becomes switchable after
 // roughly one model's build time rather than after all thirty-five are done.
-void ChannelRack::loadChannel(Channel ch, const std::string &dir, double slim, int maxBufferSize)
+void ChannelRack::loadChannel(Channel ch, const std::string &path, bool isDirectory, double slim,
+                              int maxBufferSize)
 {
     const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
     mLoadRequested[i] = true;
-    mLoader[i].loadDirectory(dir, slim, maxBufferSize);
+    if (isDirectory)
+        mLoader[i].loadDirectory(path, slim, maxBufferSize);
+    else
+        mLoader[i].loadFile(path, slim, maxBufferSize);
 }
 
 //------------------------------------------------------------------------
-void ChannelRack::setOutputMode(int mode, double calLevelDbu)
+// PUBLISHED, not applied — see setPositionNorm below, which does the same thing for the same
+// reason. Callable from either thread, because a radio click on the settings page arrives as a host
+// parameter change on the audio thread while a load or a state restore arrives on the message
+// thread, and neither of them may write into an engine the prime worker owns.
+//
+// Release on the generation counter, acquire on the read in applyOutputMode: the three values above
+// must be visible to any thread that observes the new generation.
+void ChannelRack::setOutputMode(int mode, double calLevelDbu, bool calibrateInput)
 {
-    for (int c = 0; c < kChannelCount; ++c)
-        mEngine[c].setOutputMode(mode, calLevelDbu);
+    mOutputMode.store(mode, std::memory_order_relaxed);
+    mCalLevelDbu.store(calLevelDbu, std::memory_order_relaxed);
+    mCalibrateInput.store(calibrateInput, std::memory_order_relaxed);
+    mOutputGen.fetch_add(1, std::memory_order_release);
+}
+
+//------------------------------------------------------------------------
+bool ChannelRack::applyOutputMode(int channel)
+{
+    const unsigned gen = mOutputGen.load(std::memory_order_acquire);
+    if (mAppliedOutputGen[channel].load(std::memory_order_relaxed) == gen)
+        return false;
+    mAppliedOutputGen[channel].store(gen, std::memory_order_relaxed);
+    mEngine[channel].setOutputMode(mOutputMode.load(std::memory_order_relaxed),
+                                   mCalLevelDbu.load(std::memory_order_relaxed),
+                                   mCalibrateInput.load(std::memory_order_relaxed));
+    return true;
 }
 
 //------------------------------------------------------------------------
@@ -136,6 +169,13 @@ std::vector<std::string> ChannelRack::captureNames(Channel ch) const
 {
     const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
     return mLoader[i].captureNames();
+}
+
+//------------------------------------------------------------------------
+CaptureLevels ChannelRack::captureLevels(Channel ch) const
+{
+    const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
+    return mLoader[i].captureLevels();
 }
 
 //------------------------------------------------------------------------
@@ -392,6 +432,15 @@ void ChannelRack::primeChannel(int c, long long head)
 
     // A republished bank replaces every model pointer in this channel.
     if (mEngine[c].pollBank())
+        invalidated = true;
+
+    // The output section, applied here for the same reason the dial is: this engine belongs to
+    // this thread. It counts as an invalidation because of the INPUT half of it — turning input
+    // calibration on or off, or moving the calibration level, changes the level of the samples
+    // this engine's models are fed, so every sample primed before it was primed against input
+    // that no longer exists. A channel that reported itself warm on that work would complete its
+    // switch and be wrong, which is a correctness problem rather than a slow one.
+    if (applyOutputMode(c))
         invalidated = true;
 
     // The dial, applied here rather than by the audio thread that was handed it. An idle channel
@@ -747,6 +796,14 @@ void ChannelRack::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames
         }
         if (mFading && mTo == c)
             reverseFade(); // fade back to the channel that is unaffected
+    }
+
+    // The output section, for the channels this thread owns. The worker does the same for its own
+    // in primeChannel, so between them every engine picks up a change within a block or a tick;
+    // neither thread ever writes into an engine the other holds.
+    for (int c = 0; c < kChannelCount; ++c) {
+        if (rtOwns(c))
+            applyOutputMode(c);
     }
 
     resolveRequest(numFrames);

@@ -57,6 +57,10 @@ public:
     // Names of the captures in the most recently requested bank, in gain order. Safe to call from
     // the message thread at any time.
     std::vector<std::string> captureNames() const;
+    // What the built captures state about their own levels. Guarded by the same mutex the names
+    // are, and for the same reason: the message thread needs an answer about a bank the audio
+    // thread owns, and this is the copy it is allowed to read.
+    CaptureLevels captureLevels() const;
     // Last failure, for a single stderr warning at the call site. Empty when the last load was
     // clean.
     std::string lastError() const;
@@ -122,6 +126,7 @@ private:
     bool mQuit = false;
     std::string mError;              // guarded by mMutex
     std::vector<std::string> mNames; // guarded by mMutex
+    CaptureLevels mLevels;           // guarded by mMutex
 
     // Worker-owned. The parsed form of every capture, kept so a Slim change costs no file I/O.
     std::vector<CaptureSource> mSources;

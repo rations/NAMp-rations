@@ -5,19 +5,20 @@
 // and reports what came out.
 //
 // This exists because "it compiles and the validator is happy" does not prove the DSP chain is
-// wired up. It answers four questions that nothing else does: did the BUNDLED bank load, is the
-// output finite and non-trivial, does an over-sized block get looped rather than truncated, and
-// what does the whole chain cost in real time.
+// wired up. It answers four questions that nothing else does: did the banks load, is the output
+// finite and non-trivial, does an over-sized block get looped rather than truncated, and what does
+// the whole chain cost in real time.
 //
-// The bundled bank is the point. Unlike its parent, this plug-in has no capture browser and no
-// file-loading interface — the captures ship inside Contents/Resources/captures and are found by
-// the same resource lookup that finds the art. So there is nothing for this tool to hand over,
-// and instead it CHECKS: the bank-progress parameter the processor writes back through
-// outputParameterChanges is read here, and a bank that failed to resolve reports zero.
+// The banks are HANDED OVER now rather than found. This plug-in used to ship four of them inside
+// its own bundle, so a headless host got them for free and this tool only had to check that the
+// resource lookup had worked; it ships none, and every bank is a folder the user picks. So the
+// four are loaded here through the same IConnectionPoint messages the settings page sends, and
+// bank progress is still read back out of the parameter the processor writes — the difference is
+// that a zero now means the directory was wrong rather than that the build was.
 //
 // Usage:
-//   rations_offline <Rations.vst3> [--rate 48000] [--block 256] [--seconds 2.0]
-//                   [--gain 0.0] [--sweep] [--overrun N] [--settle-ms N]
+//   rations_offline <Rations.vst3> --captures <dir> [--rate 48000] [--block 256]
+//                   [--seconds 2.0] [--gain 0.0] [--sweep] [--overrun N] [--settle-ms N]
 
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/hosting/module.h"
@@ -31,9 +32,14 @@
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 
 #include "rationsids.h"
+#include "toolcaptures.h"
+
+#include "json.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -49,6 +55,8 @@ namespace
 
 struct Options {
     std::string bundle;
+    // A directory holding one subdirectory per channel. Defaults to $RATIONS_TEST_CAPTURES.
+    std::string captures;
     double rate = 48000.0;
     int block = 256;
     double seconds = 2.0;
@@ -107,6 +115,11 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!v)
                 return false;
             o.overrun = atoi(v);
+        } else if (a == "--captures") {
+            const char *v = next("--captures");
+            if (!v)
+                return false;
+            o.captures = v;
         } else if (a == "--settle-ms") {
             const char *v = next("--settle-ms");
             if (!v)
@@ -121,8 +134,14 @@ bool parseArgs(int argc, char **argv, Options &o)
         }
     }
     if (o.bundle.empty()) {
-        fprintf(stderr, "usage: rations_offline <Rations.vst3> [--rate N] [--block N] "
-                        "[--seconds S] [--gain 0..1] [--sweep] [--overrun N] [--settle-ms N]\n");
+        fprintf(stderr, "usage: rations_offline <Rations.vst3> --captures <dir> [--rate N] "
+                        "[--block N] [--seconds S] [--gain 0..1] [--sweep] [--overrun N] "
+                        "[--settle-ms N]\n");
+        return false;
+    }
+    o.captures = RationsTools::captureRoot(o.captures);
+    if (o.captures.empty()) {
+        RationsTools::printCaptureUsage("rations_offline");
         return false;
     }
     if (o.block <= 0 || o.rate <= 0.0 || o.seconds <= 0.0) {
@@ -130,6 +149,51 @@ bool parseArgs(int argc, char **argv, Options &o)
         return false;
     }
     return true;
+}
+
+// Every loudness stated by the captures in one channel's directory.
+//
+// The Normalized assertion below is defined against these: that mode brings each capture's own
+// measured loudness to a fixed target, so the gain it applies is exactly target - loudness, and a
+// test that measured the move without knowing the loudness could only assert that SOMETHING
+// happened.
+//
+// All of them rather than the one the dial is parked on, and that is deliberate. Knowing which
+// entry is entry 0 means reproducing captureFilenameLess, and the only honest ways to do that are
+// to duplicate it - which is what this tree avoids on principle - or to link the DSP into a tool
+// whose entire point is that it drives the BUILT BUNDLE and links none of it. Matching against the
+// whole set costs nothing in strictness: adjacent captures of one amp differ in measured loudness
+// by more than a decibel, so a set of eight spans a range no wrong constant lands inside by
+// accident, and the tolerance below is 0.02 dB.
+std::vector<double> statedLoudness(const std::string &channelDir)
+{
+    std::vector<double> out;
+    std::error_code ec;
+    for (const auto &e : std::filesystem::directory_iterator(channelDir, ec)) {
+        if (ec)
+            break;
+        if (!e.is_regular_file(ec))
+            continue;
+        std::string ext = e.path().extension().string();
+        for (char &ch : ext)
+            ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+        if (ext != ".nam")
+            continue;
+        std::ifstream in(e.path());
+        if (!in)
+            continue;
+        nlohmann::json j;
+        try {
+            in >> j;
+        } catch (...) {
+            continue; // a capture the plug-in would skip too
+        }
+        const auto meta = j.value("metadata", nlohmann::json::object());
+        const auto it = meta.find("loudness");
+        if (it != meta.end() && !it->is_null())
+            out.push_back(it->get<double>());
+    }
+    return out;
 }
 
 // A pick attack followed by a sustained tone and a decay into near-silence. Constant amplitude
@@ -217,8 +281,13 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // The bank is requested in initialize() and built on the plug-in's worker thread, so there is
-    // nothing to hand over — only something to wait for.
+    // Hand over the four banks, then wait. The load is posted to each channel's own worker, which
+    // is what makes the wait one bank's build time rather than four.
+    if (!RationsTools::loadCaptureRoot(hostContext, component, opt.captures)) {
+        fprintf(stderr, "rations_offline: the plug-in refused a capture directory under %s\n",
+                opt.captures.c_str());
+        return 1;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(opt.settleMs));
 
     // --- process setup ---------------------------------------------------------------------
@@ -262,7 +331,7 @@ int main(int argc, char **argv)
     // block-granular automation into a smooth position, and testing it any other way would not
     // exercise that.
     Vst::ParameterChanges paramChanges;
-    paramChanges.setMaxParameters(4);
+    paramChanges.setMaxParameters(8);
     Vst::ParameterChanges outParamChanges;
     outParamChanges.setMaxParameters(8);
 
@@ -282,6 +351,10 @@ int main(int argc, char **argv)
     // at two trims and compare, and a second copy of the render loop would be a second thing to
     // keep correct.
     bool renderFailed = false;
+    // Normalized is the plug-in's default and is what every pass uses unless the output-mode check
+    // below says otherwise, so the trim measurement above and the render the report describes are
+    // both taken in the state the plug-in ships in.
+    double outputModeNorm = Rations::normFromOutputMode(Rations::kOutputNormalized);
     auto renderPass = [&](double levelNorm) {
         for (size_t pos = 0; pos < total; pos += static_cast<size_t>(callBlock)) {
             const size_t n = std::min(static_cast<size_t>(callBlock), total - pos);
@@ -305,6 +378,14 @@ int main(int argc, char **argv)
                     paramChanges.addParameterData(Rations::kCleanLevelId, queueIndex)) {
                 int32 pointIndex = 0;
                 q->addPoint(0, levelNorm, pointIndex);
+            }
+            // The output section, pushed every block like the rest. It reaches the plug-in through
+            // the parameter queue rather than through a message, because that is the route a DAW
+            // uses and the route the editor's own radio buttons take.
+            if (Vst::IParamValueQueue *q =
+                    paramChanges.addParameterData(Rations::kOutputModeId, queueIndex)) {
+                int32 pointIndex = 0;
+                q->addPoint(0, outputModeNorm, pointIndex);
             }
             outParamChanges.clearQueue();
             data.inputParameterChanges = &paramChanges;
@@ -398,6 +479,79 @@ int main(int argc, char **argv)
         output = reference;
     }
 
+    // --- the output section --------------------------------------------------------------------
+    // Normalized brings each capture's stated loudness to engine::kNormalizedTargetDb, applied per
+    // branch inside the crossfade. So with the dial parked, switching from Raw to Normalized must
+    // move the output by exactly target - loudness for the capture that is sounding. That is one
+    // number, it is written in the .nam, and every stage between the parameter and the audio has to
+    // agree about it: the mode's value space, its denormalization, the dB-to-linear conversion, and
+    // which side of the mix the compensation is applied on.
+    int modeFailures = 0;
+    {
+        const std::vector<float> reference = output;
+        auto rmsOfOutput = [&]() {
+            double sq = 0.0;
+            for (size_t i = 0; i < total; ++i)
+                if (std::isfinite(output[i]))
+                    sq += static_cast<double>(output[i]) * output[i];
+            return std::sqrt(sq / static_cast<double>(total));
+        };
+        // Twice per mode, and the second is the measurement, for the same reason the trim check
+        // renders twice: the first pass after a change carries the arrival as well as the value.
+        auto renderMode = [&](Rations::OutputMode mode) {
+            outputModeNorm = Rations::normFromOutputMode(mode);
+            renderPass(0.5);
+            renderPass(0.5);
+            return rmsOfOutput();
+        };
+
+        const double raw = renderMode(Rations::kOutputRaw);
+        const double normalized = renderMode(Rations::kOutputNormalized);
+        const double moved = 20.0 * std::log10(normalized / raw);
+
+        const std::vector<double> loudness =
+            statedLoudness(opt.captures + "/" + Rations::kChannelDefaultName[0]);
+        double best = 0.0, bestErr = 1e9;
+        for (double db : loudness) {
+            const double expect = Rations::engine::kNormalizedTargetDb - db;
+            if (std::fabs(moved - expect) < std::fabs(bestErr)) {
+                bestErr = moved - expect;
+                best = db;
+            }
+        }
+        printf("output mode    Raw -> Normalized moved %+.3f dB", moved);
+        if (loudness.empty()) {
+            printf("  (no capture states a loudness; nothing to check it against)\n");
+        } else {
+            printf("; nearest capture states %+.3f dB, so %+.3f dB expected\n", best,
+                   Rations::engine::kNormalizedTargetDb - best);
+            if (std::fabs(bestErr) > 0.02) {
+                fprintf(stderr,
+                        "FAIL: Normalized moved the output %+.3f dB and no capture in the bank "
+                        "asks for that - the closest is off by %+.3f dB. The normalization target, "
+                        "the mode's value space or the dB conversion disagrees somewhere between "
+                        "the parameter and the engine\n",
+                        moved, bestErr);
+                ++modeFailures;
+            }
+        }
+
+        // Calibrated needs the captures to state an output level in dBu, and plenty do not - the
+        // trainer writes the field only when the capture was made with a calibrated interface. When
+        // it is absent the engine falls back to unity per entry, which is Raw, and there is nothing
+        // here to measure. Reported rather than silently skipped: "this bank cannot exercise this
+        // mode" and "this mode is broken" look identical in a test that says nothing.
+        const double calibrated = renderMode(Rations::kOutputCalibrated);
+        const double calMoved = 20.0 * std::log10(calibrated / raw);
+        if (std::fabs(calMoved) < 1e-9)
+            printf("               Calibrated is inert - no capture states an output level\n");
+        else
+            printf("               Raw -> Calibrated moved %+.3f dB\n", calMoved);
+
+        outputModeNorm = Rations::normFromOutputMode(Rations::kOutputNormalized);
+        output = reference;
+    }
+
     processor->setProcessing(false);
     component->setActive(false);
 
@@ -433,7 +587,7 @@ int main(int argc, char **argv)
     printf("rate           %.0f Hz, declared block %d, actual block %d, %.2f s\n", opt.rate,
            opt.block, callBlock, opt.seconds);
     printf("latency        %u samples\n", latency);
-    printf("bundled bank   %.0f%% built, active capture index %.3f\n", bankProgress * 100.0,
+    printf("banks          %.0f%% built, active capture index %.3f\n", bankProgress * 100.0,
            activeIndex);
     printf("input  rms     %.6f\n", inRms);
     printf("output rms     %.6f   peak %.6f\n", outRms, peak);
@@ -443,7 +597,7 @@ int main(int argc, char **argv)
     printf("unwritten      %zu\n", stale);
     printf("wall           %.1f ms  (RTF %.4f)\n", wallMs, wallMs / (opt.seconds * 1000.0));
 
-    int failures = trimFailures;
+    int failures = trimFailures + modeFailures;
     if (nonFinite) {
         fprintf(stderr, "FAIL: %zu non-finite output samples\n", nonFinite);
         ++failures;
@@ -459,12 +613,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "FAIL: output is silent\n");
         ++failures;
     }
-    // The captures ship in the bundle, so unlike the parent plug-in there is no "no capture was
-    // given" case to excuse an empty bank. A zero here means the resource lookup did not find
-    // Contents/Resources/captures, which is a broken build rather than a missing argument.
+    // A zero here is now a wrong --captures rather than a broken build: the loads above were
+    // accepted, so either the directories hold no readable .nam files or --settle-ms was too short
+    // for the first model to finish building.
     if (bankProgress <= 0.0) {
-        fprintf(stderr, "FAIL: the bundled bank reports nothing built — check that the bundle "
-                        "has Contents/Resources/captures\n");
+        fprintf(stderr,
+                "FAIL: nothing built from %s — check that it holds one subdirectory per channel "
+                "of readable .nam captures, and that --settle-ms is long enough\n",
+                opt.captures.c_str());
         ++failures;
     }
     if (maxDiff <= 1e-6) {

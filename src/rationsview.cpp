@@ -16,6 +16,7 @@
 #include "rationsids.h"
 #include "platform/respath.h"
 
+#include "pluginterfaces/base/keycodes.h"
 #include "pluginterfaces/base/ustring.h"
 
 #include <algorithm>
@@ -34,6 +35,11 @@ namespace Rations
 namespace
 {
 
+// The longest name a channel may be given. Not a buffer limit - the string grows - but a limit on
+// what can be typed into a field that is 170 logical units wide and clipped: past this the user is
+// entering text nothing will ever show them, and a state blob is not the place to keep it.
+constexpr size_t kRenameMaxChars = 64;
+
 // Pixels of vertical drag for a dial's full range, in LOGICAL units — so the feel is the same at
 // every window size.
 constexpr float kKnobDragRange = 200.0f;
@@ -51,7 +57,6 @@ constexpr float kPeakRelease = 0.985f;
 constexpr int kPeakHoldTicks = 30;
 
 // On-screen height the row icons are rasterised at.
-constexpr int kRowIconH = 16;
 
 // Capability polling: every 15 ticks (~500 ms), and never more than this many times.
 constexpr int kCapsPollTicks = 15;
@@ -139,9 +144,11 @@ void RationsEditorView::setPage(geo::Page page)
     const double scale = mScale;
     mPage = page;
 
-    // The browser belongs to the cabinet page's rows; leaving it open across a page change would
-    // draw a picker over a panel that has nothing to pick.
+    // The browser belongs to a page's rows; leaving it open across a page change would draw a
+    // picker over a panel with nothing to pick. A half-typed channel name is the same kind of
+    // thing, and is KEPT rather than dropped, for the same reason a click away from it keeps it.
     mBrowser.close();
+    commitRename();
     // A drag in progress belongs to a control that is no longer on screen. Ending the edit rather
     // than dropping it matters: beginEdit without endEdit leaves the host's automation latched.
     if (mDragParam && mController) {
@@ -419,6 +426,22 @@ void RationsEditorView::composePedalboard(Canvas &c)
 void RationsEditorView::composeSettings(Canvas &c)
 {
     const float cx = static_cast<float>(geo::pageCX(geo::Page::Settings));
+
+    // Section 1: the capture loaders. First on the page because a channel with nothing loaded does
+    // nothing, so this is the section that has to be found before any other one means anything.
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kSettingsHeadingSize);
+    c.setColor(geo::kTextColor);
+    c.drawString(geo::kCaptureHeading, cx - c.stringWidth(geo::kCaptureHeading) * 0.5f,
+                 static_cast<float>(geo::kCaptureHeadingY));
+    for (int i = 0; i < geo::kCaptureRowCount; ++i)
+        drawCaptureRow(c, i);
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kSettingsFootnoteSize);
+    c.setColor(geo::kDimColor);
+    c.drawString(geo::kCaptureFootnote, cx - c.stringWidth(geo::kCaptureFootnote) * 0.5f,
+                 static_cast<float>(geo::kCaptureFootnoteY));
+
     c.setFont(Font::Title);
     c.setFontSize(geo::kSettingsHeadingSize);
     c.setColor(geo::kTextColor);
@@ -454,7 +477,8 @@ void RationsEditorView::composeSettings(Canvas &c)
         c.setFont(Font::Title);
         c.setFontSize(geo::kMidiRowTextSize);
         c.setColor(geo::kTextColor);
-        c.drawString(kMidiLearnRows[i].label, r.x + 12.0f, base);
+        c.drawString(c.clipToWidth(mController->channelName(i), geo::kMidiTextX - 20.0f).c_str(),
+                     r.x + 12.0f, base);
 
         const MidiBinding binding = mController ? mController->midiBinding(i) : MidiBinding();
         // The mapping is data, not a legend, so it is the body face. An armed row says what it is
@@ -487,7 +511,132 @@ void RationsEditorView::composeSettings(Canvas &c)
     const int noteY[2] = {geo::kSettingsFootnoteY, geo::kSettingsFootnote2Y};
     for (int i = 0; i < 2; ++i)
         c.drawString(notes[i], cx - c.stringWidth(notes[i]) * 0.5f, static_cast<float>(noteY[i]));
+
+    // Section 4: the output section. Last because it is set once when a rig is assembled.
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kSettingsHeadingSize);
+    c.setColor(geo::kTextColor);
+    c.drawString(geo::kOutputHeading, cx - c.stringWidth(geo::kOutputHeading) * 0.5f,
+                 static_cast<float>(geo::kOutputHeadingY));
+    drawOutputSection(c);
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kSettingsFootnoteSize);
+    c.setColor(geo::kDimColor);
+    c.drawString(geo::kOutputFootnote, cx - c.stringWidth(geo::kOutputFootnote) * 0.5f,
+                 static_cast<float>(geo::kOutputFootnoteY));
+
     drawButton(c, geo::kBackButton);
+}
+
+//------------------------------------------------------------------------
+// One capture row: the channel's name on the left, what is loaded in the middle, a clear box at
+// the end, and a build-progress hairline along the bottom edge while the bank is still coming up.
+//
+// This is the cabinet page's IR row with a name field added, and it is drawn from the same parts
+// for the same reason: it is the same act. What differs is that a channel's source may be a FOLDER
+// as well as a file, and that the row's left half is a name the user can change.
+Rect RationsEditorView::captureRowRect(int row)
+{
+    return Rect(static_cast<float>(geo::kMidiRowX),
+                static_cast<float>(geo::kCaptureRowY0 + row * geo::kMidiRowPitch),
+                static_cast<float>(geo::kMidiRowW), static_cast<float>(geo::kMidiRowH));
+}
+
+Rect RationsEditorView::captureNameRect(int row)
+{
+    const Rect r = captureRowRect(row);
+    return Rect(r.x + static_cast<float>(geo::kCaptureNameX), r.y + 4.0f,
+                static_cast<float>(geo::kCaptureNameW), static_cast<float>(geo::kMidiRowH) - 8.0f);
+}
+
+Rect RationsEditorView::captureClearBox(int row)
+{
+    const Rect r = captureRowRect(row);
+    return Rect(r.right() - static_cast<float>(geo::kCaptureClearInset) -
+                    static_cast<float>(geo::kCaptureClearW),
+                r.y + static_cast<float>(geo::kCaptureClearInset),
+                static_cast<float>(geo::kCaptureClearW),
+                static_cast<float>(geo::kMidiRowH) - 2.0f * geo::kCaptureClearInset);
+}
+
+void RationsEditorView::drawCaptureRow(Canvas &c, int row)
+{
+    const Rect r = captureRowRect(row);
+    c.setColor(0x0C0B0A);
+    c.fillRoundRect(r, 4.0f);
+    c.setColor(geo::kGold, 190);
+    c.setPenSize(1.0f);
+    c.strokeRoundRect(r, 4.0f);
+
+    const float base = r.centerY() + geo::kMidiRowTextSize * 0.36f;
+    const std::string path = mController ? mController->capturePath(row) : std::string();
+    const bool loaded = !path.empty();
+
+    if (cairo_surface_t *icon = mSvgs.getByHeight(loaded ? "Folder" : "File", geo::kRowIconH))
+        c.drawImageCentered(icon, r.x + 8 + geo::kRowIconH * 0.5f, r.centerY());
+
+    // The name, in the legend face, because it is a legend: it is the same string the head panel
+    // paints under that channel's dial. Clipped rather than allowed to run into the path beside
+    // it — a user may type anything at all here.
+    const Rect nameBox = captureNameRect(row);
+    const bool editing = mRenaming == row;
+    if (editing) {
+        // A field only while it IS one. A box around every name all the time would make four text
+        // fields out of what is, the rest of the time, four legends.
+        c.setColor(0x000000, 170);
+        c.fillRoundRect(nameBox, 3.0f);
+        c.setColor(geo::kAccent, 220);
+        c.setPenSize(1.0f);
+        c.strokeRoundRect(nameBox, 3.0f);
+    }
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kMidiRowTextSize);
+    c.setColor(editing ? geo::kAccentBright : geo::kTextColor);
+    const std::string name =
+        editing ? mRenameText : (mController ? mController->channelName(row) : std::string());
+    const float nameX = nameBox.x + (editing ? 4.0f : 0.0f);
+    const float nameW = nameBox.w - (editing ? 8.0f : 0.0f);
+    c.drawString(c.clipToWidth(name, nameW).c_str(), nameX, base);
+    if (editing) {
+        // The caret, placed by measuring the text in front of it. Not blinked: a blink needs a
+        // timer this page would otherwise not run, and a steady caret in the accent colour is
+        // unambiguous on the only field on screen.
+        const std::string before =
+            c.clipToWidth(name.substr(0, std::min(mRenameCaret, name.size())), nameW);
+        const float caretX = std::min(nameX + c.stringWidth(before.c_str()), nameX + nameW);
+        c.setColor(geo::kAccentBright);
+        c.setPenSize(1.0f);
+        c.strokeLine(caretX, nameBox.y + 4.0f, caretX, nameBox.bottom() - 4.0f);
+    }
+
+    // What is loaded, in the body face — a path is a variable-length string that has to stay
+    // legible when clipped, which is the one thing Roboto is kept for on this panel.
+    std::string text;
+    if (!loaded) {
+        text = geo::kCapturePlaceholder;
+    } else {
+        text = pathBaseName(path);
+        const int count = mController ? mController->entryCount(row) : 0;
+        if (!mController->captureIsDirectory(row))
+            text += "  (single capture)";
+        else if (count > 0)
+            text += "  (" + std::to_string(count) + " captures)";
+    }
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kFileRowTextSize);
+    c.setColor(loaded ? geo::kTextColor : geo::kDimColor);
+    c.drawString(c.clipToWidth(text, static_cast<float>(geo::kCaptureTextW)).c_str(),
+                 r.x + static_cast<float>(geo::kCaptureTextX), base);
+
+    if (loaded) {
+        const Rect clear = captureClearBox(row);
+        c.setColor(geo::kDimColor);
+        c.setPenSize(1.5f);
+        const Rect x = clear.inset(6.0f);
+        c.strokeLine(x.left(), x.top(), x.right(), x.bottom());
+        c.strokeLine(x.left(), x.bottom(), x.right(), x.top());
+        c.setPenSize(1.0f);
+    }
 }
 
 //------------------------------------------------------------------------
@@ -527,7 +676,8 @@ void RationsEditorView::drawLevelRow(Canvas &c, int row)
     c.setFont(Font::Title);
     c.setFontSize(geo::kMidiRowTextSize);
     c.setColor(geo::kTextColor);
-    c.drawString(kMidiLearnRows[row].label, r.x + 12.0f, base);
+    const std::string rowName = mController ? mController->channelName(row) : std::string();
+    c.drawString(c.clipToWidth(rowName, geo::kLevelSliderX - 20.0f).c_str(), r.x + 12.0f, base);
 
     const double norm = paramValue(kChannelLevelId[row]);
     const Rect slider = levelSliderRect(row);
@@ -577,6 +727,149 @@ void RationsEditorView::drawLevelRow(Canvas &c, int row)
 }
 
 //------------------------------------------------------------------------
+// The output section: three radio rows for the mode, then the input-calibration pair.
+//
+// This was previously nowhere. The plug-in was hard-wired to Normalized with no way to see it, let
+// alone change it, while both plug-ins it descends from expose exactly these three controls — so
+// what a capture actually sounds like was a decision the user was not allowed to make.
+Rect RationsEditorView::outputModeRow(int index)
+{
+    return Rect(static_cast<float>(geo::kMidiRowX),
+                static_cast<float>(geo::kOutputRowY0 + index * geo::kOutputRowPitch),
+                static_cast<float>(geo::kOutputRowW), static_cast<float>(geo::kOutputRowH));
+}
+
+Rect RationsEditorView::calToggleRect()
+{
+    return Rect(static_cast<float>(geo::kCalToggleCX) - geo::kToggleW * 0.5f,
+                static_cast<float>(geo::kCalToggleCY) - geo::kToggleH * 0.5f,
+                static_cast<float>(geo::kToggleW), static_cast<float>(geo::kToggleH));
+}
+
+Rect RationsEditorView::calValueRect()
+{
+    return Rect(static_cast<float>(geo::kCalValueX), static_cast<float>(geo::kCalValueY),
+                static_cast<float>(geo::kCalValueW), static_cast<float>(geo::kCalValueH));
+}
+
+//------------------------------------------------------------------------
+// Whether an output control has anything to work from, asked of the channel that is SOUNDING.
+//
+// Not of the requested channel: a switch whose target is still being primed has not happened yet,
+// and what this answers has to describe the audio the player is listening to. And not of all four
+// at once: the compensation is applied per capture and falls back to unity where the metadata is
+// absent, so "some channel could use this" would grey nothing and tell nobody anything.
+//
+// Raw is always available — it is the absence of a compensation, and there is no metadata absence
+// that can prevent doing nothing.
+bool RationsEditorView::outputModeAvailable(int mode) const
+{
+    if (!mController || mode == kOutputRaw)
+        return true;
+    const int active = static_cast<int>(channelFromNorm(paramValue(kActiveChannelId)));
+    // A channel with nothing loaded says NOTHING about what its captures support, because it has
+    // none. Reporting "not in this channel's captures" there is answering a question nobody asked,
+    // and it lands on the commonest state the plug-in is ever in - a fresh instance - where it
+    // greys out Normalized, which is both the default and the setting that is already selected.
+    // The upstream plug-in draws the same conclusion by returning early from its own control
+    // update when no model is loaded, leaving every control alone until there is something to say.
+    if (mController->entryCount(active) <= 0)
+        return true;
+    return mode == kOutputNormalized ? mController->bankHasLoudness(active)
+                                     : mController->bankHasOutputLevel(active);
+}
+
+bool RationsEditorView::inputCalibrationAvailable() const
+{
+    if (!mController)
+        return false;
+    const int active = static_cast<int>(channelFromNorm(paramValue(kActiveChannelId)));
+    if (mController->entryCount(active) <= 0)
+        return true; // nothing loaded, so nothing to disable it over
+    return mController->bankHasInputLevel(active);
+}
+
+void RationsEditorView::drawOutputSection(Canvas &c)
+{
+    const int current = static_cast<int>(outputModeFromNorm(paramValue(kOutputModeId)));
+
+    for (int i = 0; i < kOutputModeCount; ++i) {
+        const Rect row = outputModeRow(i);
+        const bool gated = !outputModeAvailable(i);
+        const float dotCX = row.x + geo::kOutputDotCX;
+        const float dotCY = row.centerY();
+
+        // Selection and availability are independent facts and are drawn independently: the RING
+        // says whether these captures can honour this mode, the FILL says which mode is selected.
+        //
+        // The fill is always the accent, never dimmed with the rest of a gated row, and that is not
+        // a detail. Normalized is the default and is gated whenever the loaded captures state no
+        // loudness — which includes the commonest state of all, an instance with nothing loaded yet
+        // — so dimming the selected dot along with its label draws the selected option fainter than
+        // the unselected one, and Raw above it reads as the live setting. The plug-in was answering
+        // the question correctly and drawing the wrong answer.
+        c.setColor(gated ? 0x4A4740 : geo::kAccent);
+        c.setPenSize(1.5f);
+        c.strokeEllipse(dotCX, dotCY, geo::kOutputDotR, geo::kOutputDotR);
+        if (i == current) {
+            c.setColor(geo::kAccentBright);
+            c.fillEllipse(dotCX, dotCY, geo::kOutputDotFillR, geo::kOutputDotFillR);
+        }
+        c.setPenSize(1.0f);
+
+        // A greyed row says WHY, rather than merely looking inert. The reason is about the
+        // captures the player currently has under their hands, and there is nothing else on the
+        // page that could tell them.
+        std::string label(geo::kOutputModeNames[i]);
+        if (gated)
+            label += geo::kOutputUnsupported;
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(gated ? 0x6A6460 : geo::kTextColor);
+        c.drawString(label.c_str(), row.x + static_cast<float>(geo::kOutputTextX),
+                     dotCY + geo::kMidiRowTextSize * 0.36f);
+    }
+
+    // Input calibration: the toggle, its legend, and the interface level it works against. The
+    // whole block dims together, because the level means nothing with the toggle off and neither
+    // means anything when the captures do not state what level they were fed.
+    const bool calAvailable = inputCalibrationAvailable();
+    const bool calOn = paramValue(kCalibrateInputId) > 0.5;
+    const Rect tog = calToggleRect();
+    // Bat UP for on, the same way the gate's switch reads, and scaled to device pixels the same
+    // way drawToggle does — getScaled caches by the size it is asked for, so passing logical units
+    // here would fill that cache with a second entry at the wrong resolution.
+    const int pw = static_cast<int>(std::lround(geo::kToggleW * mScale));
+    const int ph = static_cast<int>(std::lround(geo::kToggleH * mScale));
+    if (cairo_surface_t *art =
+            mImages.getScaled(calOn ? "switch_up_ring" : "switch_down_ring", pw, ph))
+        c.drawImage(art, tog);
+    else
+        drawToggleFallback(c, tog, calOn);
+
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kMidiRowTextSize);
+    c.setColor(calAvailable ? geo::kTextColor : 0x6A6460);
+    c.drawString(geo::kCalibrateLabel, static_cast<float>(geo::kCalLabelX),
+                 tog.centerY() + geo::kMidiRowTextSize * 0.36f);
+
+    const Rect value = calValueRect();
+    c.setColor(0x000000, 170);
+    c.fillRoundRect(value, 4.0f);
+    c.setColor(geo::kGold, calAvailable ? 190 : 80);
+    c.setPenSize(1.0f);
+    c.strokeRoundRect(value, 4.0f);
+    char dbu[24];
+    snprintf(dbu, sizeof(dbu), "%+.1f dBu",
+             ranges::kCalMin + paramValue(kInputCalLevelId) * (ranges::kCalMax - ranges::kCalMin));
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kMidiRowTextSize);
+    c.setColor(calAvailable ? geo::kTextColor : 0x6A6460);
+    c.drawString(dbu, value.centerX() - c.stringWidth(dbu) * 0.5f,
+                 value.centerY() + geo::kMidiRowTextSize * 0.36f);
+}
+
+//------------------------------------------------------------------------
 // The geometry of one settings row and its buttons, in one place, so the painter and the hit test
 // cannot drift apart - which for a Clear button that only exists on a learned row is not a
 // theoretical risk.
@@ -612,6 +905,71 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
 {
     if (!mController)
         return false;
+
+    // A click anywhere else ends a rename in progress, and ends it by KEEPING what was typed.
+    // Clicking away from a field just filled in and having it silently discarded is the behaviour
+    // nobody wants; Escape is there for the other answer.
+    const int wasRenaming = mRenaming;
+
+    // The capture rows. The name field and the clear box are tested before the row itself, because
+    // both sit inside it and a row-wide test would swallow them — the same ordering the cabinet
+    // page's IR rows already use for their own clear box.
+    for (int i = 0; i < geo::kCaptureRowCount; ++i) {
+        const Rect row = captureRowRect(i);
+        if (!row.contains(x, y))
+            continue;
+        if (captureNameRect(i).contains(x, y)) {
+            if (wasRenaming >= 0 && wasRenaming != i)
+                commitRename();
+            if (mRenaming != i)
+                beginRename(i);
+            return true;
+        }
+        if (wasRenaming >= 0)
+            commitRename();
+        if (!mController->capturePath(i).empty() && captureClearBox(i).contains(x, y)) {
+            mController->setCaptureSource(i, "", false);
+            invalidate();
+            return true;
+        }
+        openCaptureBrowser(i);
+        return true;
+    }
+    if (wasRenaming >= 0)
+        commitRename();
+
+    // The output mode. A gated row is inert rather than merely grey: the compensation it selects
+    // falls back to unity for these captures, so letting it be chosen would be offering a control
+    // that does nothing and looks as though it did something.
+    for (int i = 0; i < kOutputModeCount; ++i) {
+        if (!outputModeRow(i).contains(x, y))
+            continue;
+        // Selectable even when the loaded captures cannot honour it, and that is deliberate. The
+        // mode is a persistent preference about how this plug-in should behave, not a statement
+        // about the folder that happens to be loaded right now: refusing the click would mean a
+        // player who loads a metadata-less bank cannot express "Normalized" until they load a
+        // different one, and the setting they could not make is the default. The engine already
+        // handles it gracefully - entryGain() falls back to unity per entry, so an unhonourable
+        // mode sounds exactly like Raw for exactly the captures that cannot honour it - and the
+        // greyed label beside the row is what says so. The upstream plug-in does the same: it
+        // relabels the option and never disables it.
+        editParam(kOutputModeId, normFromOutputMode(static_cast<OutputMode>(i)));
+        invalidate();
+        return true;
+    }
+    if (inputCalibrationAvailable()) {
+        if (calToggleRect().contains(x, y)) {
+            editParam(kCalibrateInputId, paramValue(kCalibrateInputId) > 0.5 ? 0.0 : 1.0);
+            invalidate();
+            return true;
+        }
+        if (calValueRect().contains(x, y)) {
+            startDrag(kInputCalLevelId, x, y, false);
+            invalidate();
+            return true;
+        }
+    }
+
     for (int i = 0; i < geo::kLevelRowCount; ++i) {
         // The whole row is the target, not just the thumb: this is a relative drag, so where
         // inside the row it starts makes no difference, and a 12 px thumb is not something to
@@ -664,6 +1022,17 @@ void RationsEditorView::drawKnobAt(Canvas &c, float cx, float cy, float r, doubl
     }
 }
 
+// Which channel a dial belongs to, or -1 for the shared controls. Decided by parameter id rather
+// than by position in kKnobs: the table's order and the Channel enum's order agree today, and an
+// index-based answer would keep looking correct if one of them were ever reordered.
+static int channelOfKnob(const geo::KnobSpec &k)
+{
+    for (int c = 0; c < kChannelCount; ++c)
+        if (k.id == kChannelGainId[c])
+            return c;
+    return -1;
+}
+
 void RationsEditorView::drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled)
 {
     drawKnobAt(c, static_cast<float>(k.cx), static_cast<float>(k.cy), static_cast<float>(k.r),
@@ -691,8 +1060,15 @@ void RationsEditorView::drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled
     c.setFontSize(showValue ? geo::kKnobValueSize
                             : (isIo ? geo::kIoLabelSize : geo::kKnobLabelSize));
     c.setColor(showValue ? geo::kAccent : (enabled ? geo::kTextColor : geo::kDimColor));
-    const std::string text =
-        c.clipToWidth(showValue ? readout : std::string(k.label), geo::kKnobPitch - 6.0f);
+    // The four channel dials take their legend from the channel, not from this table: the user
+    // names a channel by loading a folder into it or by typing over that name, and this is where
+    // that shows on the faceplate. k.label stays as the fallback and as the string the art audit
+    // measures — an arbitrary user name cannot be measured in advance, which is why the clip below
+    // was already here and why it is what keeps a long one out of its neighbour's column.
+    const std::string legend = channelOfKnob(k) >= 0 && mController
+                                   ? mController->channelName(channelOfKnob(k))
+                                   : std::string(k.label);
+    const std::string text = c.clipToWidth(showValue ? readout : legend, geo::kKnobPitch - 6.0f);
     c.drawString(text.c_str(), k.cx - c.stringWidth(text.c_str()) * 0.5f, labelY);
 }
 
@@ -847,8 +1223,8 @@ void RationsEditorView::drawIrRow(Canvas &c, int slot)
     const bool loaded = irFile(slot, path);
     const float cy = r.centerY();
 
-    if (cairo_surface_t *icon = mSvgs.getByHeight("File", kRowIconH))
-        c.drawImageCentered(icon, r.x + 8 + kRowIconH * 0.5f, cy);
+    if (cairo_surface_t *icon = mSvgs.getByHeight("File", geo::kRowIconH))
+        c.drawImageCentered(icon, r.x + 8 + geo::kRowIconH * 0.5f, cy);
 
     // Step through the IRs in the loaded file's folder. Dimmed when nothing is loaded, because
     // with no folder to step through there is nothing for them to do — and an arrow that looks
@@ -1082,8 +1458,17 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
     // The file browser captures input while open.
     if (mBrowser.isOpen()) {
         const FileBrowser::Result r = mBrowser.handleClick(fx, fy);
-        if (r == FileBrowser::Result::Chosen && mController)
-            mController->setIrFile(mBrowserSlot, mBrowser.chosenPath().c_str());
+        if (r == FileBrowser::Result::Chosen && mController) {
+            if (mBrowserChannel >= 0) {
+                // Which kind was picked comes from the browser, never from a fresh look at the
+                // disk: a path can stop being a directory between the click and the question, and
+                // what the user chose was fixed at the click.
+                mController->setCaptureSource(mBrowserChannel, mBrowser.chosenPath().c_str(),
+                                              mBrowser.chosenIsDirectory());
+            } else {
+                mController->setIrFile(mBrowserSlot, mBrowser.chosenPath().c_str());
+            }
+        }
         invalidate();
         return;
     }
@@ -1284,10 +1669,16 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
         for (int i = 0; i < geo::kLevelRowCount; ++i) {
             if (levelRowRect(i).contains(fx, fy)) {
                 nudgeParam(kChannelLevelId[i],
-                           delta * geo::kLevelWheelDb /
-                               (ranges::kLevelMax - ranges::kLevelMin));
+                           delta * geo::kLevelWheelDb / (ranges::kLevelMax - ranges::kLevelMin));
                 return;
             }
+        }
+        // The interface calibration level, in whole decibels: an interface's stated level is a
+        // round number, and this is how a user lands on theirs without aiming a drag at it.
+        if (inputCalibrationAvailable() && calValueRect().contains(fx, fy)) {
+            nudgeParam(kInputCalLevelId,
+                       delta * geo::kCalWheelDb / (ranges::kCalMax - ranges::kCalMin));
+            return;
         }
         return;
     }
@@ -1388,12 +1779,166 @@ void RationsEditorView::openIrBrowser(int slot)
     std::string start;
     irFile(slot, start);
     mBrowserSlot = slot;
+    mBrowserChannel = -1; // an IR row, not a capture row
     // The browser holds no geometry of its own — geometry.h stays the one authority on where
     // anything in this editor is drawn.
     mBrowser.setBounds(Rect(geo::kBrowserX, geo::kBrowserY, geo::kBrowserW, geo::kBrowserH));
     mBrowser.open(start, irRow(slot).ext,
                   slot == 0 ? "Select an impulse response" : "Select a second impulse response",
                   FileBrowser::Mode::File);
+    invalidate();
+}
+
+//------------------------------------------------------------------------
+// Renaming a channel.
+//
+// This is the only typed input in the editor, and it is deliberately the SECOND way to name a
+// channel rather than the only one. Whether keys reach an embedded plug-in view at all is the
+// host's business: the SDK routes them through IPlugView::onKeyDown and forbids taking them off
+// the platform window, but a host that never gives the view focus never calls it, and on Linux
+// that varies between hosts. So the primary name is the basename of whatever the channel loaded —
+// a folder called JCM800 names the channel JCM800 with nothing typed — and this only ever
+// OVERRIDES that. In a host that delivers no keys nothing here is reachable and nothing is broken.
+void RationsEditorView::beginRename(int channel)
+{
+    if (!mController || channel < 0 || channel >= kChannelCount)
+        return;
+    mRenaming = channel;
+    // Seeded with the name currently SHOWN, not with the override, so a user who wants to adjust
+    // the folder's name starts from it rather than from an empty field.
+    mRenameText = mController->channelName(channel);
+    mRenameCaret = mRenameText.size();
+    invalidate();
+}
+
+void RationsEditorView::commitRename()
+{
+    if (mRenaming < 0)
+        return;
+    const int channel = mRenaming;
+    mRenaming = -1;
+    if (mController) {
+        // Typing the basename back is the same as having no override at all, and storing it as one
+        // would freeze the name against a later load. So a name that matches what the channel would
+        // be called anyway is stored as empty - which is also how a user clears an override without
+        // being told there is such a thing.
+        const std::string current = mController->channelName(channel);
+        std::string next = mRenameText;
+        while (!next.empty() && next.back() == ' ')
+            next.pop_back();
+        mController->setChannelName(channel, next == current ? "" : next.c_str());
+    }
+    mRenameText.clear();
+    invalidate();
+}
+
+void RationsEditorView::cancelRename()
+{
+    mRenaming = -1;
+    mRenameText.clear();
+    invalidate();
+}
+
+// One key. Returns whether it was consumed, which is the whole contract: the SDK warns that
+// answering kResultTrue for a key that was not handled blocks the host's own key commands, and in
+// a DAW the space bar is one of those.
+bool RationsEditorView::handleRenameKey(char16 key, int16 keyCode, int16 modifiers)
+{
+    if (mRenaming < 0)
+        return false;
+
+    switch (keyCode) {
+        case Steinberg::KEY_RETURN:
+        case Steinberg::KEY_ENTER:
+            commitRename();
+            return true;
+        case Steinberg::KEY_ESCAPE:
+            cancelRename();
+            return true;
+        case Steinberg::KEY_BACK:
+            if (mRenameCaret > 0) {
+                mRenameText.erase(--mRenameCaret, 1);
+                invalidate();
+            }
+            return true;
+        case Steinberg::KEY_DELETE:
+            if (mRenameCaret < mRenameText.size()) {
+                mRenameText.erase(mRenameCaret, 1);
+                invalidate();
+            }
+            return true;
+        case Steinberg::KEY_LEFT:
+            if (mRenameCaret > 0) {
+                --mRenameCaret;
+                invalidate();
+            }
+            return true;
+        case Steinberg::KEY_RIGHT:
+            if (mRenameCaret < mRenameText.size()) {
+                ++mRenameCaret;
+                invalidate();
+            }
+            return true;
+        case Steinberg::KEY_HOME:
+            mRenameCaret = 0;
+            invalidate();
+            return true;
+        case Steinberg::KEY_END:
+            mRenameCaret = mRenameText.size();
+            invalidate();
+            return true;
+        default:
+            break;
+    }
+
+    // A printable character. Deliberately ASCII only: `key` is one UTF-16 code unit, and turning a
+    // stream of those into UTF-8 correctly means handling surrogate pairs and dead keys, which is
+    // a real piece of text handling rather than a few lines. A name outside ASCII is set by naming
+    // the FOLDER, which goes through the filesystem and carries whatever bytes it likes. Flagged
+    // here rather than left to be discovered.
+    if (modifiers != 0 || key < 0x20 || key > 0x7E)
+        return false;
+    if (mRenameText.size() >= kRenameMaxChars)
+        return true; // consumed, but the field is full
+    mRenameText.insert(mRenameCaret, 1, static_cast<char>(key));
+    ++mRenameCaret;
+    invalidate();
+    return true;
+}
+
+//------------------------------------------------------------------------
+tresult PLUGIN_API RationsEditorView::onKeyDown(char16 key, int16 keyCode, int16 modifiers)
+{
+    return handleRenameKey(key, keyCode, modifiers) ? kResultTrue : kResultFalse;
+}
+
+// Nothing is done on release, and kResultFalse is the honest answer for every key: reporting a
+// release as handled would tell the host this view is consuming keys it is not.
+tresult PLUGIN_API RationsEditorView::onKeyUp(char16, int16, int16)
+{
+    return kResultFalse;
+}
+
+//------------------------------------------------------------------------
+// The capture browser. Mode::FileOrDirectory, which has been in FileBrowser since it was ported
+// from the parent plug-in and until now had nothing here to call it: this plug-in shipped its
+// captures and had no loader at all.
+//
+// Either answer is ordinary. A folder of captures is what a channel's dial sweeps and is the
+// normal case; a single .nam is an ordinary thing to own, and everything below the editor has
+// always been able to play one as a bank of one.
+void RationsEditorView::openCaptureBrowser(int channel)
+{
+    if (!mController)
+        return;
+    mBrowserChannel = channel;
+    mBrowser.setBounds(Rect(geo::kCaptureBrowserX, geo::kCaptureBrowserY, geo::kCaptureBrowserW,
+                            geo::kCaptureBrowserH));
+    // Seeded from what this channel already has, so reopening the picker starts where the user
+    // last was rather than at their home directory. That is the whole of "remembering" a folder
+    // here: the path is in the state blob, so it survives the session too.
+    mBrowser.open(mController->capturePath(channel), "nam",
+                  "Select a capture, or a folder of captures", FileBrowser::Mode::FileOrDirectory);
     invalidate();
 }
 

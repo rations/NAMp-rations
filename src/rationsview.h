@@ -110,6 +110,16 @@ private:
     void composePedalboard(Canvas &c);
     void composeSettings(Canvas &c);
 
+public:
+    // Keyboard, from the host. The SDK is explicit that a view must NOT take keys from platform
+    // callbacks and must let the host pass them in here (pluginterfaces/gui/iplugview.h), which is
+    // why the X11 window does not select KeyPressMask.
+    Steinberg::tresult PLUGIN_API onKeyDown(Steinberg::char16 key, Steinberg::int16 keyCode,
+                                            Steinberg::int16 modifiers) SMTG_OVERRIDE;
+    Steinberg::tresult PLUGIN_API onKeyUp(Steinberg::char16 key, Steinberg::int16 keyCode,
+                                          Steinberg::int16 modifiers) SMTG_OVERRIDE;
+
+private:
     void drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled);
     void drawKnobAt(Canvas &c, float cx, float cy, float r, double norm);
     void drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on);
@@ -131,6 +141,22 @@ private:
     // Load the previous (-1) or next (+1) IR in slot `slot`'s own folder.
     void stepIr(int slot, int dir);
     void openIrBrowser(int slot);
+    // The settings page's four capture rows. Opens the same browser the IR rows use, in the mode
+    // that accepts either a folder or one file — which has been in FileBrowser since it was ported
+    // and, until now, had nothing in this plug-in to call it.
+    void openCaptureBrowser(int channel);
+
+    // --- renaming a channel ----------------------------------------------------------------
+    // The one place this editor takes typed input, and the only one it is ever likely to: every
+    // other control here is a knob, a switch or a list, which is deliberate — see the note on
+    // onKeyDown in the .cpp for why a plug-in view cannot count on getting keys at all.
+    void beginRename(int channel);
+    void commitRename();
+    void cancelRename();
+    // Returns true when the key was consumed, which is exactly what onKeyDown must report to the
+    // host: a wrong "yes" swallows the host's own key commands, and the transport is one of them.
+    bool handleRenameKey(Steinberg::char16 key, Steinberg::int16 keyCode,
+                         Steinberg::int16 modifiers);
     void pollCaps();
     // Ask the processor what the learn table now says, while a row is waiting to be taught.
     void pollMidi();
@@ -165,6 +191,20 @@ private:
     static Rect midiRowRect(int row);
     geo::ButtonSpec midiButton(int row, bool clear) const;
     static Rect levelRowRect(int row);
+    static Rect captureRowRect(int row);
+    static Rect captureNameRect(int row);
+    static Rect captureClearBox(int row);
+    void drawCaptureRow(Canvas &c, int row);
+    // The output section's three radio rows and its calibration pair.
+    static Rect outputModeRow(int index);
+    static Rect calToggleRect();
+    static Rect calValueRect();
+    void drawOutputSection(Canvas &c);
+    // Whether an output control can do anything, which depends on what the SOUNDING channel's
+    // captures state about their own levels. Not on the requested channel: a switch that is being
+    // held has not happened yet, and the answer has to describe what the player is hearing.
+    bool outputModeAvailable(int mode) const;
+    bool inputCalibrationAvailable() const;
     static Rect levelSliderRect(int row);
     void drawLevelRow(Canvas &c, int row);
     static Rect rowClearBox(const geo::FileRow &row);
@@ -188,6 +228,15 @@ private:
 
     FileBrowser mBrowser;
     int mBrowserSlot = 0; // which IR row opened it
+    // Which capture row opened the browser, or -1 when an IR row did. One field rather than a
+    // bool beside mBrowserSlot, so "an IR row opened it" and "which one" cannot disagree.
+    int mBrowserChannel = -1;
+
+    // Which channel's name is being typed, or -1. The text is held here rather than pushed at the
+    // controller on every keystroke so that Escape has something to go back to.
+    int mRenaming = -1;
+    std::string mRenameText;
+    size_t mRenameCaret = 0;
 
     Steinberg::Vst::ParamID mDragParam = 0; // 0 = no active drag
     float mDragStartY = 0;

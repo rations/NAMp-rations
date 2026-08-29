@@ -72,9 +72,14 @@ public:
     void start();
     // Joins all four workers. Must happen before anything they could still be building goes away.
     void stop();
-    void loadChannel(Channel ch, const std::string &dir, double slim, int maxBufferSize);
-    void setOutputMode(int mode, double calLevelDbu);
+    // Load one channel from a folder of captures or from a single one. An empty path clears the
+    // channel; a bank of one is not a special case anywhere below this line, so isDirectory only
+    // decides which of ModelBank's two loaders runs.
+    void loadChannel(Channel ch, const std::string &path, bool isDirectory, double slim,
+                     int maxBufferSize);
     std::vector<std::string> captureNames(Channel ch) const;
+    // What that channel's captures state about their own levels, for the editor. Message thread.
+    CaptureLevels captureLevels(Channel ch) const;
     // Hands every live bank back for deletion. Only valid once stop() has been called.
     void releaseBanks();
 
@@ -102,6 +107,19 @@ public:
     //
     // Pushed for all four every block, like the dial positions.
     void setLevel(Channel ch, double linearGain);
+
+    // --- either thread -------------------------------------------------------------------
+    // The output section, for all four channels at once. PUBLISHED, not applied, for the same
+    // reason the dial positions are: three of the four engines belong to the prime worker at any
+    // instant, and each one picks this up on its own thread.
+    //
+    // `calibrateInput` is passed down rather than resolved here, and that is deliberate. Working
+    // out the offset would mean reading each bank's input_level_dbu from the calling thread, which
+    // is precisely the shared access this indirection exists to avoid — and it would also make the
+    // offset per CHANNEL, when what is correct is per BRANCH: a dial sweeping across two captures
+    // that state different input levels has to crossfade between their two offsets, exactly as it
+    // already crossfades between their two output compensations, or it steps at the crossing.
+    void setOutputMode(int mode, double calLevelDbu, bool calibrateInput);
 
     void processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames) override;
 
@@ -178,6 +196,13 @@ private:
     // fixed chunks, with the output thrown away. This IS the priming, and both threads do it
     // through this one function; the scratch buffers are passed in because the caller's thread
     // owns them and two threads must never share a staging buffer.
+    // Bring one channel's engine up to date with the published output section, if it is behind.
+    // Returns true when it actually applied something, because the caller has to know: an input
+    // calibration change moves the level of the input its models are fed, which invalidates any
+    // priming done before it exactly as a bank republish does.
+    //
+    // Called only by the thread that owns that channel.
+    bool applyOutputMode(int channel);
     void feedFromRing(CrossfadeEngine &target, long long from, long long count, NAM_SAMPLE *feed,
                       NAM_SAMPLE *sink);
 
@@ -244,6 +269,19 @@ private:
     // does not own, and it is handed all four positions every block, so it writes them here and
     // whichever thread owns each engine applies it.
     std::atomic<double> mPosNorm[kChannelCount];
+
+    // The published output section, plus a generation counter so an owning thread can tell whether
+    // what it applied is still current. A counter rather than a per-channel flag because the three
+    // values are one decision and are always published together: one bump means "re-read all of
+    // it", which cannot describe a half-applied change the way three flags could.
+    std::atomic<int> mOutputMode{1}; // Normalized, matching the parameter's default
+    std::atomic<double> mCalLevelDbu{12.0};
+    std::atomic<bool> mCalibrateInput{false};
+    std::atomic<unsigned> mOutputGen{0};
+    // What each channel has applied. Written only by that channel's owning thread; atomic because
+    // ownership moves between threads and a plain int would be a race the ownership handshake does
+    // not by itself document away.
+    std::atomic<unsigned> mAppliedOutputGen[kChannelCount] = {};
     // What the worker knows about the capture each idle channel would land on, so the audio
     // thread can decide whether a switch is even possible before it owns the engine to ask.
     std::atomic<int> mRestPrewarmPub[kChannelCount];

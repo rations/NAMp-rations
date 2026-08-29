@@ -77,15 +77,6 @@ inline void writeOutputPoint(IParameterChanges *outChanges, ParamID id, ParamVal
     queue->addPoint(sampleOffset, value, pointIndex);
 }
 
-// Output is pinned to Normalized: per-capture loudness compensation on, and no calibration.
-// Adjacent captures of one amp differ in measured loudness by more than a decibel and not
-// monotonically, so this is what stops the level stepping at every crossing — it is applied per
-// branch INSIDE the crossfade, before the mix, which is why the engine owns it rather than the
-// output stage. The calibration argument is unused at this mode and is passed as the engine's
-// own default.
-constexpr int kOutputModeNormalized = 1;
-constexpr double kUnusedCalLevelDbu = 12.0;
-
 // Slim is fixed at full size, permanently and by decision — not deferred. These captures are
 // slimmable containers and a smaller variant would genuinely cost less CPU, but this plug-in
 // always plays them whole: an amp head that quietly swaps in a lesser model of itself is not
@@ -97,22 +88,6 @@ constexpr double kUnusedCalLevelDbu = 12.0;
 constexpr double kSlimFixed = 1.0;
 
 } // namespace
-
-//------------------------------------------------------------------------
-Channel channelFromNorm(double norm)
-{
-    const double steps = static_cast<double>(kChannelCount - 1);
-    int i = static_cast<int>(std::lround(std::clamp(norm, 0.0, 1.0) * steps));
-    i = std::clamp(i, 0, kChannelCount - 1);
-    return static_cast<Channel>(i);
-}
-
-//------------------------------------------------------------------------
-double normFromChannel(Channel ch)
-{
-    const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
-    return static_cast<double>(i) / static_cast<double>(kChannelCount - 1);
-}
 
 //------------------------------------------------------------------------
 RationsProcessor::RationsProcessor()
@@ -151,31 +126,69 @@ tresult PLUGIN_API RationsProcessor::initialize(FUnknown *context)
     addEventInput(STR16("MIDI In"), 16);
 
     mRack.start();
-    // The captures ship inside the bundle, so there is nothing for a user to load and no reason
-    // to wait for one: all four banks are requested here and build on their own workers while the
-    // host is still setting up. Four workers rather than one is what makes the build breadth-
-    // first — every channel becomes switchable after roughly one model's build time instead of
-    // after all thirty-five are done. A missing or unreadable directory is not fatal: that
-    // channel outputs ramped silence, ModelBank prints one warning, and a switch to it is held.
-    for (int c = 0; c < kChannelCount; ++c) {
-        const Channel ch = static_cast<Channel>(c);
-        mRack.loadChannel(ch, channelBankDir(ch), kSlimFixed, engine::kChunk);
-    }
-
+    // Nothing is loaded here, and that is the change this build is about. The plug-in used to ship
+    // four banks inside its own bundle and request all four at this point; it ships none now, so a
+    // fresh instance comes up with four empty channels and the settings page asking for them. Empty
+    // is a state the rack already handles correctly - it answers with ramped silence, never with
+    // dry signal, which would jump in level the instant a model landed - so there is nothing to add
+    // here beyond not doing it.
+    //
+    // The four workers still exist and still start now. What makes the build breadth-first is one
+    // worker per channel, and that is a property of the rack rather than of when the loads arrive:
+    // four folders picked one after another still build in parallel.
     return kResultOk;
 }
 
 //------------------------------------------------------------------------
-// The bundled bank directory for one channel. Resolved through the same resource lookup that
-// finds img/ and fonts/, so a development override ($RATIONS_RESOURCE_DIR) moves all three
-// together and there is one answer to "where does this build read its files from".
-std::string RationsProcessor::channelBankDir(Channel ch)
+// Load one channel's captures. Message thread: this reaches the filesystem, and ModelBank does the
+// rest of it on that channel's own worker.
+//
+// A directory and a single file are both ordinary answers and neither is a special case below this
+// line: a lone capture is a bank of one, which the engine plays without knowing the difference. The
+// only thing that changes is what the dial has to sweep, and the editor is what says so.
+void RationsProcessor::loadCaptureSource(int channel, const std::string &path, bool isDirectory)
 {
-    const int i = std::clamp(static_cast<int>(ch), 0, kChannelCount - 1);
-    std::filesystem::path dir(resourceDir());
-    dir /= "captures";
-    dir /= kChannelDirName[i];
-    return dir.string();
+    const int c = std::clamp(channel, 0, kChannelCount - 1);
+    mCapturePath[c] = path;
+    // A cleared channel is not a directory, whatever the message said. Recording it as one would
+    // make the next state blob claim a folder that is not there.
+    mCaptureIsDir[c] = !path.empty() && isDirectory;
+    mRack.loadChannel(static_cast<Channel>(c), path, mCaptureIsDir[c], kSlimFixed, engine::kChunk);
+    // Say the output section again. A load republishes the bank, and a republished bank is exactly
+    // the case where an engine's compensation would otherwise be carrying the last bank's metadata.
+    publishOutputMode();
+}
+
+//------------------------------------------------------------------------
+// Publish the output section to the rack. Callable from either thread, and it has to be: a user
+// clicking a radio on the settings page reaches this through a host parameter queue on the AUDIO
+// thread, while a load or a state restore reaches it on the message thread.
+//
+// That is affordable only because everything below is a store. The rack publishes and each engine
+// applies on its own thread, exactly as the dial positions already do - see setPositionNorm.
+void RationsProcessor::publishOutputMode()
+{
+    const OutputMode mode = outputModeFromNorm(mOutputModeNorm.load(std::memory_order_relaxed));
+    const double calLevelDbu =
+        denorm(mCalLevelNorm.load(std::memory_order_relaxed), ranges::kCalMin, ranges::kCalMax);
+    const bool calibrate = mCalibrateInput.load(std::memory_order_relaxed) > 0.5;
+    mRack.setOutputMode(static_cast<int>(mode), calLevelDbu, calibrate);
+
+    // Input calibration, and this is the one place this plug-in cannot copy its parent. NAMp folds
+    // the offset into the global input gain, which it can do because it has one bank and therefore
+    // one input_level_dbu. Four channels may state four different levels, and the input the models
+    // see IS the ring - the thing the switch replays and the convergence proof is a proof about. A
+    // single global offset would prime every idle channel at a level that is wrong for it, and
+    // would step at the instant the sounding channel changes, in the middle of the fade the switch
+    // exists to make inaudible. So it goes per channel, on that engine's model input, inside the
+    // rack: the mirror of the per-channel trim, which is per channel on the output for the same
+    // reason.
+    // Note what this does NOT do: work out each channel's offset here and push four numbers. That
+    // would mean reading four banks' level metadata from this thread, and three of those banks
+    // belong to the prime worker. The decision goes down with the mode instead, and each engine
+    // resolves it against its own bound captures on its own thread - which is also why the offset
+    // is per BRANCH rather than per channel, so a sweep across two captures that state different
+    // input levels crossfades between them instead of stepping.
 }
 
 //------------------------------------------------------------------------
@@ -224,8 +237,9 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     mResampler.configure(mSampleRate, mMaxBlockSize);
     mLatency.store(static_cast<uint32>(mResampler.latency()), std::memory_order_relaxed);
     mRack.prepare(mResampler.maxNativeBlock(mMaxBlockSize), kNativeSampleRate);
-    // Normalized, once, and never from a parameter: it is not a user choice in this plug-in.
-    mRack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+    // prepare() resets the rack's published level state along with everything else, so the output
+    // section has to be said again here rather than assumed to have survived.
+    publishOutputMode();
 
     // Bypass ramp length in samples, at least one sample so the step is finite.
     const double rampSamples = std::max(1.0, engine::kBypassRampMs * 0.001 * mSampleRate);
@@ -398,6 +412,23 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             }
             case kIrBlendId:
                 mIrBlendNorm.store(value, std::memory_order_relaxed);
+                break;
+            // The output section. All three republish, because all three feed one decision and the
+            // rack has to be told the whole of it rather than the part that moved.
+            // publishOutputMode is only atomic stores, so doing it here on the audio thread is
+            // legitimate — see the note on it, and on setPositionNorm in channelrack.cpp, which
+            // publishes the same way.
+            case kOutputModeId:
+                mOutputModeNorm.store(value, std::memory_order_relaxed);
+                publishOutputMode();
+                break;
+            case kCalibrateInputId:
+                mCalibrateInput.store(value, std::memory_order_relaxed);
+                publishOutputMode();
+                break;
+            case kInputCalLevelId:
+                mCalLevelNorm.store(value, std::memory_order_relaxed);
+                publishOutputMode();
                 break;
             default:
                 break;
@@ -779,11 +810,27 @@ void RationsProcessor::sendModelCaps()
 
     std::string blob;
     for (int c = 0; c < kChannelCount; ++c) {
-        const std::vector<std::string> names = mRack.captureNames(static_cast<Channel>(c));
+        const Channel ch = static_cast<Channel>(c);
+        const std::vector<std::string> names = mRack.captureNames(ch);
+        const CaptureLevels levels = mRack.captureLevels(ch);
 
-        std::string attr(kCapsEntryCountAttr);
-        attr += kChannelDirName[c];
-        attrs->setInt(attr.c_str(), static_cast<int64>(names.size()));
+        // One helper rather than five spellings of the same concatenation: the attribute names are
+        // a wire format, and five places to get a suffix wrong is five places for a channel to go
+        // quietly missing on the other side.
+        auto setChannelAttr = [&](const char *prefix, int64 value) {
+            std::string attr(prefix);
+            attr += kChannelDefaultName[c];
+            attrs->setInt(attr.c_str(), value);
+        };
+        setChannelAttr(kCapsEntryCountAttr, static_cast<int64>(names.size()));
+        setChannelAttr(kCapsIsDirAttr, mCaptureIsDir[c] ? 1 : 0);
+        // The REAL values, read off the built bank. The parent plug-in hard-codes the level pair to
+        // zero at this exact point, and the consequence in its shipped build is that Calibrated and
+        // the whole input-calibration block are permanently greyed even for captures that do carry
+        // the metadata. The DSP either side of it works; only this message lies.
+        setChannelAttr(kCapsHasLoudnessAttr, levels.hasLoudness ? 1 : 0);
+        setChannelAttr(kCapsHasInLevelAttr, levels.hasInputLevel ? 1 : 0);
+        setChannelAttr(kCapsHasOutLevelAttr, levels.hasOutputLevel ? 1 : 0);
 
         if (c > 0)
             blob.push_back('\f'); // channel separator
@@ -866,12 +913,35 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
         return kResultOk;
     }
 
+    // A channel's name. Nothing on the audio path reads it; it is here because this half writes
+    // the state blob, and a name the user typed has to survive a project save.
+    if (id && strcmp(id, kMsgChannelName) == 0) {
+        int64 row = -1;
+        if (message->getAttributes()->getInt(kMidiRowAttr, row) != kResultOk || row < 0 ||
+            row >= kChannelCount)
+            return kResultFalse;
+        const void *nameData = nullptr;
+        uint32 nameSize = 0;
+        std::string name;
+        if (message->getAttributes()->getBinary(kMsgNameAttr, nameData, nameSize) == kResultOk &&
+            nameData && nameSize > 0)
+            name.assign(static_cast<const char *>(nameData), nameSize);
+        mChannelName[static_cast<int>(row)] = name;
+        return kResultOk;
+    }
+
+    int captureChannel = -1;
+    for (int c = 0; c < kChannelCount; ++c) {
+        if (id && strcmp(id, kMsgLoadCapture[c]) == 0)
+            captureChannel = c;
+    }
+
     int slot = -1;
     for (int i = 0; i < kIrSlotCount; ++i) {
         if (id && strcmp(id, kMsgLoadIr[i]) == 0)
             slot = i;
     }
-    if (slot < 0)
+    if (slot < 0 && captureChannel < 0)
         return AudioEffect::notify(message);
 
     const void *data = nullptr;
@@ -880,6 +950,18 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
     if (message->getAttributes()->getBinary(kMsgPathAttr, data, size) == kResultOk && data &&
         size > 0)
         path.assign(static_cast<const char *>(data), size);
+
+    if (captureChannel >= 0) {
+        int64 isDir = 0;
+        message->getAttributes()->getInt(kMsgIsDirAttr, isDir);
+        loadCaptureSource(captureChannel, path, isDir != 0);
+        // Immediately, and then again when the editor asks. This first one necessarily reports an
+        // empty bank — the worker has not built anything yet — but it is what clears the PREVIOUS
+        // bank's names out of the editor, so the row does not keep describing captures that are no
+        // longer loaded while the new ones build.
+        sendModelCaps();
+        return kResultOk;
+    }
 
     // A load is the message thread's chance to free whatever the audio thread retired earlier.
     for (int i = 0; i < kIrSlotCount; ++i)
@@ -993,6 +1075,74 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
         mChannelLevelNorm[c].store(std::clamp(level, 0.0, 1.0), std::memory_order_relaxed);
     }
 
+    // The output section, added in state version 4. The defaults for an older project are what
+    // that project actually sounded like: every build before version 4 was hard-wired to Normalized
+    // with no calibration, so those are the values a version 1-3 blob opens with, and it sounds
+    // exactly as it did.
+    double outputMode = normFromOutputMode(kOutputNormalized);
+    double calibrate = 0.0;
+    double calLevel = 0.6; // +12 dBu over the -60 .. +60 range
+    if (version >= 4) {
+        if (!streamer.readDouble(outputMode) || !streamer.readDouble(calibrate) ||
+            !streamer.readDouble(calLevel))
+            return kResultFalse;
+    }
+    // Snapped through the decoder, like the channel above: a blob written by a future version with
+    // a fourth mode, or simply a corrupt one, must not leave an unnamed mode selected.
+    mOutputModeNorm.store(normFromOutputMode(outputModeFromNorm(outputMode)),
+                          std::memory_order_relaxed);
+    mCalibrateInput.store(calibrate > 0.5 ? 1.0 : 0.0, std::memory_order_relaxed);
+    mCalLevelNorm.store(std::clamp(calLevel, 0.0, 1.0), std::memory_order_relaxed);
+    publishOutputMode();
+
+    // The four capture sources. A version 1-3 project has none, and cannot be given any: those
+    // builds resolved the banks from inside the bundle and never wrote down where they came from.
+    // So an older project opens with four empty channels and the settings page asking for them,
+    // which is silence a user can fix rather than a guess at a path.
+    for (int c = 0; c < kChannelCount; ++c) {
+        int32 isDir = 0;
+        std::string path, name;
+        if (version >= 4) {
+            if (!streamer.readInt32(isDir))
+                return kResultFalse;
+            if (char8 *p = streamer.readStr8()) {
+                path = p;
+                delete[] p;
+            }
+            if (char8 *p = streamer.readStr8()) {
+                name = p;
+                delete[] p;
+            }
+        }
+        mChannelName[c] = name;
+
+        // Nothing here says which entry to build first, and the parent plug-in's setState does.
+        // It does not need to: ModelBank re-reads its priority hint on every entry, it publishes
+        // the bank before building anything, and CrossfadeEngine::hintPriority runs from the
+        // restored dial position within a block of that. The first model takes ~150 ms to build
+        // and the hint arrives inside 3 ms, so a reopened project is already playable at the
+        // position it was saved at without this half of the blob knowing anything about indices.
+
+        // Recording the path is not enough, it has to be LOADED - the same reason the IR paths are
+        // reloaded above. A path that no longer resolves leaves the channel empty rather than
+        // claiming a bank that is not there; ModelBank prints one warning and the channel is
+        // silent, which is exactly what a missing folder should look like.
+        //
+        // But only when it has actually CHANGED. A host may push state at a plug-in that is already
+        // playing - that is the whole reason this reload exists - and a preset naming the captures
+        // that are already loaded must not rebuild them: republishing a bank costs thirty-odd
+        // models, drops that channel to its ramped-silence gate while they build, and makes all
+        // four channels go cold, so a preset change that alters nothing but the tone stack would
+        // silence the amp for a second. Skipping the identical case is not an optimisation, it is
+        // the difference between a preset change and a reload.
+        //
+        // Deliberately NOT done inside loadCaptureSource: a user who picks the same folder again in
+        // the browser is asking for it to be re-read, and may well be doing it because they just
+        // changed what is in it.
+        if (mCapturePath[c] != path || mCaptureIsDir[c] != (isDir != 0))
+            loadCaptureSource(c, path, isDir != 0);
+    }
+
     return kResultOk;
 }
 
@@ -1032,6 +1182,24 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     // Version 3 onwards: the four channel trims.
     for (int c = 0; c < kChannelCount; ++c)
         streamer.writeDouble(mChannelLevelNorm[c].load(std::memory_order_relaxed));
+
+    // Version 4 onwards: the output section, then where each channel's captures came from and what
+    // the user calls it. The fixed-width triple goes first so the variable-length half is all in
+    // one place at the end, which is the shape the two IR paths already gave this blob.
+    streamer.writeDouble(mOutputModeNorm.load(std::memory_order_relaxed));
+    streamer.writeDouble(mCalibrateInput.load(std::memory_order_relaxed));
+    streamer.writeDouble(mCalLevelNorm.load(std::memory_order_relaxed));
+
+    // The path is stored absolute and whole, not as a basename. A capture bank is not part of this
+    // plug-in any more and there is nowhere else to look for it, so a name without a directory
+    // would be a project that cannot reopen. Whether it was a FOLDER is stored beside it rather
+    // than re-derived on load: a bank of one is a bank of one either way, and asking the filesystem
+    // months later answers about the disk rather than about what the user chose.
+    for (int c = 0; c < kChannelCount; ++c) {
+        streamer.writeInt32(mCaptureIsDir[c] ? 1 : 0);
+        streamer.writeStr8(mCapturePath[c].c_str());
+        streamer.writeStr8(mChannelName[c].c_str());
+    }
     return kResultOk;
 }
 

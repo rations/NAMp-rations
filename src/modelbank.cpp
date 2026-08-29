@@ -107,6 +107,12 @@ std::vector<std::string> ModelBank::captureNames() const
     return mNames;
 }
 
+CaptureLevels ModelBank::captureLevels() const
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mLevels;
+}
+
 std::string ModelBank::lastError() const
 {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -160,6 +166,7 @@ void ModelBank::serve(const Request &request)
         {
             std::lock_guard<std::mutex> lock(mMutex);
             mNames.clear();
+            mLevels = CaptureLevels();
         }
         mProgress.store(0.0f, std::memory_order_relaxed);
         // Publishing an empty bank is how the audio thread learns to stop using the old one.
@@ -291,6 +298,13 @@ void ModelBank::buildAndPublish(const Request &request)
         bank->entries[i].name = mSources[static_cast<size_t>(i)].filename;
 
     mProgress.store(0.0f, std::memory_order_relaxed);
+    {
+        // Nothing is built yet, so nothing is known yet. Starting from all-false rather than
+        // all-true matters: the flags are ANDed as entries land below, and a bank whose entries
+        // all fail to build must report that it supports nothing rather than everything vacuously.
+        std::lock_guard<std::mutex> lock(mMutex);
+        mLevels = CaptureLevels();
+    }
 
     // Publish before anything is ready. The audio thread will output ramped silence until the
     // first entry lands, which is a fraction of a second, and in exchange the plug-in starts
@@ -302,6 +316,11 @@ void ModelBank::buildAndPublish(const Request &request)
 
     int built = 0;
     std::vector<bool> done(static_cast<size_t>(count), false);
+    // Whether the level summary has been seeded yet. Not derivable from `built`, which counts
+    // attempts rather than successes: an unreadable first capture increments it and produces no
+    // metadata, and seeding from that entry would start the AND below from three false flags.
+    bool levelsSeeded = false;
+
     while (built < count) {
         if (cancelled(request)) {
             // Stop touching this bank immediately. It is either still in mPending (and will be
@@ -360,6 +379,23 @@ void ModelBank::buildAndPublish(const Request &request)
         entry.model = std::move(model);
         // Release: everything written above must be visible to any thread that observes ready.
         entry.ready.store(true, std::memory_order_release);
+
+        // Fold this entry into the bank-wide summary the editor reads. The first built entry seeds
+        // it and every one after that can only take a flag away, which is the AND the summary is
+        // defined as - a mode is offered only when every capture in the bank can honour it.
+        {
+            std::lock_guard<std::mutex> lock(mMutex);
+            if (!levelsSeeded) {
+                levelsSeeded = true;
+                mLevels.hasLoudness = entry.hasLoudness;
+                mLevels.hasInputLevel = entry.hasInputLevel;
+                mLevels.hasOutputLevel = entry.hasOutputLevel;
+            } else {
+                mLevels.hasLoudness = mLevels.hasLoudness && entry.hasLoudness;
+                mLevels.hasInputLevel = mLevels.hasInputLevel && entry.hasInputLevel;
+                mLevels.hasOutputLevel = mLevels.hasOutputLevel && entry.hasOutputLevel;
+            }
+        }
 
         mProgress.store(static_cast<float>(built) / static_cast<float>(count),
                         std::memory_order_relaxed);

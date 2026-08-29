@@ -37,6 +37,7 @@
 
 #include "engineconfig.h"
 #include "rationsids.h"
+#include "toolcaptures.h"
 
 #include <jack/jack.h>
 
@@ -65,6 +66,8 @@ struct Options {
     // A second stomp this long after the first, to land inside the switch window. 0 = off.
     int restompMs = 8;
     int settleMs = 6000;
+    // A directory holding one subdirectory per channel. Defaults to $RATIONS_TEST_CAPTURES.
+    std::string captures;
     bool connect = false;
     // Keep the sounding channel's gain dial moving, which holds TWO of its captures bound instead
     // of one. That cost predates the channel switch — it is what the gain crossfade has always
@@ -266,6 +269,10 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!(v = next()))
                 return false;
             o.restompMs = atoi(v);
+        } else if (a == "--captures") {
+            if (!(v = next()))
+                return false;
+            o.captures = v;
         } else if (a == "--settle-ms") {
             if (!(v = next()))
                 return false;
@@ -282,8 +289,9 @@ bool parseArgs(int argc, char **argv, Options &o)
         }
     }
     if (o.bundle.empty()) {
-        fprintf(stderr, "usage: rations_jackcheck <Rations.vst3> [--seconds S] [--stomp-ms N]\n"
-                        "       [--restomp-ms N] [--settle-ms N] [--connect] [--sweep-gain]\n");
+        fprintf(stderr, "usage: rations_jackcheck <Rations.vst3> [--captures <dir>]\n"
+                        "       [--seconds S] [--stomp-ms N] [--restomp-ms N] [--settle-ms N]\n"
+                        "       [--connect] [--sweep-gain]\n");
         return false;
     }
     return true;
@@ -393,6 +401,23 @@ int main(int argc, char **argv)
            Rations::engine::kSwitchModelBudget);
     printf("stomps         every %d ms, with a second stomp %d ms later%s\n", opt.stompMs,
            opt.restompMs, opt.sweepGain ? ", gain dial sweeping" : "");
+
+    // The four banks, handed over before the transport starts. This is the tool that measures the
+    // switch, so all four channels must actually hold captures: a switch to an empty channel is
+    // HELD rather than performed, and a run of held switches would report a switch latency that
+    // measured nothing.
+    opt.captures = RationsTools::captureRoot(opt.captures);
+    if (opt.captures.empty()) {
+        RationsTools::printCaptureUsage("rations_jackcheck");
+        jack_client_close(client);
+        return 1;
+    }
+    if (!RationsTools::loadCaptureRoot(hostContext, component, opt.captures)) {
+        fprintf(stderr, "rations_jackcheck: the plug-in refused a capture directory under %s\n",
+                opt.captures.c_str());
+        jack_client_close(client);
+        return 1;
+    }
 
     // The four banks are built on the plug-in's own workers, so give them time before the audio
     // thread is asked to switch between them. Counting xruns while models are still being built

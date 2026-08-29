@@ -24,13 +24,48 @@ enum Channel : int {
     kChannelCount = 4,
 };
 
-// The bank directory name for each channel, relative to the bundle's Resources/captures. These
-// are tracked content shipped inside the bundle, not a user selection: there is no capture
-// browser in this plug-in.
-inline constexpr const char *kChannelDirName[kChannelCount] = {"Clean", "Crunch", "OD1", "OD2"};
+// What a channel is called when the user has not said otherwise, and the key each channel's
+// attributes are named by in the capabilities message.
+//
+// These used to be directory names, resolved inside the bundle's Resources/captures. They are not
+// any more: the plug-in ships no captures and every channel's bank is a folder or a file the user
+// picked. So a channel's DISPLAYED name is now three-deep - the user's typed override, else the
+// basename of what is loaded, else this - and this is only the last of the three, the name an
+// empty channel carries so that a panel with nothing loaded still reads as an amp head.
+inline constexpr const char *kChannelDefaultName[kChannelCount] = {"Clean", "Crunch", "OD1", "OD2"};
+
+// What a whole bank states about its own levels, for the editor's benefit rather than the audio
+// thread's. The DSP never consults this: entryGain() asks each entry individually and falls back to
+// unity when a field is absent, so a bank of mixed captures is already handled correctly capture by
+// capture. This exists so the settings page can grey an output mode the loaded captures cannot
+// honour, and so a generic host UI can retitle the same controls "(n/a)".
+//
+// Each flag is true only when EVERY built entry states that field. "Any" would be the wrong test:
+// an option that works for three captures out of twelve is one that changes the level as the dial
+// crosses the ninth, and offering it would be telling the user the wrong thing.
+//
+// It lives HERE, with Channel, rather than in bank.h beside the entries it is derived from, and the
+// reason is the same one Channel has plus one that is specific: bank.h includes NAM/dsp.h and so
+// Eigen, the edit controller needs this type, and the editor's translation units include <X11/X.h>,
+// which #defines `Success` — a name Eigen declares as an enumerator and stops compilation over. The
+// file browser's `NoResult` carries a note about the same header doing the same thing to `None`.
+struct CaptureLevels {
+    bool hasLoudness = false;
+    bool hasInputLevel = false;
+    bool hasOutputLevel = false;
+};
 
 namespace engine
 {
+
+// Where Normalized output puts every capture, in dB.
+//
+// The value is the upstream plug-in's and is shared by every plug-in in this family, which is the
+// point of it: a capture normalized here has to land where the same capture lands there, or the
+// same file is two different loudnesses depending on what is playing it. It is a target, not a
+// measurement, so it is a constant rather than something read from a model - what IS read from the
+// model is each capture's own measured loudness, which is what gets brought to this.
+inline constexpr double kNormalizedTargetDb = -18.0;
 
 // Native-rate samples per model call. Chosen by measurement: the per-model cost curve against
 // buffer size is flat over 128-512 with its minimum at 256, and a fixed chunk is what guarantees

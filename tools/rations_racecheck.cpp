@@ -138,11 +138,12 @@ int main(int argc, char **argv)
 
     ChannelRack rack;
     rack.prepare(opt.block, kNativeRate);
-    rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+    rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu,
+                       /*calibrateInput=*/false);
     rack.start();
     for (int c = 0; c < channels; ++c)
-        rack.loadChannel(static_cast<Channel>(c), opt.dirs[static_cast<size_t>(c)], 1.0,
-                         engine::kChunk);
+        rack.loadChannel(static_cast<Channel>(c), opt.dirs[static_cast<size_t>(c)],
+                         /*isDirectory=*/true, 1.0, engine::kChunk);
 
     printf("racecheck      %d channel(s), %.1f s at %d frames%s\n", channels, opt.seconds,
            opt.block, opt.republish ? ", with a bank republish mid-run" : "");
@@ -157,6 +158,7 @@ int main(int argc, char **argv)
     int blocksToStomp = kPeriods[0];
     int want = 0;
     int stomps = 0;
+    int outputGen = 0;
     const int republishAt = opt.republish ? total / 2 : -1;
     bool republished = false;
 
@@ -178,6 +180,20 @@ int main(int argc, char **argv)
             ++stomps;
             periodIndex = (periodIndex + 1) % static_cast<int>(sizeof(kPeriods) / sizeof(int));
             blocksToStomp = kPeriods[periodIndex];
+
+            // The output section, republished from the audio thread on every stomp. This is the
+            // cross-thread write the mode publication added, and it is the reason this loop cares
+            // about it: setOutputMode is called from RT (a radio click on the settings page arrives
+            // as a host parameter change), while three of the four engines it concerns belong to
+            // the prime worker, which reads the publication on its own tick. Nothing here would
+            // exercise that if the mode were set once before the run.
+            //
+            // Cycling all three modes and both calibration states, so the input gain changes as
+            // well as the output compensation - a change to the input is the one that also has to
+            // make a channel report itself NOT warm, and a stale warm flag is a correctness bug
+            // rather than a slow one.
+            ++outputGen;
+            rack.setOutputMode(outputGen % 3, 12.0 + (outputGen % 5), (outputGen % 2) != 0);
         }
 
         NAM_SAMPLE *ip = input.data() + off;
@@ -189,8 +205,8 @@ int main(int argc, char **argv)
         // but "cannot" is a property of a call site somewhere else, and the failure it would
         // cause is a silently unprimed model.
         if (republishAt >= 0 && !republished && off >= republishAt) {
-            rack.loadChannel(static_cast<Channel>(channels - 1), opt.dirs[opt.dirs.size() - 1], 1.0,
-                             engine::kChunk);
+            rack.loadChannel(static_cast<Channel>(channels - 1), opt.dirs[opt.dirs.size() - 1],
+                             /*isDirectory=*/true, 1.0, engine::kChunk);
             republished = true;
         }
     }

@@ -94,6 +94,16 @@ struct Options {
     double posA = 0.0; // dial position of each channel, normalized
     double posB = 0.0;
     bool fadeSweep = false; // measure how long the channel fade has to be, rather than assume it
+    // Run every engine with input calibration ON. Off is the default and the state every earlier
+    // measurement here was taken in; on is the state that puts a gain on the model INPUT, which is
+    // the one place a change can invalidate the whole argument this tool exists to make. The
+    // reference is built with it too, so what is compared is still like with like — what is being
+    // asserted is that a SWITCHED channel converges on a continuously-running one, and that has to
+    // hold whatever the input is being scaled by.
+    //
+    // Inert unless the captures state an input_level_dbu; a bank that does not is reported rather
+    // than silently passing a check it never ran.
+    bool calibrate = false;
 };
 
 // A pick attack, a sustained chord and a decay into the noise floor. The decay matters most: an
@@ -127,11 +137,11 @@ struct Channel {
     Rations::ModelBank loader;
     Rations::CrossfadeEngine engine;
 
-    void open(const std::string &dir, int maxNative)
+    void open(const std::string &dir, int maxNative, bool calibrate = false)
     {
         engine.setLoader(&loader);
         engine.prepare(maxNative, kNativeRate);
-        engine.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+        engine.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, calibrate);
         loader.start();
         loader.loadDirectory(dir, 1.0, Rations::engine::kChunk);
     }
@@ -362,6 +372,8 @@ bool parseArgs(int argc, char **argv, Options &o)
             o.posA = atof(v);
         } else if (a == "--fade-sweep") {
             o.fadeSweep = true;
+        } else if (a == "--calibrate") {
+            o.calibrate = true;
         } else if (a == "--pos-b") {
             if (!(v = next()))
                 return false;
@@ -380,6 +392,7 @@ bool parseArgs(int argc, char **argv, Options &o)
     if (o.dirA.empty() || o.dirB.empty() || o.block <= 0) {
         fprintf(stderr,
                 "usage: rations_switchcheck <captures/A> <captures/B> [--block N] [--seconds S]\n"
+                "       [--calibrate]\n"
                 "       [--stomp S] [--restomp-ms MS] [--pos-a 0..1] [--pos-b 0..1]\n"
                 "       [--fade-sweep]\n");
         return false;
@@ -462,8 +475,8 @@ int main(int argc, char **argv)
 
     // --- the continuously-running references ---------------------------------------------------
     Channel refA, refB;
-    refA.open(opt.dirA, opt.block);
-    refB.open(opt.dirB, opt.block);
+    refA.open(opt.dirA, opt.block, opt.calibrate);
+    refB.open(opt.dirB, opt.block, opt.calibrate);
     if (!waitForBank(refA.loader, "channel A") || !waitForBank(refB.loader, "channel B")) {
         refA.close();
         refB.close();
@@ -477,6 +490,12 @@ int main(int argc, char **argv)
 
     const int prewarm = refB.engine.restPrewarmSamples();
     printf("channels       A = %s\n               B = %s\n", opt.dirA.c_str(), opt.dirB.c_str());
+    printf("input cal      %s\n",
+           !opt.calibrate ? "off (the default, and the state every other measurement here uses)"
+           : refA.engine.hasInputLevel()
+               ? "ON - a gain on the model input, which is what makes this run worth doing"
+               : "asked for, but INERT: these captures state no input_level_dbu, so nothing is "
+                 "scaled and this run proves no more than one without it");
     printf("bank sizes     A = %d captures, B = %d captures\n", refA.engine.entryCount(),
            refB.engine.entryCount());
     printf("prewarm        %d samples (%.1f ms at %.0f Hz), read from the incoming capture\n",
@@ -530,10 +549,10 @@ int main(int argc, char **argv)
     {
         Rations::ChannelRack rack;
         rack.prepare(opt.block, kNativeRate);
-        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, opt.calibrate);
         rack.start();
-        rack.loadChannel(kSlotA, opt.dirA, 1.0, Rations::engine::kChunk);
-        rack.loadChannel(kSlotB, opt.dirB, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
         for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         renderRack(rack, opt, input, outSwitched, total, stompAt, -1);
@@ -551,10 +570,10 @@ int main(int argc, char **argv)
     {
         Rations::ChannelRack rack;
         rack.prepare(opt.block, kNativeRate);
-        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, opt.calibrate);
         rack.start();
-        rack.loadChannel(kSlotA, opt.dirA, 1.0, Rations::engine::kChunk);
-        rack.loadChannel(kSlotB, opt.dirB, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
         for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         renderRack(rack, opt, input, outHeld, total, stompAt, -1,
@@ -567,10 +586,10 @@ int main(int argc, char **argv)
     {
         Rations::ChannelRack rack;
         rack.prepare(opt.block, kNativeRate);
-        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu);
+        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, opt.calibrate);
         rack.start();
-        rack.loadChannel(kSlotA, opt.dirA, 1.0, Rations::engine::kChunk);
-        rack.loadChannel(kSlotB, opt.dirB, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
         for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         renderRack(rack, opt, input, outRestomped, total, stompAt, restompAt);

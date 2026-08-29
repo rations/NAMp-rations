@@ -32,6 +32,7 @@ void CrossfadeEngine::prepare(int maxNativeFrames, double nativeSampleRate)
     const size_t n = static_cast<size_t>(std::max(maxNativeFrames, engine::kChunk));
     mScratchA.assign(n, 0.0);
     mScratchB.assign(n, 0.0);
+    mScratchIn.assign(n, 0.0);
     mNativeSampleRate = nativeSampleRate > 0.0 ? nativeSampleRate : kNativeSampleRate;
 
     // The gate that opens when the first entry becomes playable. Reuses the bypass ramp length —
@@ -53,8 +54,8 @@ double CrossfadeEngine::primedFraction(const Branch &branch)
 double CrossfadeEngine::entryGain(const BankEntry &entry) const
 {
     if (mOutputMode == 1 && entry.hasLoudness) {
-        // Normalized: bring each capture's measured loudness to -18 dB, per branch.
-        return dbToLinear(-18.0 - entry.loudnessDb);
+        // Normalized: bring each capture's measured loudness to a common target, per branch.
+        return dbToLinear(engine::kNormalizedTargetDb - entry.loudnessDb);
     }
     if (mOutputMode == 2 && entry.hasOutputLevel) {
         // Calibrated: the capture's stated output level against the user's input calibration.
@@ -63,21 +64,39 @@ double CrossfadeEngine::entryGain(const BankEntry &entry) const
     return 1.0;
 }
 
+//------------------------------------------------------------------------
+// The input half of calibration. Independent of the output mode on purpose, and that is not an
+// oversight in the design it is copied from: a capture states what level it was FED separately from
+// what level it puts out, plenty of captures state one and not the other, and a player who has told
+// the plug-in what their interface does should have that honoured whichever way they take the
+// output. The upstream plug-in gates these two on different metadata fields for the same reason.
+double CrossfadeEngine::entryInputGain(const BankEntry &entry) const
+{
+    if (!mCalibrateInput || !entry.hasInputLevel)
+        return 1.0;
+    return dbToLinear(mCalLevelDbu - entry.inputLevelDbu);
+}
+
 void CrossfadeEngine::refreshGains()
 {
     if (!mBank)
         return;
-    if (mA.bound())
+    if (mA.bound()) {
         mA.gain = entryGain(mBank->entries[mA.index]);
-    if (mB.bound())
+        mA.inputGain = entryInputGain(mBank->entries[mA.index]);
+    }
+    if (mB.bound()) {
         mB.gain = entryGain(mBank->entries[mB.index]);
+        mB.inputGain = entryInputGain(mBank->entries[mB.index]);
+    }
 }
 
 //------------------------------------------------------------------------
-void CrossfadeEngine::setOutputMode(int mode, double calLevelDbu)
+void CrossfadeEngine::setOutputMode(int mode, double calLevelDbu, bool calibrateInput)
 {
     mOutputMode = mode;
     mCalLevelDbu = calLevelDbu;
+    mCalibrateInput = calibrateInput;
     refreshGains();
 }
 
@@ -90,6 +109,7 @@ void CrossfadeEngine::bindOne(Branch &branch, int index)
         branch.samplesLive = 0;
         branch.prewarmSamples = 0;
         branch.gain = 1.0;
+        branch.inputGain = 1.0;
         return;
     }
     if (branch.index == index && branch.model != nullptr)
@@ -100,6 +120,7 @@ void CrossfadeEngine::bindOne(Branch &branch, int index)
     branch.samplesLive = 0;
     branch.prewarmSamples = entry.prewarmSamples;
     branch.gain = entryGain(entry);
+    branch.inputGain = entryInputGain(entry);
 }
 
 //------------------------------------------------------------------------
@@ -445,14 +466,30 @@ void CrossfadeEngine::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFr
         // deletes the priming that makes the crossfade click-free, turning it straight back into
         // a hard switch. A bound branch is processed every chunk, always.
         NAM_SAMPLE *inPtr = const_cast<NAM_SAMPLE *>(chunkIn);
+        // Input calibration, if any, scaled per branch into a scratch buffer. The common case is
+        // calibration off, where every inputGain is exactly 1.0 and this costs one comparison per
+        // branch per sub-chunk and touches no memory — which is what keeps the default path, and
+        // every measurement taken on it, exactly what it was.
+        auto branchInput = [&](const Branch &branch) -> NAM_SAMPLE * {
+            if (branch.inputGain == 1.0)
+                return inPtr;
+            NAM_SAMPLE *scaled = mScratchIn.data();
+            for (int i = 0; i < n; ++i)
+                scaled[i] = chunkIn[i] * branch.inputGain;
+            return scaled;
+        };
         if (mA.bound()) {
+            NAM_SAMPLE *inA = branchInput(mA);
             NAM_SAMPLE *outA = mScratchA.data();
-            mA.model->process(&inPtr, &outA, n);
+            mA.model->process(&inA, &outA, n);
             mA.samplesLive += n;
         }
         if (mB.bound()) {
+            // Recomputed rather than reused: A and B are different captures and may state
+            // different input levels, and the buffer above holds A's scaling by now.
+            NAM_SAMPLE *inB = branchInput(mB);
             NAM_SAMPLE *outB = mScratchB.data();
-            mB.model->process(&inPtr, &outB, n);
+            mB.model->process(&inB, &outB, n);
             mB.samplesLive += n;
         }
 

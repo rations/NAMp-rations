@@ -10,15 +10,18 @@
 // size, and handing them a varying size would re-trigger that growth on the audio thread), and
 // every model call going through a fixed chunk loop at the models' native rate.
 //
-// All four channels are wired: each loads its own bank out of the bundle's Resources/captures,
+// All four channels are wired: each loads its own bank from a folder or a file the user picked,
 // each has its own dial sweeping that bank, and kChannelId picks which one sounds. The rack owns
 // the switch between them and the input history that makes it click-free; the processor's job is
 // only to keep it fed and to hand the host back which channel is ACTUALLY sounding, which is not
 // always the one the parameter asks for. Both IR slots and their blend are wired, and so is the
 // MIDI learn table that lets a footswitch change the channel with the editor closed.
 //
-// Output is pinned to Normalized. It is not a user choice here, so there is no parameter for it
-// and the engine is told once — see the setOutputMode call in setupProcessing.
+// Output mode is a user choice (Raw / Normalized / Calibrated) and is PUBLISHED to the rack every
+// block rather than applied to the engines directly: three of the four engines belong to the prime
+// worker at any instant, and writing into them from here is the shared access the ownership rule
+// exists to forbid. Input calibration is published the same way and per channel — see the note on
+// it in channelrack.h, which is the one part of this that is not a copy of the parent plug-in.
 //
 // Real-time contract: process() never allocates, locks, does file I/O, logs, or destroys an
 // object. That holds from here on, including for the channel-switch catch-up burst, which runs
@@ -100,9 +103,14 @@ private:
     void sendModelCaps();     // message thread only
     void sendMidiTable();     // message thread only
     void allocateBuffers();   // message thread only
-    // The bundled bank for one channel: <resources>/captures/<Clean|Crunch|OD1|OD2>. Message
-    // thread only — it touches the filesystem.
-    static std::string channelBankDir(Channel ch);
+    // Load one channel's bank from a folder (isDirectory) or a single file. An empty path clears
+    // the channel, which the rack answers with ramped silence. Message thread only — file I/O.
+    void loadCaptureSource(int channel, const std::string &path, bool isDirectory);
+    // Publish the output section to the rack. Safe from EITHER thread - it is nothing but atomic
+    // stores - which it has to be, because a radio click on the settings page arrives as a host
+    // parameter change on the audio thread while a load or a state restore arrives on the message
+    // thread.
+    void publishOutputMode();
 
     // Normalized parameter values. Written by RT parameter handling AND by setState on the
     // message thread, so the accesses are atomic to stay tear-free; relaxed ordering is enough
@@ -127,6 +135,12 @@ private:
     std::atomic<double> mChannelLevelNorm[kChannelCount] = {{0.5}, {0.5}, {0.5}, {0.5}};
 
     std::atomic<double> mIrBlendNorm{0.0}; // 0 = IR A; inert unless both slots are filled
+
+    // The output section. Normalized is the default because it is what every build before state
+    // version 4 was hard-wired to, so a project made against one of those sounds the same here.
+    std::atomic<double> mOutputModeNorm{normFromOutputMode(kOutputNormalized)};
+    std::atomic<double> mCalibrateInput{0.0}; // off
+    std::atomic<double> mCalLevelNorm{0.6};   // 0.6 over -60 .. +60 is +12 dBu
 
     // --- MIDI learn ---------------------------------------------------------------------
     //
@@ -203,15 +217,16 @@ private:
 
     // Message-thread only.
     std::string mIrPath[kIrSlotCount];
+    // Where each channel's captures came from, and what the user calls that channel. Held here
+    // because this is the half that writes the state blob; nothing on the audio path reads either.
+    // An empty name is not a name - it means the channel has no override and shows the basename of
+    // its path, or its default name when there is no path either.
+    std::string mCapturePath[kChannelCount];
+    bool mCaptureIsDir[kChannelCount] = {false, false, false, false};
+    std::string mChannelName[kChannelCount];
 
     double mSampleRate = kNativeSampleRate;
     Steinberg::int32 mMaxBlockSize = 512;
 };
-
-// Decode kChannelId's normalized value to a Channel. A kIsList parameter with N steps reports
-// value i as i / (N - 1), so this is the inverse, rounded and clamped: a host is free to hand
-// over any double in [0, 1], including one that lands between steps.
-Channel channelFromNorm(double norm);
-double normFromChannel(Channel ch);
 
 } // namespace Rations

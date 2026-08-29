@@ -6,23 +6,25 @@
 // in a D-Bus dependency. Painting the list ourselves through Canvas has neither
 // problem, and it looks like the rest of the panel.
 //
-// This plug-in opens it in exactly one place and one mode: Mode::File, on the
-// cabinet page, to pick an impulse response. There is no capture browser here —
-// the captures ship inside the bundle and are not a user choice — so the
-// picker's whole job is one .wav.
+// This plug-in opens it in two places:
 //
-//   * Mode::File — pick one file with a given extension. The IR loader.
+//   * Mode::File — pick one file with a given extension. The cabinet page's two
+//     IR rows.
 //   * Mode::Directory — pick the directory itself, and nothing in it. Matching
 //     files are still listed, dimmed and inert, purely so the folder's contents
 //     are visible before committing to it; they cost nothing, since the same
 //     scan already found them. A footer button chooses the directory shown.
+//     Unused here.
 //   * Mode::FileOrDirectory — either. chosenIsDirectory() says which happened,
-//     so the caller never has to stat the path back.
+//     so the caller never has to stat the path back. The settings page's four
+//     capture rows: a folder of captures is what a channel's dial sweeps and is
+//     the normal case, and a single .nam is an ordinary thing to own that plays
+//     as a bank of one.
 //
-// The last two are unused here and are kept rather than stripped, because this
-// file is a port of the parent plug-in's and stays diffable against it: the
-// modes are a handful of branches inside code that has to exist anyway, and
-// deleting them would make every future fix a manual merge.
+// FileOrDirectory had been carried here unused since this file was ported —
+// kept because deleting branches out of a port makes every later fix a manual
+// merge — for the whole of the time the plug-in shipped its own captures and
+// had no loader. It needed no changes when one arrived.
 //
 // Behaviour otherwise: directories first then files, both alphabetical; a ".."
 // row to go up; the mouse wheel scrolls; clicking a directory descends.

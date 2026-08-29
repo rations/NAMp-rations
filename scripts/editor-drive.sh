@@ -17,6 +17,17 @@
 #     handshake eats it. A control that "does not respond" to the first click responds to the
 #     second, so a warm-up click is burned before anything is measured. Without it a working
 #     control reads as broken and you go looking for a bug that is not there.
+#   * THIS HOST DELIVERS NO KEYBOARD INPUT, so `type` and `key` below will appear to do nothing
+#     and that is not a plug-in bug. The SDK routes keys to a plug-in through
+#     IPlugView::onKeyDown and forbids a view from taking them off its own window; the SDK's own
+#     editorhost selects KeyPressMask on the window and then never calls onKeyDown at all — there
+#     is not one occurrence of it anywhere in its source. So a null result from `type` here says
+#     only that this rig cannot ask the question. The commands are kept because the question is
+#     real and a host that DOES route keys will answer it, and because the alternative is somebody
+#     later concluding from silence that the field is broken. The channel-rename field is
+#     deliberately the second way to name a channel for this exact reason: the first is the
+#     basename of whatever the channel loaded, which needs no keyboard and works everywhere.
+#
 #   * A DRAG HAS TO TAKE REAL TIME. The editor coalesces motion and repaints on a timer, and the
 #     drag readout is only drawn while the button is held, so a screenshot has to be taken from a
 #     second process while the drag is still in flight.
@@ -29,6 +40,7 @@
 #   scripts/editor-drive.sh shot out.png
 #   scripts/editor-drive.sh click 251 226 shot out.png
 #   scripts/editor-drive.sh drag 251 226 0 -70 shot out.png     # photographed mid-drag
+#   scripts/editor-drive.sh click 140 110 type "JCM800" key Return shot out.png
 #   scripts/editor-drive.sh --size 640x460 click 320 200 shot cab.png
 #
 # Commands are applied in order, so several clicks and shots can be chained in one session. The
@@ -47,7 +59,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --size)   size="$2"; shift 2 ;;
         --settle) settle="$2"; shift 2 ;;
-        -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
         *) break ;;
     esac
 done
@@ -118,6 +130,16 @@ while [ "$#" -gt 0 ]; do
                 wait "$drag_pid" 2>/dev/null
                 shift 5
             fi ;;
+        type)
+            "$poke" type "$window" "$2"
+            echo "  type '$2'"
+            sleep 1
+            shift 2 ;;
+        key)
+            "$poke" key "$window" "$2"
+            echo "  key $2"
+            sleep 1
+            shift 2 ;;
         shot)
             import -window "$window" "$2"
             echo "  shot -> $2"

@@ -56,6 +56,7 @@
 #include "public.sdk/source/common/memorystream.h"
 
 #include "rationsids.h"
+#include "toolcaptures.h"
 
 #include <algorithm>
 #include <chrono>
@@ -79,6 +80,8 @@ struct Options {
     int block = 256;
     double seconds = 2.0;
     int settleMs = 6000;
+    // A directory holding one subdirectory per channel. Defaults to $RATIONS_TEST_CAPTURES.
+    std::string captures;
     double toleranceDb = 0.75;
 };
 
@@ -100,7 +103,8 @@ bool parseArgs(int argc, char **argv, Options &opt)
         fprintf(stderr,
                 "usage: rations_ircheck <Rations.vst3> --pair <irA.wav> <irB.wav> [--pair ...]\n"
                 "                       [--rate 48000] [--block 256] [--seconds 2.0]\n"
-                "                       [--settle-ms 6000] [--tolerance-db 0.75]\n");
+                "                       [--captures <dir>] [--settle-ms 6000]\n"
+                "                       [--tolerance-db 0.75]\n");
         return false;
     }
     opt.bundle = argv[1];
@@ -121,6 +125,8 @@ bool parseArgs(int argc, char **argv, Options &opt)
             next(opt.toleranceDb);
         } else if (a == "--block" && i + 1 < argc) {
             opt.block = atoi(argv[++i]);
+        } else if (a == "--captures" && i + 1 < argc) {
+            opt.captures = argv[++i];
         } else if (a == "--settle-ms" && i + 1 < argc) {
             opt.settleMs = atoi(argv[++i]);
         } else {
@@ -344,6 +350,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // The cabinet stage is what this tool measures, but it measures it through the whole chain, so
+    // the channels still have to be sounding something: with no captures loaded the rack outputs
+    // ramped silence and every blend measurement would be taken on nothing.
+    opt.captures = RationsTools::captureRoot(opt.captures);
+    if (opt.captures.empty()) {
+        RationsTools::printCaptureUsage("rations_ircheck");
+        return 1;
+    }
+    if (!RationsTools::loadCaptureRoot(hostContext, component, opt.captures)) {
+        fprintf(stderr, "rations_ircheck: the plug-in refused a capture directory under %s\n",
+                opt.captures.c_str());
+        return 1;
+    }
     // The captures build on the plug-in's own workers; a render started before they land measures
     // the ramped silence that precedes them.
     std::this_thread::sleep_for(std::chrono::milliseconds(opt.settleMs));

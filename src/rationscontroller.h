@@ -1,16 +1,19 @@
 // Rations edit controller — the plug-in's parameters, and the native editor it hands the host
 // through createView().
 //
-// The two impulse-response paths live here rather than being parameters, because a path is not a
-// value a host can automate or interpolate. They are held as plain members with plain accessors —
-// deliberately NOT a published COM interface. The parent plug-in exposes one so that a GUI-less
-// host can load captures, but here the captures ship in the bundle and are not a user choice
-// (there is no capture browser at all), which leaves only the cabinet page's two IRs. Publishing
-// an interface UID is a permanent commitment, and one is not worth making for a feature nothing
-// has asked for yet.
+// The two impulse-response paths, the four capture sources and the four channel names live here
+// rather than being parameters, because a path and a name are not values a host can automate or
+// interpolate. They are held as plain members with plain accessors — deliberately NOT a published
+// COM interface. The parent plug-in exposes one so that a GUI-less host can load captures; that is
+// a permanent commitment to a UID, and nothing has asked for it here yet.
+//
+// The authority for all ten strings is the PROCESSOR, which is the half that writes the state blob.
+// What lives here is a mirror, refreshed from setComponentState, exactly as the IR paths already
+// were — without it a reopened project draws every row empty while the audio plays correctly.
 
 #pragma once
 
+#include "engineconfig.h"
 #include "midilearn.h"
 #include "rationsids.h"
 
@@ -67,6 +70,32 @@ public:
     Steinberg::tresult getIrFile(int slot, Steinberg::char8 *buffer,
                                  Steinberg::int32 bufferSize) const;
 
+    // The settings page's four capture rows. An empty path clears that channel. `isDirectory` is
+    // the browser's own answer about what was picked, not a fresh look at the disk: a path can stop
+    // being a directory between the click and the question, and what the user chose is fixed at
+    // the click.
+    Steinberg::tresult setCaptureSource(int channel, const Steinberg::char8 *path,
+                                        bool isDirectory);
+    const std::string &capturePath(int channel) const;
+    bool captureIsDirectory(int channel) const;
+
+    // What a channel is called, and the three-deep rule behind it: the user's typed override, else
+    // the basename of whatever is loaded, else the channel's default name. channelName() resolves
+    // all three, which is why the head panel, the level rows and the MIDI rows can each just ask.
+    Steinberg::tresult setChannelName(int channel, const Steinberg::char8 *name);
+    const std::string &channelNameOverride(int channel) const;
+    std::string channelName(int channel) const;
+
+    // How many captures that channel holds, and whether they came from a folder. Both from the
+    // processor's capability report, so both are zero/false until the workers have caught up.
+    int entryCount(int channel) const;
+    bool bankIsDirectory(int channel) const;
+    // What the loaded captures state about their own levels, for greying an output mode they
+    // cannot honour.
+    bool bankHasLoudness(int channel) const;
+    bool bankHasInputLevel(int channel) const;
+    bool bankHasOutputLevel(int channel) const;
+
     //---from IMidiMapping------------
     // One ParamID per controller number, on every channel and every event bus. The channel is
     // deliberately ignored: this call returns a single parameter, so sixteen channels necessarily
@@ -111,12 +140,25 @@ private:
     static Steinberg::tresult copyPath(const std::string &src, Steinberg::char8 *buffer,
                                        Steinberg::int32 bufferSize);
 
+    // Retitle one parameter in place. What a generic (host-drawn) parameter UI shows in place of
+    // the editor's greyed-out controls: an option the loaded captures cannot honour reads
+    // "Output Mode (n/a)" there rather than looking available and doing nothing.
+    bool retitleParam(Steinberg::Vst::ParamID tag, const char *title);
+    // Re-derive every title that depends on what is loaded, and tell the host to re-read them.
+    // UI thread only — restartComponent is documented that way.
+    void refreshParamTitles();
+
     std::string mIrPath[kIrSlotCount];
+    std::string mCapturePath[kChannelCount];
+    bool mCaptureIsDir[kChannelCount] = {false, false, false, false};
+    std::string mChannelNameOverride[kChannelCount];
     RationsEditorView *mView = nullptr; // live editor, host UI/run-loop thread only
 
     // Last capability report from the processor, cached so an editor created later in the session
     // can be brought up to date the moment it attaches instead of waiting for the next report.
     int mEntryCount[kChannelCount] = {0, 0, 0, 0};
+    bool mBankIsDir[kChannelCount] = {false, false, false, false};
+    CaptureLevels mBankLevels[kChannelCount];
     std::vector<std::string> mCaptureNames[kChannelCount];
 
     // The editor's copy of the learn table. NOT the authority - the processor's is, because that

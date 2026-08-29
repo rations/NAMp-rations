@@ -73,6 +73,19 @@ for f in "$bundle" "$jackcheck"; do
     [ -e "$f" ] || { echo "switch-gate: $f is missing — build first" >&2; exit 1; }
 done
 
+# The four banks. The plug-in ships none — every bank is a folder the user loads — so this gate has
+# to say where they are, and it matters more here than in most places: a switch to an empty channel
+# is HELD rather than performed, so a run against missing captures would report switch latencies
+# that measured nothing at all and xrun counts of zero for the same reason.
+captures="${RATIONS_TEST_CAPTURES:-$root/captures}"
+for chan in Clean Crunch OD1 OD2; do
+    [ -d "$captures/$chan" ] || {
+        echo "switch-gate: $captures/$chan is missing" >&2
+        echo "  set RATIONS_TEST_CAPTURES to a directory holding Clean, Crunch, OD1 and OD2" >&2
+        exit 1
+    }
+done
+
 jackd_pid=$(pgrep -x jackd || true)
 [ -n "$jackd_pid" ] || { echo "switch-gate: no jackd running" >&2; exit 1; }
 
@@ -160,7 +173,7 @@ run_states() {  # $1 = label prefix
         name="${state##*|}"
         printf '  %-58s ' "$name"
         # shellcheck disable=SC2086
-        out=$("$jackcheck" "$bundle" --seconds "$seconds" $args 2>&1)
+        out=$("$jackcheck" "$bundle" --captures "$captures" --seconds "$seconds" $args 2>&1)
         block=$(echo "$out" | grep -o 'worst block .*' | sed 's/worst block *//')
         verdict=$(echo "$out" | grep -oE '^(PASSED|FAILED)')
         # No verdict at all means jackcheck never got far enough to have an opinion - no server,

@@ -379,51 +379,19 @@ foreach(_res IN LISTS RATIONS_IMG_FILES)
     list(APPEND RATIONS_IMG_PATHS "${RATIONS_ROOT}/resources/${_res}")
 endforeach()
 
-# The four capture banks. GLOBbed rather than listed by name, with
-# CONFIGURE_DEPENDS so adding or removing a capture re-runs configure: these are
-# content the author adds to over time, and a hand-maintained list of 35 file
-# names would silently drift out of date, which for a channel that then loads
-# short is a worse failure than an extra configure step. The channel names are
-# the ones src/rationsids.h maps each channel to; the glob is per channel rather
-# than recursive so a stray directory cannot quietly become a fifth bank.
+# No captures are built into the bundle, and nothing here looks for any.
 #
-# The captures are the author's own and are NOT published with the source (see
-# NOTICE), so a clone of this repository does not carry them and this is the
-# point where that is noticed. It is a hard error by default rather than a
-# warning, because the alternative is a bundle that builds, installs, loads and
-# then plays ramped silence - a failure that looks like a DSP bug and is not.
-# RATIONS_CAPTURES_DIR points the build at a bank held elsewhere;
-# RATIONS_ALLOW_NO_CAPTURES=ON builds the plug-in deliberately empty, which is
-# useful for working on the editor and is never a shippable bundle.
-set(RATIONS_CAPTURES_DIR "${RATIONS_ROOT}/captures" CACHE PATH
-    "Directory holding the four capture banks, one subdirectory per channel")
-option(RATIONS_ALLOW_NO_CAPTURES
-    "Build without capture banks - editor work only, produces a silent plug-in" OFF)
-
-set(RATIONS_CAPTURE_CHANNELS Clean Crunch OD1 OD2)
-foreach(_chan IN LISTS RATIONS_CAPTURE_CHANNELS)
-    file(GLOB _chan_captures CONFIGURE_DEPENDS "${RATIONS_CAPTURES_DIR}/${_chan}/*.nam")
-    if(NOT _chan_captures)
-        if(RATIONS_ALLOW_NO_CAPTURES)
-            message(WARNING
-                "[Rations] no .nam captures in ${RATIONS_CAPTURES_DIR}/${_chan} - channel ${_chan} "
-                "will output ramped silence. RATIONS_ALLOW_NO_CAPTURES is ON, so this is not a "
-                "build error; do not ship the result")
-        else()
-            message(FATAL_ERROR
-                "[Rations] no .nam captures found in ${RATIONS_CAPTURES_DIR}/${_chan}\n"
-                "  The four channel banks ship inside the bundle and the plug-in has no capture "
-                "browser, so a missing bank is a broken build rather than a runtime choice. The "
-                "captures are the author's own and are not published with the source.\n"
-                "  Point the build at a bank with -DRATIONS_CAPTURES_DIR=/path/to/captures "
-                "(one subdirectory per channel: Clean, Crunch, OD1, OD2), or build without one "
-                "with -DRATIONS_ALLOW_NO_CAPTURES=ON for editor work.")
-        endif()
-    endif()
-    list(LENGTH _chan_captures _n)
-    message(STATUS "[Rations] channel ${_chan}: ${_n} captures")
-    set(RATIONS_CAPTURES_${_chan} ${_chan_captures})
-endforeach()
+# They used to be: four banks were globbed out of a captures/ directory, installed
+# into Contents/Resources/captures/<channel>/, and a clone without them failed
+# configure outright. That made the plug-in an amp head that could only play one
+# person's amps, and made every build of it depend on files that are deliberately
+# not in this repository. Both are gone. The four banks are now whatever folder or
+# file the user picks on the settings page, remembered by absolute path in the
+# state blob, and an instance with nothing loaded outputs ramped silence rather
+# than failing to exist.
+#
+# The offline proofs still need captures to run against, and take a --captures
+# argument (or $RATIONS_TEST_CAPTURES) rather than reading them out of a bundle.
 
 # ---------------------------------------------------------------------------
 # The plug-in.
@@ -543,19 +511,6 @@ smtg_target_add_plugin_resources(Rations
     OUTPUT_SUBDIRECTORY img
 )
 
-# The capture banks, one subdirectory per channel. These are the product: the
-# plug-in has no capture browser, so what ships here is what the amp can sound
-# like. They are still parsed as untrusted input — a bundle is a directory
-# anyone can edit, and the resource directory can be redirected wholesale.
-foreach(_chan IN LISTS RATIONS_CAPTURE_CHANNELS)
-    if(RATIONS_CAPTURES_${_chan})
-        smtg_target_add_plugin_resources(Rations
-            RESOURCES ${RATIONS_CAPTURES_${_chan}}
-            OUTPUT_SUBDIRECTORY captures/${_chan}
-        )
-    endif()
-endforeach()
-
 target_compile_features(Rations PUBLIC cxx_std_17)
 target_compile_options(Rations PRIVATE -ffast-math -Wall)
 target_include_directories(Rations PRIVATE ${RATIONS_ROOT}/src)
@@ -611,7 +566,11 @@ add_executable(rations_offline
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
 )
-target_include_directories(rations_offline PRIVATE ${RATIONS_ROOT}/src)
+# The nlohmann header is here so the offline proof can read a capture's stated loudness straight
+# out of the .nam and assert that Normalized moves the output by exactly the amount that number
+# says it should. Header-only, and nothing else of the DSP is linked into this tool.
+target_include_directories(rations_offline PRIVATE ${RATIONS_ROOT}/src
+    ${NAM_CORE_DIR}/Dependencies/nlohmann)
 target_link_libraries(rations_offline PRIVATE sdk_hosting)
 target_compile_features(rations_offline PRIVATE cxx_std_17)
 target_compile_options(rations_offline PRIVATE -Wall)

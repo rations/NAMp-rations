@@ -333,11 +333,73 @@ void renderPedalboard(Canvas &c, ImageCache &, SvgCache &)
 // width and a different set of controls. For the trims that means both extremes,
 // the default, and a value in between; for MIDI it means learned, listening and
 // unlearned.
-void renderSettings(Canvas &c, ImageCache &, SvgCache &)
+void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
 {
     const float cx = static_cast<float>(geo::pageCX(geo::Page::Settings));
     c.setColor(geo::kBgColor);
     c.fillRect(c.bounds());
+
+    // --- the capture loaders -----------------------------------------------------------------
+    // Fixture values chosen to be the awkward ones rather than the tidy ones: a folder with a long
+    // name, a single capture, a user-typed override that is far wider than the field, and an empty
+    // channel. If a row can survive those four it can survive a user.
+    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor,
+                     geo::kCaptureHeading, cx, static_cast<float>(geo::kCaptureHeadingY));
+    {
+        struct CaptureFixture {
+            const char *name;
+            const char *text;
+            bool loaded;
+        };
+        const CaptureFixture kRows[geo::kCaptureRowCount] = {
+            {"JCM800", "JCM800  (12 captures)", true},
+            {"Deluxe Reverb", "BF Deluxe 1965 vol6.nam  (single capture)", true},
+            {"A Ridiculously Long Channel Name", "Marshall Silver Jubilee  (9 captures)", true},
+            {"OD2", geo::kCapturePlaceholder, false},
+        };
+        for (int i = 0; i < geo::kCaptureRowCount; ++i) {
+            const Rect r(geo::kMidiRowX, geo::kCaptureRowY0 + i * geo::kMidiRowPitch,
+                         geo::kMidiRowW, geo::kMidiRowH);
+            c.setColor(0x0C0B0A);
+            c.fillRoundRect(r, 4.0f);
+            c.setColor(geo::kGold, 190);
+            c.setPenSize(1.0f);
+            c.strokeRoundRect(r, 4.0f);
+
+            const float base = r.centerY() + geo::kMidiRowTextSize * 0.36f;
+            // A folder or a file, the same way the row itself decides it — the icon is part of
+            // what the row has to fit, so the audit draws it rather than assuming it is free.
+            if (cairo_surface_t *icon =
+                    svgs.getByHeight(kRows[i].loaded ? "Folder" : "File", geo::kRowIconH))
+                c.drawImageCentered(icon, r.x + 8 + geo::kRowIconH * 0.5f, r.centerY());
+
+            c.setFont(Font::Title);
+            c.setFontSize(geo::kMidiRowTextSize);
+            c.setColor(geo::kTextColor);
+            c.drawString(c.clipToWidth(kRows[i].name, geo::kCaptureNameW).c_str(),
+                         r.x + geo::kCaptureNameX, base);
+
+            c.setFont(Font::Body);
+            c.setFontSize(geo::kFileRowTextSize);
+            c.setColor(kRows[i].loaded ? geo::kTextColor : geo::kDimColor);
+            c.drawString(c.clipToWidth(kRows[i].text, geo::kCaptureTextW).c_str(),
+                         r.x + geo::kCaptureTextX, base);
+
+            if (kRows[i].loaded) {
+                const Rect clear(r.right() - geo::kCaptureClearInset - geo::kCaptureClearW,
+                                 r.y + geo::kCaptureClearInset, geo::kCaptureClearW,
+                                 geo::kMidiRowH - 2 * geo::kCaptureClearInset);
+                c.setColor(geo::kDimColor);
+                c.setPenSize(1.5f);
+                const Rect x = clear.inset(6.0f);
+                c.strokeLine(x.left(), x.top(), x.right(), x.bottom());
+                c.strokeLine(x.left(), x.bottom(), x.right(), x.top());
+                c.setPenSize(1.0f);
+            }
+        }
+    }
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     geo::kCaptureFootnote, cx, static_cast<float>(geo::kCaptureFootnoteY));
 
     drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, geo::kLevelHeading,
                      cx, static_cast<float>(geo::kLevelHeadingY));
@@ -466,6 +528,71 @@ void renderSettings(Canvas &c, ImageCache &, SvgCache &)
                      geo::kSettingsFootnote, cx, static_cast<float>(geo::kSettingsFootnoteY));
     drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
                      geo::kSettingsFootnote2, cx, static_cast<float>(geo::kSettingsFootnote2Y));
+
+    // --- the output section ------------------------------------------------------------------
+    // Drawn with Calibrated GATED and the calibration block live, which is the mixed state: a
+    // capture set that states an input level but no output level. Rendering it all-available would
+    // never show what a greyed row looks like, and that row carries the longest string on the page.
+    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor,
+                     geo::kOutputHeading, cx, static_cast<float>(geo::kOutputHeadingY));
+    {
+        constexpr int kCurrent = kOutputNormalized;
+        for (int i = 0; i < kOutputModeCount; ++i) {
+            const Rect row(geo::kMidiRowX, geo::kOutputRowY0 + i * geo::kOutputRowPitch,
+                           geo::kOutputRowW, geo::kOutputRowH);
+            const bool gated = i == kOutputCalibrated;
+            const float dotCX = row.x + geo::kOutputDotCX;
+            const float dotCY = row.centerY();
+
+            c.setColor(gated ? 0x4A4740 : geo::kAccent);
+            c.setPenSize(1.5f);
+            c.strokeEllipse(dotCX, dotCY, geo::kOutputDotR, geo::kOutputDotR);
+            if (i == kCurrent) {
+                c.setColor(geo::kAccentBright);
+                c.fillEllipse(dotCX, dotCY, geo::kOutputDotFillR, geo::kOutputDotFillR);
+            }
+            c.setPenSize(1.0f);
+
+            std::string label(geo::kOutputModeNames[i]);
+            if (gated)
+                label += geo::kOutputUnsupported;
+            c.setFont(Font::Title);
+            c.setFontSize(geo::kMidiRowTextSize);
+            c.setColor(gated ? 0x6A6460 : geo::kTextColor);
+            c.drawString(label.c_str(), row.x + geo::kOutputTextX,
+                         dotCY + geo::kMidiRowTextSize * 0.36f);
+        }
+
+        // The same bat the faceplate uses, through the same helper: a second way of drawing a
+        // switch would be a second thing to keep looking like the first.
+        constexpr geo::ToggleSpec kCalToggle = {kCalibrateInputId, geo::kCalToggleCX,
+                                                geo::kCalToggleCY, nullptr, false};
+        drawToggle(c, images, kCalToggle, /*on=*/true);
+        const Rect tog(geo::kCalToggleCX - geo::kToggleW * 0.5f,
+                       geo::kCalToggleCY - geo::kToggleH * 0.5f, geo::kToggleW, geo::kToggleH);
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(geo::kCalibrateLabel, static_cast<float>(geo::kCalLabelX),
+                     tog.centerY() + geo::kMidiRowTextSize * 0.36f);
+
+        const Rect value(geo::kCalValueX, geo::kCalValueY, geo::kCalValueW, geo::kCalValueH);
+        c.setColor(0x000000, 170);
+        c.fillRoundRect(value, 4.0f);
+        c.setColor(geo::kGold, 190);
+        c.setPenSize(1.0f);
+        c.strokeRoundRect(value, 4.0f);
+        char dbu[24];
+        snprintf(dbu, sizeof(dbu), "%+.1f dBu", ranges::kCalDefault);
+        c.setFont(Font::Body);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(dbu, value.centerX() - c.stringWidth(dbu) * 0.5f,
+                     value.centerY() + geo::kMidiRowTextSize * 0.36f);
+    }
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     geo::kOutputFootnote, cx, static_cast<float>(geo::kOutputFootnoteY));
+
     drawButton(c, geo::kBackButton);
 }
 

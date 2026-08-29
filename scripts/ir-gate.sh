@@ -22,15 +22,21 @@ root="${RATIONS_IR_DIR:-$HOME/Impulse-Responses}"
 build="${RATIONS_BUILD_DIR:-build}"
 bundle="$build/VST3/Release/Rations.vst3"
 tool="$build/rations_ircheck"
+# The cabinet stage is measured through the whole chain, so the channels have to be sounding
+# something: with no captures loaded the rack outputs ramped silence and every blend measurement
+# would be taken on nothing. The plug-in ships no captures, so this has to say where they are.
+captures="${RATIONS_TEST_CAPTURES:-$(cd "$(dirname "$0")/.." && pwd)/captures}"
 
 V="$root/Celestion Vintage 30 - 2002 Mesa Boogie Traditional 4x12 - SM57"
 B="$root/1970 Fender Bassman 2x15 Cabinet with Original CTS Speakers IR Files"
 
-for p in "$tool" "$bundle" "$V" "$B"; do
+for p in "$tool" "$bundle" "$V" "$B" "$captures/Clean"; do
     if [[ ! -e "$p" ]]; then
         echo "ir-gate: missing $p" >&2
         [[ "$p" == "$V" || "$p" == "$B" ]] &&
             echo "  set RATIONS_IR_DIR to a library holding these two cabinets" >&2
+        [[ "$p" == "$captures/Clean" ]] &&
+            echo "  set RATIONS_TEST_CAPTURES to a directory holding Clean, Crunch, OD1 and OD2" >&2
         exit 2
     fi
 done
@@ -55,4 +61,4 @@ add "$V/V30 UL 4FB 4x12 SM57 1.50in 0.0in 7603.wav" \
 add "$B/1970 Bassman Cabinet CTS - 121 Upper - Cone Edge.wav" \
     "$V/V30 LR 4FB 4x12 SM57 0.75in 0.0in 7603.wav"
 
-exec "$tool" "$bundle" "${args[@]}" "$@"
+exec "$tool" "$bundle" --captures "$captures" "${args[@]}" "$@"

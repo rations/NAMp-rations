@@ -61,7 +61,15 @@ public:
     // to 1.75 dB and not monotonically, so compensating after the mix would step audibly at every
     // crossing. Mode 0 = Raw (no compensation, gain rises across the bank the way the amp's own
     // control does), 1 = Normalized, 2 = Calibrated.
-    void setOutputMode(int mode, double calLevelDbu);
+    //
+    // `calibrateInput` is the other half of the same decision and is handled here rather than by
+    // the caller, for a reason specific to this plug-in: the caller runs four of these engines and
+    // three of them belong to another thread, so it cannot read the metadata the offset is computed
+    // from. Working it out here also makes it per BRANCH, which is what it has to be — a dial
+    // sweeping between two captures that state different input levels crossfades between their two
+    // offsets exactly as it already crossfades between their two output compensations, instead of
+    // stepping at the crossing.
+    void setOutputMode(int mode, double calLevelDbu, bool calibrateInput);
 
     // NativeBlockProcessor.
     void processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames) override;
@@ -132,6 +140,12 @@ private:
         long long samplesLive = 0;
         int prewarmSamples = 0;
         double gain = 1.0;
+        // Applied to this branch's model INPUT, before its own process call, and 1.0 unless input
+        // calibration is on. Everything else in this engine touches outputs; this one does not,
+        // which is why it needs saying: the ring the channel switch replays is written upstream of
+        // here, so the priming and the live path see the identical scaling and the proof that a
+        // switched channel converges on a continuously-running reference is unaffected.
+        double inputGain = 1.0;
 
         bool bound() const
         {
@@ -142,6 +156,10 @@ private:
     void bindBranches(int k, bool wantUpper);
     void bindOne(Branch &branch, int index);
     double entryGain(const BankEntry &entry) const;
+    // What this capture's model wants its input scaled by, so that the interface's level matches
+    // the level the capture was made at. 1.0 unless calibration is on AND this capture says what
+    // level it expects — a capture that does not state one is left alone rather than guessed at.
+    double entryInputGain(const BankEntry &entry) const;
     void refreshGains();
     // How much of `branch`'s receptive field has been fed with live input, 0 .. 1. A branch may
     // not reach weight 1.0 before this reaches 1.0, or its contribution at full weight would not
@@ -175,12 +193,16 @@ private:
 
     int mOutputMode = 0;
     double mCalLevelDbu = 12.0;
+    bool mCalibrateInput = false;
 
     double mNativeSampleRate = kNativeSampleRate;
     long long mPrewarmForSlew = 0;
 
     std::vector<NAM_SAMPLE> mScratchA;
     std::vector<NAM_SAMPLE> mScratchB;
+    // Where a branch's input is scaled when its inputGain is not 1.0. Written and consumed inside
+    // one sub-chunk, so one buffer serves both branches even when they want different gains.
+    std::vector<NAM_SAMPLE> mScratchIn;
 };
 
 } // namespace Rations

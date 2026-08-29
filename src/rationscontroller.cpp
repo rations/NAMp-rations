@@ -4,10 +4,13 @@
 #include "rationsids.h"
 #include "rationsview.h"
 
+#include "platform/respath.h" // pathBaseName, for the channel-name fallback
+
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ustring.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -106,6 +109,29 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     auto *blend = new Vst::RangeParameter(STR16("Cab Blend"), kIrBlendId, nullptr, 0.0, 1.0, 0.0);
     blend->setPrecision(2);
     parameters.addParameter(blend);
+
+    // The output section, at the bottom of the settings page.
+    //
+    // Normalized is the default, which is the upstream plug-in's choice and this plug-in's own
+    // previous hard-wired behaviour, so a project made before this parameter existed sounds the
+    // same now that it does. The parent plug-in defaults to Raw instead, and that is not an
+    // inconsistency to be tidied away: there a single dial sweeps one bank whose whole point is
+    // that gain rises across it the way the amp's own control does, and normalizing would flatten
+    // exactly that. Here the four channels are four different amps and levelling them is useful.
+    auto *outputMode = new Vst::StringListParameter(STR16("Output Mode"), kOutputModeId);
+    outputMode->appendString(STR16("Raw"));
+    outputMode->appendString(STR16("Normalized"));
+    outputMode->appendString(STR16("Calibrated"));
+    outputMode->setNormalized(normFromOutputMode(kOutputNormalized));
+    parameters.addParameter(outputMode);
+
+    parameters.addParameter(STR16("Calibrate Input"), nullptr, 1, 0.0,
+                            Vst::ParameterInfo::kCanAutomate, kCalibrateInputId);
+    auto *calLevel =
+        new Vst::RangeParameter(STR16("Input Calibration Level"), kInputCalLevelId, STR16("dBu"),
+                                ranges::kCalMin, ranges::kCalMax, ranges::kCalDefault);
+    calLevel->setPrecision(1);
+    parameters.addParameter(calLevel);
 
     // Processor -> editor feedback. Hidden and read-only: never automated, never persisted,
     // invisible to generic parameter UIs.
@@ -291,6 +317,49 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
         setParamNormalized(kChannelLevelId[c], level);
     }
 
+    // The output section, added in state version 4. An older project opens at Normalized with no
+    // calibration, because that is what every build before version 4 was hard-wired to and so is
+    // what that project actually sounded like.
+    double outputMode = normFromOutputMode(kOutputNormalized);
+    double calibrate = 0.0;
+    double calLevel = 0.6; // +12 dBu
+    if (version >= 4) {
+        if (!streamer.readDouble(outputMode) || !streamer.readDouble(calibrate) ||
+            !streamer.readDouble(calLevel))
+            return kResultFalse;
+    }
+    setParamNormalized(kOutputModeId, normFromOutputMode(outputModeFromNorm(outputMode)));
+    setParamNormalized(kCalibrateInputId, calibrate > 0.5 ? 1.0 : 0.0);
+    setParamNormalized(kInputCalLevelId, std::clamp(calLevel, 0.0, 1.0));
+
+    // The four capture sources and names. Read here for exactly the reason the IR paths above are:
+    // they are not parameters, and the editor has no other way to learn them. Skip this and a
+    // reopened project draws four empty capture rows and four default channel names over captures
+    // that are audibly playing.
+    //
+    // Nothing is SENT from here. The processor read the same blob and has already issued its own
+    // loads; sending again would rebuild all four banks a second time for nothing.
+    for (int c = 0; c < kChannelCount; ++c) {
+        mCapturePath[c].clear();
+        mChannelNameOverride[c].clear();
+        mCaptureIsDir[c] = false;
+        if (version < 4)
+            continue;
+        int32 isDir = 0;
+        if (!streamer.readInt32(isDir))
+            return kResultFalse;
+        if (char8 *p = streamer.readStr8()) {
+            mCapturePath[c] = p;
+            delete[] p;
+        }
+        if (char8 *p = streamer.readStr8()) {
+            mChannelNameOverride[c] = p;
+            delete[] p;
+        }
+        mCaptureIsDir[c] = !mCapturePath[c].empty() && isDir != 0;
+    }
+
+    refreshParamTitles();
     if (mView)
         mView->FilesChanged();
     return kResultOk;
@@ -313,12 +382,22 @@ tresult PLUGIN_API RationsController::notify(Vst::IMessage *message)
         return kResultFalse;
 
     for (int c = 0; c < kChannelCount; ++c) {
-        int64 count = 0;
-        std::string attr(kCapsEntryCountAttr);
-        attr += kChannelDirName[c];
-        if (attrs->getInt(attr.c_str(), count) != kResultOk || count < 0)
-            count = 0;
-        mEntryCount[c] = static_cast<int>(count);
+        // Mirror of the sender's own helper: the attribute names are a wire format, and spelling
+        // the concatenation out five times is five chances for a channel to go quietly missing.
+        auto channelAttr = [&](const char *prefix, int64 fallback) -> int64 {
+            std::string attr(prefix);
+            attr += kChannelDefaultName[c];
+            int64 value = 0;
+            if (attrs->getInt(attr.c_str(), value) != kResultOk)
+                return fallback;
+            return value;
+        };
+        const int64 count = channelAttr(kCapsEntryCountAttr, 0);
+        mEntryCount[c] = count > 0 ? static_cast<int>(count) : 0;
+        mBankIsDir[c] = channelAttr(kCapsIsDirAttr, 0) != 0;
+        mBankLevels[c].hasLoudness = channelAttr(kCapsHasLoudnessAttr, 0) != 0;
+        mBankLevels[c].hasInputLevel = channelAttr(kCapsHasInLevelAttr, 0) != 0;
+        mBankLevels[c].hasOutputLevel = channelAttr(kCapsHasOutLevelAttr, 0) != 0;
         mCaptureNames[c].clear();
     }
 
@@ -349,6 +428,7 @@ tresult PLUGIN_API RationsController::notify(Vst::IMessage *message)
         }
     }
 
+    refreshParamTitles();
     if (mView)
         mView->ModelCapsChanged(mEntryCount, mCaptureNames);
     return kResultOk;
@@ -440,6 +520,203 @@ tresult RationsController::setIrFile(int slot, const char8 *path)
     if (mView)
         mView->FilesChanged();
     return result;
+}
+
+//------------------------------------------------------------------------
+// The four capture rows. Same shape as setIrFile above and for the same reasons, including the
+// no-peer case: sendMessage cannot distinguish "the processor refused" from "there was nobody to
+// ask", and only the first is a reason to leave the row empty.
+//
+// Unlike the parent plug-in there is nothing to clear here. NAMp's single-capture and bank loaders
+// are alternatives and each wipes the other; each channel here owns exactly one source, so a load
+// replaces what that channel had and no other channel is involved.
+tresult RationsController::setCaptureSource(int channel, const char8 *path, bool isDirectory)
+{
+    if (channel < 0 || channel >= kChannelCount)
+        return kInvalidArgument;
+
+    IPtr<Vst::IMessage> message = owned(allocateMessage());
+    if (!message)
+        return kResultFalse;
+    message->setMessageID(kMsgLoadCapture[channel]);
+    const char *p = path ? path : "";
+    message->getAttributes()->setBinary(kMsgPathAttr, p, static_cast<uint32>(strlen(p)));
+    // An empty path is a clear, and a clear is not a directory whatever the caller said. Recording
+    // it as one would make the next state blob claim a folder that is not there.
+    message->getAttributes()->setInt(kMsgIsDirAttr, (*p && isDirectory) ? 1 : 0);
+    const tresult result = sendMessage(message);
+    if (result != kResultOk && getPeer())
+        return result;
+
+    mCapturePath[channel] = p;
+    mCaptureIsDir[channel] = *p && isDirectory;
+    // The names and counts this channel had describe captures that are no longer loaded. Clearing
+    // them here rather than waiting for the reply keeps the row from naming the old bank's
+    // captures for the second or so the new ones take to build.
+    mEntryCount[channel] = 0;
+    mBankIsDir[channel] = mCaptureIsDir[channel];
+    mBankLevels[channel] = CaptureLevels();
+    mCaptureNames[channel].clear();
+    refreshParamTitles();
+    if (mView)
+        mView->FilesChanged();
+    return result;
+}
+
+const std::string &RationsController::capturePath(int channel) const
+{
+    static const std::string kEmpty;
+    if (channel < 0 || channel >= kChannelCount)
+        return kEmpty;
+    return mCapturePath[channel];
+}
+
+bool RationsController::captureIsDirectory(int channel) const
+{
+    return channel >= 0 && channel < kChannelCount && mCaptureIsDir[channel];
+}
+
+//------------------------------------------------------------------------
+tresult RationsController::setChannelName(int channel, const char8 *name)
+{
+    if (channel < 0 || channel >= kChannelCount)
+        return kInvalidArgument;
+
+    IPtr<Vst::IMessage> message = owned(allocateMessage());
+    if (!message)
+        return kResultFalse;
+    message->setMessageID(kMsgChannelName);
+    const char *n = name ? name : "";
+    message->getAttributes()->setInt(kMidiRowAttr, channel);
+    message->getAttributes()->setBinary(kMsgNameAttr, n, static_cast<uint32>(strlen(n)));
+    const tresult result = sendMessage(message);
+
+    // Updated whatever the processor said. A name is not a load: there is nothing for the other
+    // half to refuse, and it holds a copy only because it is the half that writes the state blob.
+    mChannelNameOverride[channel] = n;
+    if (mView)
+        mView->FilesChanged();
+    return result;
+}
+
+const std::string &RationsController::channelNameOverride(int channel) const
+{
+    static const std::string kEmpty;
+    if (channel < 0 || channel >= kChannelCount)
+        return kEmpty;
+    return mChannelNameOverride[channel];
+}
+
+//------------------------------------------------------------------------
+// The three-deep name rule, resolved in exactly one place so the head panel's dial legend, the
+// settings page's level rows and its MIDI rows cannot drift apart.
+//
+// The basename is the middle step and it is the one that carries the feature. Whether a host hands
+// keyboard events to an embedded plug-in view is the host's business and not something this code
+// can guarantee, so a name that could ONLY be typed would be a name some users could never set. A
+// folder called "JCM800" names the channel JCM800 with nothing typed at all.
+std::string RationsController::channelName(int channel) const
+{
+    if (channel < 0 || channel >= kChannelCount)
+        return std::string();
+    if (!mChannelNameOverride[channel].empty())
+        return mChannelNameOverride[channel];
+    if (!mCapturePath[channel].empty()) {
+        // For a single capture this drops the ".nam", which is what the user would have called it
+        // anyway; for a folder there is no extension to drop and it is the folder's own name.
+        std::string base = pathBaseName(mCapturePath[channel]);
+        if (!mCaptureIsDir[channel]) {
+            const size_t dot = base.find_last_of('.');
+            if (dot != std::string::npos && dot > 0)
+                base.erase(dot);
+        }
+        if (!base.empty())
+            return base;
+    }
+    return kChannelDefaultName[channel];
+}
+
+//------------------------------------------------------------------------
+int RationsController::entryCount(int channel) const
+{
+    return (channel >= 0 && channel < kChannelCount) ? mEntryCount[channel] : 0;
+}
+
+bool RationsController::bankIsDirectory(int channel) const
+{
+    return channel >= 0 && channel < kChannelCount && mBankIsDir[channel];
+}
+
+bool RationsController::bankHasLoudness(int channel) const
+{
+    return channel >= 0 && channel < kChannelCount && mBankLevels[channel].hasLoudness;
+}
+
+bool RationsController::bankHasInputLevel(int channel) const
+{
+    return channel >= 0 && channel < kChannelCount && mBankLevels[channel].hasInputLevel;
+}
+
+bool RationsController::bankHasOutputLevel(int channel) const
+{
+    return channel >= 0 && channel < kChannelCount && mBankLevels[channel].hasOutputLevel;
+}
+
+//------------------------------------------------------------------------
+// Retitle a parameter in place and let the host re-read the titles. This is what a generic
+// (host-drawn) parameter UI shows in place of the editor's greyed-out controls: an option the
+// loaded captures cannot honour reads "(n/a)" there rather than looking available and doing
+// nothing.
+// Returns whether the title actually changed, which the caller needs: restartComponent is a heavy
+// request - the host invalidates every cached parameter info and asks for all of them again - and
+// this is reached from the capability poll, which fires several times a second while the banks
+// build. Rewriting the same string and then telling the host to re-read everything would be a dozen
+// full parameter re-reads for no change at all.
+bool RationsController::retitleParam(Vst::ParamID tag, const char *title)
+{
+    Vst::Parameter *param = parameters.getParameter(tag);
+    if (!param)
+        return false;
+    Vst::String128 wanted = {};
+    UString(wanted, USTRINGSIZE(wanted)).fromAscii(title);
+    if (memcmp(param->getInfo().title, wanted, sizeof(wanted)) == 0)
+        return false;
+    memcpy(param->getInfo().title, wanted, sizeof(wanted));
+    return true;
+}
+
+// Which channel's captures the titles describe is the SOUNDING one, for the same reason the
+// editor greys against it: the mode applies per capture and falls back to unity where the metadata
+// is absent, so what a player needs to know is whether it will do anything to what they are
+// hearing now.
+void RationsController::refreshParamTitles()
+{
+    const int active = static_cast<int>(channelFromNorm(getParamNormalized(kActiveChannelId)));
+    // A channel with nothing loaded says nothing about what its captures support, because it has
+    // none — so nothing is marked unavailable until there is something to have said it. Same rule
+    // the editor's own greying follows, and the same one the upstream plug-in follows by leaving
+    // its controls alone entirely while no model is loaded.
+    const bool loaded = mEntryCount[active] > 0;
+    const bool hasLoudness = !loaded || bankHasLoudness(active);
+    const bool hasIn = !loaded || bankHasInputLevel(active);
+    const bool hasOut = !loaded || bankHasOutputLevel(active);
+
+    bool changed = false;
+    changed |=
+        retitleParam(kOutputModeId, (hasLoudness || hasOut) ? "Output Mode" : "Output Mode (n/a)");
+    changed |= retitleParam(kCalibrateInputId, hasIn ? "Calibrate Input" : "Calibrate Input (n/a)");
+    changed |= retitleParam(kInputCalLevelId,
+                            hasIn ? "Input Calibration Level" : "Input Calibration Level (n/a)");
+    for (int c = 0; c < kChannelCount; ++c) {
+        // The gain dial is named after the channel and says so when there is nothing to sweep: a
+        // bank of one is a bank the dial cannot travel across.
+        const std::string gain = channelName(c) + (mEntryCount[c] > 1 ? " Gain" : " Gain (n/a)");
+        changed |= retitleParam(kChannelGainId[c], gain.c_str());
+        changed |= retitleParam(kChannelLevelId[c], (channelName(c) + " Level").c_str());
+    }
+    // Only when something actually moved — see retitleParam.
+    if (changed && componentHandler)
+        componentHandler->restartComponent(Vst::kParamTitlesChanged);
 }
 
 // Truncation is a failure rather than a silent short path: a caller that acted on half a path

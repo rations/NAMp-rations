@@ -9,10 +9,18 @@
 // so a caller can work in the same logical layout the geometry header describes rather than
 // having to know where the host put its window.
 //
+// It also types, and that is a different question from clicking rather than the same one twice.
+// A plug-in view is forbidden by the SDK from taking keys off its own platform window: the host
+// receives them and passes them in through IPlugView::onKeyDown. So a synthesised key press proves
+// something a synthesised click does not — whether the HOST is willing to route keyboard input to
+// an embedded editor at all, which is host policy and varies. The one control here that reads
+// typed text is deliberately the second way to do its job for exactly that reason.
+//
 // Driven by editor-drive.sh, which knows how to find the window in the first place.
 
 #include <X11/Xlib.h>
 #include <X11/extensions/XTest.h>
+#include <X11/keysym.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,10 +46,41 @@ static void button(int down)
     XFlush(display);
 }
 
+// One key, by keysym. Focus is set to the target window first: XTEST delivers to whatever has
+// the input focus, and without this the keys land wherever the desktop last put it - which looks
+// exactly like a plug-in that ignored them.
+static void pressKeysym(KeySym sym)
+{
+    const KeyCode code = XKeysymToKeycode(display, sym);
+    if (code == 0)
+        return;
+    XTestFakeKeyEvent(display, code, True, CurrentTime);
+    XTestFakeKeyEvent(display, code, False, CurrentTime);
+    XFlush(display);
+    usleep(30000);
+}
+
+static void typeString(const char *text)
+{
+    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    XFlush(display);
+    usleep(100000);
+    for (const char *p = text; *p; ++p) {
+        // ASCII only, which is all the field being driven accepts. A Latin-1 keysym IS the
+        // character's own code for this range, so no table is needed.
+        if (*p == ' ')
+            pressKeysym(XK_space);
+        else
+            pressKeysym((KeySym)(unsigned char)*p);
+    }
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 5) {
-        fprintf(stderr, "usage: editor-drive <click|drag> <window-id> <x> <y> [dx dy]\n");
+    if (argc < 4) {
+        fprintf(stderr,
+                "usage: editor-drive <click|drag> <window-id> <x> <y> [dx dy]\n"
+                "       editor-drive <type|key> <window-id> <text|keysym-name>\n");
         return 2;
     }
     display = XOpenDisplay(NULL);
@@ -50,6 +89,32 @@ int main(int argc, char **argv)
         return 1;
     }
     window = (Window)strtoul(argv[2], NULL, 0);
+
+    if (strcmp(argv[1], "type") == 0) {
+        typeString(argv[3]);
+        XCloseDisplay(display);
+        return 0;
+    }
+    if (strcmp(argv[1], "key") == 0) {
+        XSetInputFocus(display, window, RevertToParent, CurrentTime);
+        XFlush(display);
+        usleep(100000);
+        const KeySym sym = XStringToKeysym(argv[3]);
+        if (sym == NoSymbol) {
+            fprintf(stderr, "editor-drive: unknown keysym '%s'\n", argv[3]);
+            XCloseDisplay(display);
+            return 2;
+        }
+        pressKeysym(sym);
+        XCloseDisplay(display);
+        return 0;
+    }
+
+    if (argc < 5) {
+        fprintf(stderr, "editor-drive: click and drag need x and y\n");
+        XCloseDisplay(display);
+        return 2;
+    }
     const int x = atoi(argv[3]);
     const int y = atoi(argv[4]);
 

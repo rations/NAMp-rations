@@ -17,6 +17,9 @@
 #include "pluginterfaces/base/funknown.h"
 #include "pluginterfaces/vst/vsttypes.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace Rations
 {
 
@@ -33,15 +36,22 @@ enum ParamIDs : Steinberg::Vst::ParamID {
 
     // RETIRED NAMp IDs — never reuse these numbers in this plug-in.
     //   107  Tone Stack on/off   Bass/Middle/Treble are always on here, by design.
-    //   109  Output Mode         pinned to Normalized; not a user choice.
     //   110  Slim                fixed at 1.0 (full size), permanently. The captures support a
     //                            smaller variant and it would cost less CPU; this plug-in always
     //                            plays them whole, so there is nothing here to expose.
-    //   111  Calibrate Input     no input calibration in this plug-in.
-    //   112  Input Cal Level     likewise.
     //   113  Capture             NAMp's single bank position. Rations has four banks, so the
     //                            meaning changed; a new ID per channel is used instead of
     //                            silently redefining this one under existing automation.
+    //
+    //   109  Output Mode         These three DO exist in this plug-in now, and they still carry
+    //   111  Calibrate Input     NAMp's meaning — but at 150..152, not here. Retiring an ID is a
+    //   112  Input Cal Level     promise about a NUMBER, and the promise does not become void
+    //                            because the control came back; a project written against a
+    //                            build in which 109 did not exist must not later find something
+    //                            answering on that lane. Giving them fresh numbers costs one
+    //                            line and keeps the retirement list a list of facts rather than
+    //                            of intentions. It does mean Rations and NAMp put the same three
+    //                            controls on different lanes, which is the price.
 
     // The channel. ONE list parameter rather than four mutually-exclusive booleans: that makes
     // "exactly one channel is on" a property of the type instead of an invariant four places
@@ -78,6 +88,25 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     kCrunchLevelId = 141,
     kOd1LevelId = 142,
     kOd2LevelId = 143,
+
+    // The output section, on the settings page below MIDI learn. Three controls, one block,
+    // because the second two only mean anything when the first is set to Calibrated.
+    //
+    // These are NAMp's controls at Rations' own numbers — see the retirement note above for why
+    // they are not at 109/111/112. What each one does is unchanged and is applied in exactly the
+    // place NAMp applies it: the mode per BRANCH inside the crossfade, before the mix, because
+    // adjacent captures of one amp differ in measured loudness by more than a decibel and not
+    // monotonically, so compensating after the mix would step the level at every crossing.
+    //
+    // Default is Normalized, which is the upstream plug-in's default and this plug-in's previous
+    // hard-wired behaviour, so an existing project sounds the same after this parameter exists as
+    // it did before. NAMp defaults to Raw instead, because there a single dial sweeps a bank
+    // whose whole point is that gain rises across it the way the amp's own control does, and
+    // normalizing would flatten exactly that. Here the four channels are four different amps and
+    // levelling them is the useful default.
+    kOutputModeId = 150,     // list: 0 Raw, 1 Normalized, 2 Calibrated
+    kCalibrateInputId = 151, // toggle, default off
+    kInputCalLevelId = 152,  // -60 .. +60 dBu, default 12
 
     // Hidden, read-only parameters (processor -> editor via output parameter changes; never
     // automated, never persisted). The meters carry the per-block peak level mapped to 0 .. 1
@@ -124,8 +153,8 @@ inline constexpr Steinberg::Vst::ProgramListID kMidiProgramListId = kMidiProgram
 inline constexpr int kMidiCcCount = 128;
 inline constexpr int kMidiProgramCount = 128;
 
-// Channel, kChannelCount and kChannelDirName are defined in engineconfig.h, which carries no VST3
-// dependency, because the channel rack and the offline switch proof both name channels without
+// Channel, kChannelCount and kChannelDefaultName are defined in engineconfig.h, which carries no
+// VST3 dependency, because the channel rack and the offline switch proof both name channels without
 // linking the plug-in.
 
 // The per-channel gain parameter, indexed by Channel.
@@ -135,6 +164,54 @@ inline constexpr Steinberg::Vst::ParamID kChannelGainId[kChannelCount] = {
 // The per-channel output trim, indexed by Channel.
 inline constexpr Steinberg::Vst::ParamID kChannelLevelId[kChannelCount] = {
     kCleanLevelId, kCrunchLevelId, kOd1LevelId, kOd2LevelId};
+
+// Decode kChannelId's normalized value to a Channel, and back. A kIsList parameter with N steps
+// reports value i as i / (N - 1), so this is that inverse, rounded and clamped: a host is free to
+// hand over any double in [0, 1], including one that lands between steps.
+//
+// These live here rather than with the processor because they are not the processor's: the
+// controller decodes the same parameter to work out which channel's captures a title should
+// describe, and the editor decodes it to light a lamp. One definition, three readers.
+inline Channel channelFromNorm(double norm)
+{
+    const double steps = static_cast<double>(kChannelCount - 1);
+    int i = static_cast<int>(std::lround(std::clamp(norm, 0.0, 1.0) * steps));
+    i = std::clamp(i, 0, kChannelCount - 1);
+    return static_cast<Channel>(i);
+}
+
+inline constexpr double normFromChannel(Channel ch)
+{
+    const int i = (ch < 0) ? 0 : (ch >= kChannelCount ? kChannelCount - 1 : static_cast<int>(ch));
+    return static_cast<double>(i) / static_cast<double>(kChannelCount - 1);
+}
+
+// What kOutputModeId selects, and the only definition of the mapping between its value space and
+// its normalized value. The conversion is trivial and that is exactly why it lives here: the parent
+// plug-in spells `norm * 2.0 + 0.5` out at three sites and `index * 0.5` at a fourth, so the number
+// of entries is written into four files and a fourth mode could not be added without finding all
+// of them. Order is the upstream plug-in's and must not be reordered — it is a saved value.
+enum OutputMode : int {
+    kOutputRaw = 0,        // the model's own level, untouched
+    kOutputNormalized = 1, // each capture's measured loudness brought to a common target
+    kOutputCalibrated = 2, // the capture's stated output level against the user's interface level
+    kOutputModeCount = 3,
+};
+
+inline constexpr double normFromOutputMode(OutputMode mode)
+{
+    return static_cast<double>(mode) / static_cast<double>(kOutputModeCount - 1);
+}
+
+// Snapped through a clamp rather than trusted: this decodes an automation value and a state blob,
+// both of which are untrusted input, and an out-of-range mode would index nothing in particular.
+inline OutputMode outputModeFromNorm(double norm)
+{
+    const double steps = static_cast<double>(kOutputModeCount - 1);
+    int i = static_cast<int>(std::lround(std::clamp(norm, 0.0, 1.0) * steps));
+    i = std::clamp(i, 0, kOutputModeCount - 1);
+    return static_cast<OutputMode>(i);
+}
 
 // Plain-value ranges shared by the processor (denormalization) and the controller
 // (RangeParameter setup). Keep the two sides in sync via these.
@@ -152,16 +229,27 @@ inline constexpr double kMeterMinDb = -70.0, kMeterMaxDb = 0.0;
 // leave the useful part of it a third the size. Widening it before a release costs nothing;
 // widening it after one changes what saved automation means, so it starts narrow.
 inline constexpr double kLevelMin = -12.0, kLevelMax = 12.0, kLevelDefault = 0.0;
+// The interface's calibration level (dBu), used only when kOutputModeId is Calibrated or
+// kCalibrateInputId is on. The range and the default are the upstream plug-in's, and the default is
+// not arbitrary: +12 dBu at 0 dBFS is the commonest figure among audio interfaces, so a player who
+// enables calibration without knowing their interface's number is already close.
+inline constexpr double kCalMin = -60.0, kCalMax = 60.0, kCalDefault = 12.0;
 } // namespace ranges
 
 // Version of the state blob written by getState and accepted by setState / setComponentState.
 // Version 1 ended after the two IR paths; version 2 appends the MIDI learn table; version 3
-// appends the four channel trims. An older blob is still loaded - it is a project saved before
-// the pedal or the trims could do anything - so this is a minimum-compatible marker rather than a
-// gate, and the readers check the version before reading anything an older writer would not have
-// written. A version 1 or 2 project therefore loads with every trim at 0 dB, which is exactly the
-// level it was mixed at.
-inline constexpr Steinberg::int32 kStateVersion = 3;
+// appends the four channel trims; version 4 appends the output section and the four capture
+// sources. An older blob is still loaded - it is a project saved before the pedal, the trims or
+// the loader could do anything - so this is a minimum-compatible marker rather than a gate, and
+// the readers check the version before reading anything an older writer would not have written.
+//
+// What an older project opens as: every trim at 0 dB, which is exactly the level it was mixed at;
+// output mode at Normalized, which is what every build before version 4 was hard-wired to; and
+// calibration off. The one thing it CANNOT open as is the captures it was mixed with, because a
+// version 3 build resolved those from inside the bundle and never wrote down where they came
+// from. There is no honest way to recover that, so such a project opens with four empty channels
+// and the settings page asking for them - silence a user can fix, rather than a guess at a path.
+inline constexpr Steinberg::int32 kStateVersion = 4;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.
@@ -174,6 +262,31 @@ inline constexpr const char *kMsgLoadIrB = "RationsLoadIRB";
 inline constexpr const char *kMsgPathAttr = "path";
 // Indexed by slot, so neither side has to spell out which of the two it means twice.
 inline constexpr const char *kMsgLoadIr[kIrSlotCount] = {kMsgLoadIrA, kMsgLoadIrB};
+
+// Capture loading, controller -> processor, one message per channel. Attribute "path" carries a
+// UTF-8 byte string (setBinary, never setString: setString is UTF-16 into a caller-sized buffer and
+// the SDK's own text-message helper silently truncates at 255 characters). An empty path clears the
+// channel. Attribute "isDir" says which of ModelBank's two loaders to call, and it is the browser's
+// own answer rather than a fresh stat of the path: a path can stop being a directory between the
+// click and the question, and the user's intent was fixed at the click.
+//
+// Unlike the parent plug-in there is no mutual exclusion to maintain here. NAMp's single-capture
+// and bank loaders clear each other because it has one bank; each channel here has exactly one
+// source, so a load simply replaces what that channel had.
+inline constexpr const char *kMsgLoadCaptureClean = "RationsLoadCaptureClean";
+inline constexpr const char *kMsgLoadCaptureCrunch = "RationsLoadCaptureCrunch";
+inline constexpr const char *kMsgLoadCaptureOd1 = "RationsLoadCaptureOD1";
+inline constexpr const char *kMsgLoadCaptureOd2 = "RationsLoadCaptureOD2";
+inline constexpr const char *kMsgLoadCapture[kChannelCount] = {
+    kMsgLoadCaptureClean, kMsgLoadCaptureCrunch, kMsgLoadCaptureOd1, kMsgLoadCaptureOd2};
+inline constexpr const char *kMsgIsDirAttr = "isDir";
+
+// The user's name for a channel, controller -> processor: int "row" plus a UTF-8 "name". It travels
+// to the processor for one reason only - the processor is what writes the state blob - and nothing
+// on the audio path ever reads it. An empty name means "no override": the channel falls back to the
+// basename of whatever is loaded, and then to its default name.
+inline constexpr const char *kMsgChannelName = "RationsChannelName";
+inline constexpr const char *kMsgNameAttr = "name";
 
 // The editor asking the processor to re-send its capability message. The four banks are scanned,
 // parsed and built on worker threads, so at the moment a load is acknowledged the capture names do
@@ -204,8 +317,22 @@ inline constexpr const char *kMidiArmedAttr = "armed";
 // the capture each dial is sitting on and can disable what the current capture set does not
 // support.
 inline constexpr const char *kMsgModelCaps = "RationsModelCaps";
-// Per-channel capture counts, as int attributes named by kChannelDirName.
+// Per-channel attributes, each named by its own prefix plus kChannelDefaultName[c] - so the wire
+// format is keyed by channel rather than positional, and adding an attribute cannot shift another
+// channel's answer the way the names blob below could.
 inline constexpr const char *kCapsEntryCountAttr = "entryCount";
+// 1 when that channel's source is a directory of captures rather than a single file. The editor
+// needs it to word the row ("12 captures" against "single capture") and cannot derive it: a bank of
+// one is a bank of one whichever way it was loaded.
+inline constexpr const char *kCapsIsDirAttr = "isDir";
+// What the loaded captures actually state about their own levels, so the editor can grey an output
+// mode the current captures cannot honour. These are read off the built bank entries and must be
+// the REAL values: the parent plug-in hard-codes the level pair to zero here, with the result that
+// Calibrated and the whole input-calibration block are permanently dead in its shipped build even
+// for captures that do carry the metadata. That is a bug to avoid, not a pattern to follow.
+inline constexpr const char *kCapsHasLoudnessAttr = "hasLoudness";
+inline constexpr const char *kCapsHasInLevelAttr = "hasInLevel";
+inline constexpr const char *kCapsHasOutLevelAttr = "hasOutLevel";
 // The capture filenames of every channel, in the same gain order the dials sweep, joined by '\n'
 // within a channel and by '\f' between channels, carried as UTF-8 through setBinary (setString
 // would need UTF-16 and a fixed buffer). Re-deriving the order in the editor would duplicate the

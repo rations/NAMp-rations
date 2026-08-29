@@ -190,8 +190,10 @@ int main(int argc, char **argv)
         Rations::ChannelRack rack;
         rack.prepare(kBlock, Rations::kNativeSampleRate);
         rack.start();
-        rack.loadChannel(Rations::kChannelClean, dir, 1.0, Rations::engine::kChunk);
-        rack.loadChannel(Rations::kChannelOd1, dirB, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(Rations::kChannelClean, dir, /*isDirectory=*/true, 1.0,
+                         Rations::engine::kChunk);
+        rack.loadChannel(Rations::kChannelOd1, dirB, /*isDirectory=*/true, 1.0,
+                         Rations::engine::kChunk);
         for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         if (rack.progress() < 1.0f) {

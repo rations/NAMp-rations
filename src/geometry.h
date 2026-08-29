@@ -75,11 +75,22 @@ constexpr int kCabPageH = 460;
 constexpr int kPedalPageW = 480;
 constexpr int kPedalPageH = 220;
 
-// Settings: four channel-level rows, four MIDI learn rows, and two footnotes.
-// The levels are first because every user has four channels and only some own a
-// footswitch.
-constexpr int kSettingsPageW = 560;
-constexpr int kSettingsPageH = 512;
+// Settings: four sections, stacked in one column - the capture loaders, the
+// channel levels, MIDI learn, and the output section.
+//
+// Captures come first because a channel with nothing loaded does nothing, so it
+// is the section a new user needs before any other one means anything. Output
+// comes last because it is set once when a rig is assembled. In between, levels
+// before MIDI, because every user has four channels to balance and only some own
+// a footswitch.
+//
+// 928 units tall, which is taller than any other page here by a long way. It is
+// not letterboxed or scrolled: the editor fits whichever page is showing inside
+// the window and this one simply gets a smaller scale in a short window - see
+// kSettingsScaleMin, which is the one thing about the page swap this section
+// changed.
+constexpr int kSettingsPageW = 640;
+constexpr int kSettingsPageH = 928;
 
 struct PageSize {
     int w, h;
@@ -112,16 +123,37 @@ constexpr int pageCX(Page p)
 constexpr double kScaleMin = 0.66;
 constexpr double kScaleMax = 1.50;
 
+// The settings page gets its own floor, because it is 928 units tall where the
+// head is 403 and the same multiple would mean a very different window. At 0.66
+// it would be 613 device px, which is already more than the usable height of a
+// 768-line laptop screen once the host's own furniture is accounted for; at 0.50
+// it is 464, which fits with room to spare.
+//
+// A lower floor rather than a scrollbar, and that is a deliberate choice about
+// what this editor is: one logical canvas, one cairo_scale at compose, mouse
+// divided by that scale before hit-testing. A scroll offset would put a second
+// coordinate rule on one page - one the browser overlay, the drag handling and
+// the wheel would all have to know about - and the wheel is already spoken for
+// on this page, where it nudges a channel trim by half a decibel. Shrinking is
+// the honest trade: the whole page stays visible and legible-if-small, rather
+// than becoming legible-in-pieces.
+constexpr double kSettingsScaleMin = 0.50;
+
+constexpr double pageScaleMin(Page p)
+{
+    return p == Page::Settings ? kSettingsScaleMin : kScaleMin;
+}
+
 // Rounded, not truncated, so these agree with the sizes the editor actually
 // produces — constrainSize() rounds, and it is the single authority on what is
 // a legal size.
 constexpr int pageMinW(Page p)
 {
-    return static_cast<int>(pageSize(p).w * kScaleMin + 0.5);
+    return static_cast<int>(pageSize(p).w * pageScaleMin(p) + 0.5);
 }
 constexpr int pageMinH(Page p)
 {
-    return static_cast<int>(pageSize(p).h * kScaleMin + 0.5);
+    return static_cast<int>(pageSize(p).h * pageScaleMin(p) + 0.5);
 }
 constexpr int pageMaxW(Page p)
 {
@@ -453,6 +485,10 @@ constexpr FileRow kIrRowA = {kCabX, kIrRowY, kIrRowW, kFileRowH, "Select IR...",
 constexpr FileRow kIrRowB = {kCabX + kIrRowW + kIrRowGap, kIrRowY, kIrRowW, kFileRowH,
                              "Select IR (optional)...",   "wav"};
 constexpr int kRowIconW = 20; // status icon inset at the left of a row
+// How tall that icon is drawn. Here rather than in the view, because the
+// settings page's capture rows draw the same icon and the art audit measures
+// both — three copies of one number is how two of them drift.
+constexpr int kRowIconH = 16;
 
 // Prev/next arrows, as offsets from a row's x so they travel with it.
 // The two are 16 apart rather than 20, and the reason is the art rather than
@@ -476,26 +512,56 @@ constexpr int kPedalCaptionSize = 14;
 constexpr int kPedalCaptionDY = 28;
 
 // --- Settings page ----------------------------------------------------------
-// Two sections, each four rows: the channel trims, then MIDI learn. Levels are
-// on top because every user has four channels to balance and only some own a
-// footswitch, so the section that is always useful is the one that does not
-// have to be scrolled past.
+// Four sections down one column: the capture loaders, the channel trims, MIDI
+// learn, and the output section. The first three are four rows each and share
+// one grid; the fourth is a different shape and is laid out below them.
 //
-// Both sections share kMidiRowX / kMidiRowW / kMidiRowH / kMidiRowPitch and the
+// All of them share kMidiRowX / kMidiRowW / kMidiRowH / kMidiRowPitch and the
 // same kMidiTextX for their second column, so the channel names and the controls
-// beside them line up down the whole page rather than forming two grids that
+// beside them line up down the whole page rather than forming four grids that
 // nearly agree.
 constexpr int kSettingsHeadingSize = 18;
 constexpr int kMidiRowX = 24;
-constexpr int kMidiRowW = kSettingsPageW - 2 * kMidiRowX; // 512
+constexpr int kMidiRowW = kSettingsPageW - 2 * kMidiRowX; // 592
 constexpr int kMidiRowH = 32;
 constexpr int kMidiRowPitch = 40;
 constexpr int kMidiRowCount = kChannelToggleCount;
 constexpr int kMidiRowTextSize = 15;
 
-// Section 1: channel levels.
-constexpr int kLevelHeadingY = 58;
-constexpr int kLevelRowY0 = 76;
+// Section 1: the capture loaders. One row per channel, each carrying the
+// channel's name on the left and what is loaded on the right, with a clear box
+// at the far end - the same shape as the cabinet page's IR rows, because it is
+// the same act.
+constexpr int kCaptureHeadingY = 76;
+constexpr int kCaptureRowY0 = 94;
+constexpr int kCaptureRowCount = kChannelToggleCount;
+// The name field, as an offset from the row's left edge. It sits where the level
+// sliders and the MIDI binding text start, so the second column is one column
+// down the whole page.
+constexpr int kCaptureNameX = 40;
+// Wide enough for a real amp name rather than for the four defaults. Measured
+// against the art audit's own fixtures: "Deluxe Reverb" in Michroma at
+// kMidiRowTextSize is the case that decided this, because it is an entirely
+// ordinary thing to call a channel and it did not fit at 116. What is left over
+// still leaves the path column more room than a basename needs.
+constexpr int kCaptureNameW = 170;
+// Where the loaded path is written, and how much room it has before the clear
+// box. Roboto rather than Michroma: a path is a variable-length string that has
+// to stay legible when clipped, which is the one thing this panel keeps a
+// proportional face for.
+constexpr int kCaptureTextX = kCaptureNameX + kCaptureNameW + 12; // 168
+constexpr int kCaptureClearW = 24;
+constexpr int kCaptureClearInset = 6;
+constexpr int kCaptureTextW = kMidiRowW - kCaptureClearInset - kCaptureClearW - kCaptureTextX - 8;
+// The build-progress bar along the bottom edge of a row, as the parent plug-in
+// draws it: two units of the row's own border rather than a widget, because what
+// it reports is transient and a bank that is built has nothing to say.
+constexpr int kCaptureProgressH = 2;
+constexpr int kCaptureFootnoteY = 268;
+
+// Section 2: channel levels.
+constexpr int kLevelHeadingY = 296;
+constexpr int kLevelRowY0 = 314;
 constexpr int kLevelRowCount = kChannelToggleCount;
 // The slider's track, as an offset from the row's left edge. Starts at
 // kMidiTextX so it begins where the MIDI section's binding text does.
@@ -523,13 +589,13 @@ constexpr float kLevelCentreSnap = 4.0f;
 // a round number, coarse enough that the whole range is a manageable number of
 // clicks away.
 constexpr double kLevelWheelDb = 0.5;
-// The levels' own footnote, between the two sections.
-constexpr int kLevelFootnoteY = 248;
+// The levels' own footnote, between the sections.
+constexpr int kLevelFootnoteY = 486;
 
-// Section 2: MIDI learn. The gate is deliberately absent from it: the gate is not
+// Section 3: MIDI learn. The gate is deliberately absent from it: the gate is not
 // on the MIDI path at all.
-constexpr int kSettingsHeadingY = 278;
-constexpr int kMidiRowY0 = 296;
+constexpr int kSettingsHeadingY = 514;
+constexpr int kMidiRowY0 = 532;
 // Where the learned binding is written, as an offset from the row's left edge.
 // Far enough right to clear the widest channel name at kMidiRowTextSize, which
 // the art audit measures rather than assumes.
@@ -546,9 +612,41 @@ constexpr int kMidiButtonGap = 6;
 // Clear is the one that appears once there is a binding to describe.
 constexpr int kMidiTextW =
     kMidiRowW - kMidiLearnInset - kMidiLearnW - kMidiButtonGap - kMidiClearW - kMidiTextX - 8;
-constexpr int kSettingsFootnoteY = 470;
-constexpr int kSettingsFootnote2Y = 488;
+constexpr int kSettingsFootnoteY = 704;
+constexpr int kSettingsFootnote2Y = 722;
 constexpr int kSettingsFootnoteSize = 12;
+
+// Section 4: the output section. Three radio rows for the mode, then the input
+// calibration pair beside each other on one row.
+//
+// It is last because it is set once when a rig is assembled, and it is here at
+// all because it was previously nowhere: the plug-in was hard-wired to
+// Normalized with no way to see or change it, while both plug-ins it descends
+// from expose exactly these three controls.
+constexpr int kOutputHeadingY = 750;
+constexpr int kOutputRowY0 = 768;
+constexpr int kOutputRowPitch = 26;
+constexpr int kOutputRowH = 22;
+constexpr int kOutputRowW = 300;
+// The radio dot, as an offset from the row's left edge, and its text.
+constexpr float kOutputDotCX = 10.0f;
+constexpr float kOutputDotR = 6.0f;
+constexpr float kOutputDotFillR = 3.0f;
+constexpr int kOutputTextX = 26;
+// The calibration row: a bat toggle on the left and the dBu value box to its
+// right, both drawn only as far as the loaded captures can honour them.
+constexpr int kCalRowY = 860;
+constexpr int kCalToggleCX = kMidiRowX + 40;
+constexpr int kCalToggleCY = kCalRowY + 20;
+constexpr int kCalLabelX = kMidiRowX + 70;
+constexpr int kCalValueX = kMidiRowX + 320;
+constexpr int kCalValueW = 110;
+constexpr int kCalValueH = 26;
+constexpr int kCalValueY = kCalRowY + 7;
+// One wheel click on the calibration level, in dB. Whole decibels: an interface's
+// stated level is a round number and this is how a user lands on theirs.
+constexpr double kCalWheelDb = 1.0;
+constexpr int kOutputFootnoteY = 906;
 
 // The Learn button's two states, named here so the panel and the art audit
 // cannot disagree about which strings have to fit inside it.
@@ -576,6 +674,28 @@ constexpr const char *kLevelFootnote = "Right-click a slider to return it to 0.0
 constexpr const char *kSettingsFootnote2 =
     "CC and Program Change answer on any MIDI channel; a note answers on its own.";
 
+// The capture section's heading and footnote. The footnote is the one place the
+// two ways of naming a channel are explained, because neither is discoverable:
+// nothing about a row says that loading a folder renames the channel after it,
+// and nothing says the name can then be typed over.
+constexpr const char *kCaptureHeading = "Load Captures";
+constexpr const char *kCaptureFootnote = "A folder of captures, or a single one. The channel takes "
+                                         "the folder's name; click it to rename.";
+constexpr const char *kCapturePlaceholder = "Select a capture, or a folder of captures...";
+
+// The output section. The three mode names are the upstream plug-in's and are in
+// its order, which is also the order the parameter's value space is in.
+constexpr const char *kOutputHeading = "Output";
+constexpr const char *kOutputModeNames[3] = {"Raw", "Normalized", "Calibrated"};
+constexpr const char *kCalibrateLabel = "Calibrate Input";
+// What a greyed mode says instead of nothing. Which channel's captures it is
+// talking about is the SOUNDING one, which is what the footnote is for: without
+// it a player watches an option grey itself on a footswitch stomp with no way to
+// know why.
+constexpr const char *kOutputUnsupported = "  [not in this channel's captures]";
+constexpr const char *kOutputFootnote =
+    "Greyed options are ones the sounding channel's own captures do not carry the metadata for.";
+
 // --- File browser overlay ---------------------------------------------------
 // Drawn over the cabinet page (the only page with anything to load), so it is
 // sized to that page rather than to the head's.
@@ -583,6 +703,16 @@ constexpr int kBrowserX = 16;
 constexpr int kBrowserY = 16;
 constexpr int kBrowserW = kCabPageW - 2 * kBrowserX; // 608
 constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
+
+// The settings page opens the same browser for its four capture rows, and it is
+// a much taller page — the cabinet's card centred on it would leave 230 units of
+// dimmed panel above and below, and the card is a LIST, so the height is the one
+// dimension it can actually use. Inset the same 16 either side and give it the
+// page it is drawn over.
+constexpr int kCaptureBrowserX = 16;
+constexpr int kCaptureBrowserY = 40;
+constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 608
+constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 848
 
 } // namespace geo
 } // namespace Rations

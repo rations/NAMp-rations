@@ -51,7 +51,10 @@
 #include "public.sdk/source/common/memorystream.h"
 
 #include "midilearn.h"
+#include "base/source/fstreamer.h"
+
 #include "rationsids.h"
+#include "toolcaptures.h"
 
 #include <algorithm>
 #include <chrono>
@@ -74,6 +77,8 @@ struct Options {
     double rate = 48000.0;
     int block = 128;
     int settleMs = 6000;
+    // A directory holding one subdirectory per channel. Defaults to $RATIONS_TEST_CAPTURES.
+    std::string captures;
 };
 
 int gFailures = 0;
@@ -118,6 +123,12 @@ bool parseArgs(int argc, char **argv, Options &opt)
             if (!next(v))
                 return false;
             opt.block = static_cast<int>(v);
+        } else if (a == "--captures") {
+            // Read straight off argv rather than through next(), which parses a double: this is
+            // the one option here whose value is a path.
+            if (i + 1 >= argc)
+                return false;
+            opt.captures = argv[++i];
         } else if (a == "--settle-ms") {
             double v = 0;
             if (!next(v))
@@ -131,8 +142,8 @@ bool parseArgs(int argc, char **argv, Options &opt)
         }
     }
     if (opt.bundle.empty()) {
-        fprintf(stderr, "usage: rations_midicheck <Rations.vst3> [--rate R] [--block N] "
-                        "[--settle-ms MS]\n");
+        fprintf(stderr, "usage: rations_midicheck <Rations.vst3> [--captures <dir>] "
+                        "[--rate R] [--block N] [--settle-ms MS]\n");
         return false;
     }
     if (opt.block < 16 || opt.block > 8192 || opt.rate < 8000.0)
@@ -258,17 +269,55 @@ std::pair<Vst::ParamID, double> cc(int number, int value)
     return {static_cast<Vst::ParamID>(kMidiCcBaseId + number), value / 127.0};
 }
 
-// The four channel trims are the last thing a version 3 blob holds, so they are read off the tail
-// rather than by re-parsing everything in front of them - which would make this a second copy of
-// the state layout, and a second place for it to be wrong.
+// The four channel trims, read out of a state blob.
+//
+// This used to take them off the TAIL, on the ground that they were the last thing a version 3 blob
+// held and that reading forward would be a second copy of the state layout. Version 4 appends the
+// output section and the four capture sources after them, so the tail is now three doubles and four
+// variable-length path records, and there is no offset from the end that finds a trim. So it does
+// read forward - and, since it has to, it reads forward through everything rather than seeking by
+// arithmetic, which is the version of "a second copy of the layout" that fails loudly when the
+// layout changes under it instead of returning four plausible wrong numbers.
 bool readTrims(MemoryStream &s, double out[kChannelCount])
 {
-    const int64 size = s.getSize();
-    const char *data = s.getData();
-    const int64 want = static_cast<int64>(sizeof(double)) * kChannelCount;
-    if (!data || size < want)
+    s.seek(0, IBStream::kIBSeekSet, nullptr);
+    IBStreamer streamer(&s, kLittleEndian);
+
+    int32 version = 0;
+    if (!streamer.readInt32(version) || version < 1)
         return false;
-    memcpy(out, data + (size - want), static_cast<size_t>(want));
+
+    double skip = 0.0;
+    // Eight controls, the channel, four gain dials, the blend.
+    for (int i = 0; i < 8 + 1 + kChannelCount + 1; ++i)
+        if (!streamer.readDouble(skip))
+            return false;
+    // The two IR paths.
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        char8 *p = streamer.readStr8();
+        if (!p)
+            return false;
+        delete[] p;
+    }
+    // The MIDI table, from version 2.
+    if (version >= 2) {
+        for (int row = 0; row < kMidiLearnRowCount; ++row) {
+            int32 word = 0;
+            if (!streamer.readInt32(word))
+                return false;
+        }
+    }
+    // A version 1 or 2 blob stops here and has no trims to read. That is not a failure of this
+    // helper - it is the case the caller is asserting about - so it answers with the defaults the
+    // plug-in itself would apply.
+    if (version < 3) {
+        for (int c = 0; c < kChannelCount; ++c)
+            out[c] = 0.5;
+        return true;
+    }
+    for (int c = 0; c < kChannelCount; ++c)
+        if (!streamer.readDouble(out[c]))
+            return false;
     return true;
 }
 
@@ -340,6 +389,21 @@ int main(int argc, char **argv)
     FUnknownPtr<Vst::IAudioProcessor> processor(component);
     if (!component || !processor) {
         fprintf(stderr, "rations_midicheck: no audio processor\n");
+        return 1;
+    }
+
+    // A learned footswitch has to reach the channel that is actually SOUNDING, not merely the
+    // parameter, and this tool asserts exactly that — so the four channels have to have something
+    // to sound. With nothing loaded every channel is ramped silence and the assertion would pass
+    // against four identical nothings.
+    opt.captures = RationsTools::captureRoot(opt.captures);
+    if (opt.captures.empty()) {
+        RationsTools::printCaptureUsage("rations_midicheck");
+        return 1;
+    }
+    if (!RationsTools::loadCaptureRoot(hostContext, component, opt.captures)) {
+        fprintf(stderr, "rations_midicheck: the plug-in refused a capture directory under %s\n",
+                opt.captures.c_str());
         return 1;
     }
 
@@ -632,6 +696,16 @@ int main(int argc, char **argv)
     // parameter and is held back until the target channel's capture exists.
     printf("audio\n");
     {
+        // Reload the banks. The state section above deliberately pushes version 1 and version 3
+        // blobs at the plug-in, and neither of those names any captures - a build that wrote them
+        // resolved its banks from inside its own bundle and never recorded where they came from.
+        // So loading one CLEARS all four channels, which is the correct answer to "this project
+        // specifies no captures" and leaves nothing here for a footswitch to switch to.
+        if (!RationsTools::loadCaptureRoot(hostContext, component, opt.captures)) {
+            fprintf(stderr, "rations_midicheck: could not reload captures from %s\n",
+                    opt.captures.c_str());
+            return 1;
+        }
         printf("        (waiting %d ms for the banks)\n", opt.settleMs);
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(opt.settleMs);
