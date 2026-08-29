@@ -59,8 +59,13 @@ namespace
 // Every raster layer the editor loads. Keep in step with gui/make_assets.sh and
 // with the RATIONS_IMG_FILES list in CMakeLists.txt.
 const char *const kRequiredImages[] = {
-    "head",           "cabinet",          "dial",        "led_on", "led_off",
+    "head",         "cabinet",       "dial",          "led_on",        "led_off",
     "switch_up_ring", "switch_down_ring", "meter_track",
+    // The pedalboard. The five enclosures and the footswitch cap; the pedals'
+    // knobs and LEDs are the very same dial/led_on/led_off named above, which is
+    // why there are no pedal-specific entries for them.
+    "pedal-boost", "pedal-chorus", "pedal-flanger", "pedal-delay", "pedal-reverb",
+    "pedal_switch",
 };
 // Every icon the editor rasterises. Folder is the author's own; the rest are
 // the original plug-in's, unmodified.
@@ -313,16 +318,43 @@ void renderCabinet(Canvas &c, ImageCache &images, SvgCache &icons)
 }
 
 //------------------------------------------------------------------------
-void renderPedalboard(Canvas &c, ImageCache &, SvgCache &)
+void renderPedalboard(Canvas &c, ImageCache &images, SvgCache &)
 {
-    const float cx = static_cast<float>(geo::pageCX(geo::Page::Pedalboard));
     c.setColor(geo::kBgColor);
     c.fillRect(c.bounds());
-    drawCenteredText(c, Font::Title, geo::kPedalPlaceholderSize, geo::kDimColor, "Pedalboard", cx,
-                     static_cast<float>(geo::kPedalPlaceholderY));
-    drawCenteredText(c, Font::Body, geo::kPedalCaptionSize, geo::kDimColor,
-                     "overdrive, flanger, chorus, delay, reverb", cx,
-                     static_cast<float>(geo::kPedalPlaceholderY + geo::kPedalCaptionDY));
+
+    // Deliberately a copy of RationsEditorView::drawPedalboardStatic rather than a
+    // call to it: this tool links the graphics stack, not the plug-in, which is
+    // what lets it audit the art without a host. The two are kept in step by the
+    // asset and text audits below failing when they drift.
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        const geo::PedalSpec &p = geo::kPedals[i];
+        c.drawImage(images.get(p.art),
+                    Rect(static_cast<float>(geo::kPedalLeft(i)), static_cast<float>(p.y),
+                         static_cast<float>(geo::kPedalW), static_cast<float>(geo::kPedalH)));
+    }
+
+    c.setColor(geo::kDimColor);
+    c.setPenSize(geo::kPedalCablePen);
+    for (int i = 0; i + 1 < geo::kPedalCount; ++i) {
+        if (geo::kPedals[i].post != geo::kPedals[i + 1].post)
+            continue;
+        const float x0 = static_cast<float>(geo::kPedalLeft(i) + geo::kPedalW);
+        const float x1 = static_cast<float>(geo::kPedalLeft(i + 1));
+        const float y = static_cast<float>(geo::kPedals[i].y + geo::kPedalJackY);
+        const float d = (x1 - x0) * 0.35f;
+        c.strokeBezier(x0, y, x0 + d, y + geo::kPedalCableSag, x1 - d, y + geo::kPedalCableSag, x1,
+                       y);
+    }
+
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kPedalRowLegendSize);
+    c.setColor(geo::kDimColor);
+    c.drawString("PRE", static_cast<float>(geo::kPedalRowLegendX),
+                 static_cast<float>(geo::kPedalRow1Y - geo::kPedalRowLegendDY));
+    c.drawString("POST", static_cast<float>(geo::kPedalRowLegendX),
+                 static_cast<float>(geo::kPedalRow2Y - geo::kPedalRowLegendDY));
+
     drawButton(c, geo::kBackButton);
 }
 
@@ -785,11 +817,20 @@ bool auditText(FontStack &fonts)
     fits.push_back({"ir placeholder", Font::Body, geo::kFileRowTextSize, geo::kIrRowB.placeholder,
                     geo::kIrRowW - geo::kIrTextDX - 10.0f});
 
-    // Pedalboard page.
-    fits.push_back({"pedal heading", Font::Title, geo::kPedalPlaceholderSize, "Pedalboard",
-                    geo::kPedalPageW - 32.0f});
-    fits.push_back({"pedal caption", Font::Body, geo::kPedalCaptionSize,
-                    "overdrive, flanger, chorus, delay, reverb", geo::kPedalPageW - 32.0f});
+    // Pedalboard page. Each pedal's name has to fit its own enclosure, not the
+    // page, and the allowance is the body without its jack lugs — a name that ran
+    // over the lugs would sit on the cable rather than on the box.
+    for (int i = 0; i < geo::kPedalCount; ++i)
+        fits.push_back({geo::kPedals[i].name, Font::Title, geo::kPedalNameSize,
+                        geo::kPedals[i].name,
+                        static_cast<float>(geo::kPedalBodyRight - geo::kPedalBodyLeft)});
+    // The row legend sits in the band ABOVE its row, not beside it, so its
+    // allowance is the page's own width less the margin it starts at. (The first
+    // version of this measured the space to the LEFT of the leftmost pedal, which
+    // is exactly zero — the POST row's first enclosure starts at the same x the
+    // legend does. The audit caught it, which is what the audit is for.)
+    fits.push_back({"pedal row legend", Font::Title, geo::kPedalRowLegendSize, "POST",
+                    static_cast<float>(geo::kPedalPageW - 2 * geo::kPedalRowLegendX)});
 
     // Settings page.
     fits.push_back({"settings heading", Font::Title, geo::kSettingsHeadingSize, "MIDI Learn",

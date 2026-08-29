@@ -68,6 +68,48 @@ DIAL_PX=256                   # square; drawn at 56x56, extra headroom for rotat
 LED_PX=128                    # source size, drawn at 18x18
 SWITCH_W=112; SWITCH_H=184    # 4x of the 28x46 draw size
 METER_W=80;  METER_H=408      # 4x of the 20x102 draw size
+
+# ---- Pedalboard -------------------------------------------------------------
+# Every pedal-*-base.png is the SAME 494x740 export and all five trim to the SAME
+# 468x691, so one layout serves all five enclosures and a re-export that moves any
+# of them is caught by make_pedals.sh.
+#
+# 468x691, not the 470x693 an alpha bounding box reports: `-fuzz 6% -trim` is what
+# actually produces the asset and it takes one more pixel of antialiasing off each
+# edge. The number here has to be the one the pipeline yields, or the check below
+# fails on its own output. Control positions measured on the 494x740 export are
+# therefore referenced to +13+21, not +12+20.
+#
+# Stored at the art's own trimmed size and downscaled at draw time, which is the
+# cabinet's arrangement rather than the head's: the head is stored at its draw
+# size for a 1:1 blit because it IS the window, while a pedal is drawn at 190x280
+# (a 2.46x downscale) and would be soft if it were stored that small and then
+# scaled back up at kScaleMax. ImageCache::getScaled caches the result per size.
+PEDAL_SRC_W=468; PEDAL_SRC_H=691
+PEDAL_W=190;     PEDAL_H=281   # logical draw size; mirrored in src/geometry.h
+PEDAL_NAMES="boost chorus flanger delay reverb"
+
+# The board's own canvas, and the grid the five sit on. Two rows: PRE carries two
+# pedals centred as a pair, POST carries three centred as a triple, both about the
+# page centre, with the same 22-unit gap between neighbours and a 24-unit margin
+# at each edge. 3*190 + 2*22 + 2*24 = 662 across; the header band the back button
+# lives in (50) + 20 + 281 + 30 + 281 + 19 = 681 down. Mirrored in src/geometry.h.
+PEDAL_PAGE_W=662; PEDAL_PAGE_H=681
+PEDAL_GAP=22
+PEDAL_ROW1_Y=70; PEDAL_ROW2_Y=380
+PEDAL_PRE_CX0=225;  PEDAL_PRE_CX1=437
+PEDAL_POST_CX0=119; PEDAL_POST_CX1=331; PEDAL_POST_CX2=543
+
+# The footswitch cap, given the same treatment as the dial: cropped square about
+# its own centre and alpha-masked to a circle, so it can be blitted on its pivot
+# without a straight cut through its drop shadow. Measured on the source with an
+# alpha>100 bounding box: content 107x108 at +17+12, so the cap centre is
+# (70.5, 66) and its content radius is at most 54.
+PSWITCH_CX=70; PSWITCH_CY=66
+PSWITCH_SIDE=116               # 2*58: an inscribed circle of r=58 never clips
+PSWITCH_MASK_R=56              # >= 54 (content) and < 58 (half-side)
+PSWITCH_PX=128                 # stored square, drawn at 44x44
+
 # There is no badge asset. The "Rations" wordmark is drawn as text in Michroma
 # at run time, the way the author's other plug-in draws its own name.
 

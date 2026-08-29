@@ -35,6 +35,7 @@
 #include "irblend.h"
 #include "midilearn.h"
 #include "nativeresampler.h"
+#include "pedals/pedalchain.h"
 #include "rationsids.h"
 
 #include "ImpulseResponse.h"
@@ -92,7 +93,10 @@ private:
     // matches it against the table and performs what that row says. Audio thread; allocates
     // nothing, takes no lock, and never calls the controller.
     void midiTrigger(MidiMsg msg, int channel, int data1);
-    void applyDsp(const float *in, float *out, Steinberg::int32 numSamples);
+    // Stereo out, because the POST pedals are where this plug-in stops being mono. `outR` is null
+    // when the host gave a mono output bus; everything up to and including the cabinet is mono
+    // either way, so only the tail changes.
+    void applyDsp(const float *in, float *outL, float *outR, Steinberg::int32 numSamples);
     bool loadIr(int slot, const std::string &path); // message thread only
     // Run a unit impulse through a freshly loaded IR to capture what it actually does - after
     // resampling to the host rate, after the class's own gain, after its 8192-sample truncation -
@@ -210,6 +214,17 @@ private:
     DSP_SAMPLE *mIrMixPtr = nullptr;
     DSP_SAMPLE *mWorkPtrInput = nullptr;
     DSP_SAMPLE *mWorkPtrOutput = nullptr;
+
+    // --- the pedalboard ---------------------------------------------------------------------
+    pedals::PedalChain mPedals;
+    // The two stereo buffers the POST chain works in. Allocated with everything else in
+    // allocateBuffers; nothing downstream of the cabinet allocates on the audio thread.
+    std::vector<DSP_SAMPLE> mPostBufL;
+    std::vector<DSP_SAMPLE> mPostBufR;
+    // Every pedal control, normalized, written by RT parameter handling and by setState. Denorm
+    // happens once per sub-block into mPedalPlain, which never leaves the audio thread.
+    std::atomic<double> mPedalNorm[kPedalParamCount];
+    double mPedalPlain[kPedalParamCount] = {};
 
     // Bypass mix position: 0 = fully processed, 1 = fully dry. Ramped, never switched.
     double mBypassMix = 0.0;

@@ -92,6 +92,13 @@ constexpr double kSlimFixed = 1.0;
 //------------------------------------------------------------------------
 RationsProcessor::RationsProcessor()
 {
+    // Every pedal control at the default kPedalParams gives it, normalized. The footswitches are
+    // all off: a fresh instance is an amp with an empty board, and a project written before the
+    // pedalboard existed must open sounding exactly as it did.
+    for (int i = 0; i < kPedalParamCount; ++i)
+        mPedalNorm[i].store(pedalNorm(kPedalParams[i], kPedalParams[i].def),
+                            std::memory_order_relaxed);
+
     setControllerClass(RationsControllerUID);
     // The trigger detects level on the model INPUT and drives the gain stage that attenuates the
     // model OUTPUT, which is why the two sit on opposite sides of the engine in the chain.
@@ -246,6 +253,9 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     mBypassStep = 1.0 / rampSamples;
 
     mToneStack.Reset(mSampleRate, mMaxBlockSize);
+    // The pedals, at the HOST rate: PRE runs before the resampler and POST after the cabinet, so
+    // neither ever sees the native 48 kHz the models run at.
+    mPedals.prepare(mSampleRate, mMaxBlockSize);
     mNoiseGateTrigger.SetSampleRate(mSampleRate);
 
     // Note what is deliberately NOT here: rebuilding models. Every model runs at the native rate
@@ -271,6 +281,10 @@ void RationsProcessor::allocateBuffers()
     mWorkPtrInput = mWorkBufInput.data();
     mWorkPtrOutput = mWorkBufOutput.data();
     mIrMixPtr = mIrMixBuf.data();
+    // The POST chain's two channels. Sized here so no pedal ever grows a buffer on the audio
+    // thread; PedalChain::prepare then sizes each pedal's own state against the same block.
+    mPostBufL.assign(n, 0.0);
+    mPostBufR.assign(n, 0.0);
 }
 
 //------------------------------------------------------------------------
@@ -286,6 +300,10 @@ tresult PLUGIN_API RationsProcessor::setActive(TBool state)
         warm = mNoiseGateTrigger.Process(warm, 1, n);
         warm = mNoiseGateGain.Process(warm, 1, n);
         mToneStack.Process(warm, 1, static_cast<int>(n));
+        // The pedals need no warm-up run: every one of them allocates in prepare() and nothing
+        // downstream of it is lazy. What they do need is clearing, so an instance that was
+        // deactivated mid-delay-tail does not resume it seconds later.
+        mPedals.reset();
         // Come up dry and ramp in, rather than opening on a half-built bank.
         mBypassMix = 1.0;
     } else {
@@ -431,6 +449,13 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
                 publishOutputMode();
                 break;
             default:
+                // The pedalboard: twenty-five parameters that all behave alike, so they are one
+                // table lookup rather than twenty-five cases. Stored NORMALIZED; the denorm
+                // happens once per sub-block in applyDsp against the same kPedalParams the
+                // controller declared them from, which is what keeps the two from drifting.
+                if (const int pedalIndex = pedalParamIndex(id); pedalIndex >= 0)
+                    mPedalNorm[pedalIndex].store(std::clamp(value, 0.0, 1.0),
+                                                 std::memory_order_relaxed);
                 break;
         }
     }
@@ -551,9 +576,14 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
         outBus.silenceFlags = (static_cast<uint64>(1) << outBus.numChannels) - 1;
         return kResultOk;
     }
-    float *out = outBus.channelBuffers32[0];
-    if (!out)
+    float *outL = outBus.channelBuffers32[0];
+    if (!outL)
         return kResultOk;
+    // The second channel, when the host gave one. Everything up to the cabinet is mono; the POST
+    // pedals are what makes the two differ, and with an empty board they stay identical.
+    float *outR = outBus.numChannels > 1 ? outBus.channelBuffers32[1] : nullptr;
+    if (outR == outL)
+        outR = nullptr; // a host that handed us the same buffer twice
 
     // Where every dial is, before any audio is touched. All four are pushed, not just the
     // sounding one: an idle channel's dial decides which capture a switch to it would land on,
@@ -571,19 +601,36 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     // And which channel the host wants. The rack decides when the audio can follow.
     mRack.requestChannel(channelFromNorm(mChannelNorm.load(std::memory_order_relaxed)));
 
+    // Every pedal control, denormalized once per block rather than once per sub-block: these are
+    // controls, not signals, and the table lookup is the same work whichever loop it sits in.
+    for (int i = 0; i < kPedalParamCount; ++i)
+        mPedalPlain[i] =
+            pedalPlain(kPedalParams[i], mPedalNorm[i].load(std::memory_order_relaxed));
+
+    // The host's tempo, for the Delay's sync divisions. A host is not obliged to supply a
+    // ProcessContext at all, and the ones that do are not obliged to have a valid tempo in it, so
+    // both are checked and a missing tempo falls back to the Delay's own free-running time.
+    double tempo = 0.0;
+    if (data.processContext && (data.processContext->state & ProcessContext::kTempoValid))
+        tempo = data.processContext->tempo;
+    mPedals.setTempo(tempo);
+
     // The host may hand us more than it promised in setupProcessing. Loop in whole sub-blocks
     // rather than clamping: clamping leaves the tail of the output buffer holding whatever was
     // there before, which is a stale-audio artefact, not a dropout.
     for (int32 done = 0; done < numSamples; done += mMaxBlockSize) {
         const int32 n = std::min(mMaxBlockSize, numSamples - done);
-        applyDsp(in + done, out + done, n);
+        applyDsp(in + done, outL + done, outR ? outR + done : nullptr, n);
     }
 
-    // Mono result -> every remaining output channel.
-    for (int32 ch = 1; ch < outBus.numChannels; ++ch) {
+    // Anything past the second channel gets the right channel, or the left when the host gave a
+    // mono bus. Two channels are what the POST pedals produce; a host asking for more than that is
+    // asking for a wider version of the same thing, and duplicating is the only honest answer.
+    for (int32 ch = outR ? 2 : 1; ch < outBus.numChannels; ++ch) {
         float *dst = outBus.channelBuffers32[ch];
-        if (dst && dst != out)
-            std::memcpy(dst, out, static_cast<size_t>(numSamples) * sizeof(float));
+        const float *src = outR ? outR : outL;
+        if (dst && dst != src)
+            std::memcpy(dst, src, static_cast<size_t>(numSamples) * sizeof(float));
     }
     outBus.silenceFlags = 0;
 
@@ -593,7 +640,7 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
         double inPeak = 0.0, outPeak = 0.0;
         for (int32 i = 0; i < numSamples; ++i) {
             inPeak = std::max(inPeak, std::fabs(static_cast<double>(in[i])));
-            outPeak = std::max(outPeak, std::fabs(static_cast<double>(out[i])));
+            outPeak = std::max(outPeak, std::fabs(static_cast<double>(outL[i])));
         }
         writeOutputPoint(data.outputParameterChanges, kInputMeterId, peakToMeterNorm(inPeak), 0);
         writeOutputPoint(data.outputParameterChanges, kOutputMeterId, peakToMeterNorm(outPeak), 0);
@@ -612,7 +659,7 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
 //------------------------------------------------------------------------
 // One sub-block of the chain. Everything here is on the audio thread: no allocation, no locks, no
 // file I/O, no logging, no destructors.
-void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
+void RationsProcessor::applyDsp(const float *in, float *outL, float *outR, int32 numSamples)
 {
     const double inputGain = dbToLinear(
         denorm(mInputGainNorm.load(std::memory_order_relaxed), ranges::kGainMin, ranges::kGainMax));
@@ -638,6 +685,18 @@ void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
         processingInput =
             mNoiseGateTrigger.Process(&mWorkPtrInput, 1, static_cast<size_t>(numSamples));
     }
+
+    // 2a. The PRE pedals: Boost then Chorus, mono, at the host rate.
+    //
+    // AFTER the gate's trigger and not before it. A gate keys off the guitar, and a boost ahead of
+    // it would amplify exactly the noise the gate exists to remove — which is also the order a real
+    // rig is wired in. And upstream of the resampler rather than inside ChannelRack: the prime
+    // worker's ring then captures the pedals' output as ordinary signal history, so the channel
+    // switch's 1e-6 convergence proof is untouched. A pedal inside the rack would sit between the
+    // ring and the models and make all four channels cold on every knob move.
+    mPedals.setParams(mPedalPlain);
+    if (mPedals.preActive())
+        mPedals.processPre(*processingInput, numSamples);
 
     // 3. The crossfade engine, at the native rate, in fixed chunks. The resampler is a straight
     // call-through at 48 kHz and is not even constructed there.
@@ -673,10 +732,34 @@ void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
     // before the two branches are mixed.
     const DSP_SAMPLE *finalBuf = irOutput[0];
 
+    // 6a. The POST pedals: Flanger, Delay, Reverb — after the cabinet, which is where they live in
+    // a real rig, and where this plug-in stops being mono. The chain takes the one mono signal and
+    // writes two channels; everything above it is unchanged and still mono.
+    //
+    // Skipped entirely when the board is empty, which is the common case and the one that has to
+    // cost nothing: with nothing engaged the mono result is used directly and not one sample is
+    // copied. postActive() goes false only once the last ramp has landed, so a pedal switched off
+    // a moment ago is still processed and its fade still completes.
+    const bool postOn = mPedals.postActive();
+    if (postOn) {
+        for (int32 i = 0; i < numSamples; ++i) {
+            const size_t k = static_cast<size_t>(i);
+            mPostBufL[k] = finalBuf[i];
+            mPostBufR[k] = finalBuf[i];
+        }
+        mPedals.processPost(mPostBufL.data(), mPostBufR.data(), numSamples);
+    }
+
+    // 7. double -> float with output gain and the ramped bypass mix, now on two channels.
+    //
     // Bypass is a per-sample ramp, never a switch: a hard mute or a hard hand-off to the dry
     // signal is itself a click, and it also exposes models that have been fed nothing while
     // bypassed. The chain above runs whether bypassed or not, so the bank stays primed and
     // un-bypassing is immediately correct. That costs CPU while bypassed, deliberately.
+    //
+    // mDryBuf is mono — it is the plug-in's own input — so it is what BOTH channels fade back to.
+    // A stereo pedal's width therefore collapses as bypass is engaged, which is correct: bypassed
+    // means the plug-in is out of the circuit, and the signal coming in was mono.
     const double target = mBypass.load(std::memory_order_relaxed) > 0.5 ? 1.0 : 0.0;
     double mix = mBypassMix;
     for (int32 i = 0; i < numSamples; ++i) {
@@ -684,8 +767,14 @@ void RationsProcessor::applyDsp(const float *in, float *out, int32 numSamples)
             mix = std::min(target, mix + mBypassStep);
         else if (mix > target)
             mix = std::max(target, mix - mBypassStep);
-        const double wet = finalBuf[i] * outputGain;
-        out[i] = static_cast<float>(wet + mix * (mDryBuf[static_cast<size_t>(i)] - wet));
+        const size_t k = static_cast<size_t>(i);
+        const double dry = mDryBuf[k];
+        const double wetL = (postOn ? mPostBufL[k] : finalBuf[i]) * outputGain;
+        outL[i] = static_cast<float>(wetL + mix * (dry - wetL));
+        if (outR) {
+            const double wetR = (postOn ? mPostBufR[k] : finalBuf[i]) * outputGain;
+            outR[i] = static_cast<float>(wetR + mix * (dry - wetR));
+        }
     }
     mBypassMix = mix;
 }
@@ -1143,6 +1232,32 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
             loadCaptureSource(c, path, isDir != 0);
     }
 
+    // Version 5 onwards: the pedalboard, length-prefixed. A version 1-4 project has no block here
+    // and opens with every pedal off and at its default, which is what those projects sounded
+    // like — the pedals did not exist.
+    if (version >= 5) {
+        int32 count = 0;
+        if (!streamer.readInt32(count))
+            return kResultFalse;
+        // A state blob is untrusted input. A negative count is malformed; a very large one is
+        // either malformed or a future build with far more controls than this one, and neither is
+        // worth stalling on, so the read is bounded before it is trusted.
+        if (count < 0 || count > kPedalStateMax)
+            return kResultFalse;
+        for (int32 i = 0; i < count; ++i) {
+            double value = 0.0;
+            if (!streamer.readDouble(value))
+                return kResultFalse;
+            // Values this build does not have are read and discarded rather than skipped, because
+            // the stream has to be consumed either way and there is nothing after this block.
+            if (i < kPedalParamCount)
+                mPedalNorm[i].store(std::clamp(value, 0.0, 1.0), std::memory_order_relaxed);
+        }
+        // A SHORTER block than this build expects is an older version-5 project written before a
+        // knob was added. Everything it did not carry keeps the default the constructor set, which
+        // is why those defaults are set there and not here.
+    }
+
     return kResultOk;
 }
 
@@ -1200,6 +1315,18 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
         streamer.writeStr8(mCapturePath[c].c_str());
         streamer.writeStr8(mChannelName[c].c_str());
     }
+
+    // Version 5 onwards: the pedalboard, LENGTH-PREFIXED. Every other block in this blob is a
+    // fixed set of fields that a version bump has to be spent on, which is right for a field that
+    // means something specific — but a pedal growing a knob is a thing that will happen more than
+    // once, and spending a state version on each would make every such change a compatibility
+    // event. A count lets a reader take what it understands and skip the rest.
+    //
+    // The values are NORMALIZED, like every other parameter here, so a range widening later
+    // reinterprets old projects rather than corrupting them.
+    streamer.writeInt32(kPedalParamCount);
+    for (int i = 0; i < kPedalParamCount; ++i)
+        streamer.writeDouble(mPedalNorm[i].load(std::memory_order_relaxed));
     return kResultOk;
 }
 

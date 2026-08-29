@@ -19,6 +19,12 @@
 // Usage:
 //   rations_offline <Rations.vst3> --captures <dir> [--rate 48000] [--block 256]
 //                   [--seconds 2.0] [--gain 0.0] [--sweep] [--overrun N] [--settle-ms N]
+//                   [--dump <file>]
+//
+// --dump writes the rendered output as raw little-endian float32, which is how one build is
+// compared against another BIT FOR BIT rather than by eye over six printed digits. A change that
+// is meant to alter nothing — a refactor, or a stage added and left switched off — is proved by
+// `cmp` on two dumps, not by two summaries that agree.
 
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/hosting/module.h"
@@ -74,6 +80,9 @@ struct Options {
     // design so a DAW's message thread is never blocked; an offline render has to wait for it, or
     // it measures the ramped silence that precedes the first entry.
     int settleMs = 4000;
+    // Where to write the raw float32 render, if anywhere. This is how one build is compared
+    // against another bit for bit; see the usage note at the top.
+    std::string dump;
 };
 
 bool parseArgs(int argc, char **argv, Options &o)
@@ -120,6 +129,11 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!v)
                 return false;
             o.captures = v;
+        } else if (a == "--dump") {
+            const char *v = next("--dump");
+            if (!v)
+                return false;
+            o.dump = v;
         } else if (a == "--settle-ms") {
             const char *v = next("--settle-ms");
             if (!v)
@@ -594,6 +608,22 @@ int main(int argc, char **argv)
     printf("max |out-in|   %.6f\n", maxDiff);
     printf("max step       %.6f\n", maxStep);
     printf("non-finite     %zu\n", nonFinite);
+
+    if (!opt.dump.empty()) {
+        FILE *f = std::fopen(opt.dump.c_str(), "wb");
+        if (!f) {
+            fprintf(stderr, "FAIL: cannot open --dump file %s\n", opt.dump.c_str());
+            return 1;
+        }
+        const size_t wrote = std::fwrite(output.data(), sizeof(float), total, f);
+        std::fclose(f);
+        if (wrote != total) {
+            fprintf(stderr, "FAIL: short write to %s (%zu of %zu)\n", opt.dump.c_str(), wrote,
+                    total);
+            return 1;
+        }
+        printf("dump           %zu samples -> %s\n", total, opt.dump.c_str());
+    }
     printf("unwritten      %zu\n", stale);
     printf("wall           %.1f ms  (RTF %.4f)\n", wallMs, wallMs / (opt.seconds * 1000.0));
 

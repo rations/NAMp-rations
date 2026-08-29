@@ -108,6 +108,64 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     kCalibrateInputId = 151, // toggle, default off
     kInputCalLevelId = 152,  // -60 .. +60 dBu, default 12
 
+    // --- The pedalboard, 300 .. 399 ---------------------------------------------------------
+    //
+    // One contiguous block for the feature, twenty lanes per pedal, which is this file's own
+    // convention and the reason the trims went to 140 rather than into the gap at 125. 300 is far
+    // above everything retired (107, 109-113) and far below the MIDI block at 1000, so neither
+    // can ever be reached by an off-by-something here.
+    //
+    // Twenty per pedal is deliberate slack. A pedal has at most five controls today and the
+    // widest could plausibly grow to eight; leaving room means adding a knob later is a state
+    // change (see kStateVersion) and not an ID change, and an ID change is the one thing this
+    // file exists to make impossible. The ORDER within a pedal is fixed by kPedalParams below and
+    // is what the state blob is written in, so entries may be appended to a pedal but never
+    // reordered.
+    //
+    // Every pedal's <base> + 0 is its footswitch. That regularity is load-bearing: it is what
+    // lets the MIDI-learn table take a pedal's on/off as an ordinary row without knowing which
+    // pedal it is, and what lets the editor draw five identical footswitches from one loop.
+    kBoostBaseId = 300,
+    kChorusBaseId = 320,
+    kFlangerBaseId = 340,
+    kDelayBaseId = 360,
+    kReverbBaseId = 380,
+    kPedalIdStride = 20,
+
+    // Boost - Ibanez TS-9. Drive sets the clipping amplifier's feedback resistance, Tone the
+    // second-order low-pass after it, Level the output attenuator.
+    kBoostOnId = kBoostBaseId + 0,
+    kBoostDriveId = kBoostBaseId + 1,
+    kBoostToneId = kBoostBaseId + 2,
+    kBoostLevelId = kBoostBaseId + 3,
+
+    kChorusOnId = kChorusBaseId + 0,
+    kChorusRateId = kChorusBaseId + 1,
+    kChorusDepthId = kChorusBaseId + 2,
+    kChorusMixId = kChorusBaseId + 3,
+
+    kFlangerOnId = kFlangerBaseId + 0,
+    kFlangerRateId = kFlangerBaseId + 1,
+    kFlangerDepthId = kFlangerBaseId + 2,
+    kFlangerManualId = kFlangerBaseId + 3,
+    kFlangerRegenId = kFlangerBaseId + 4,
+
+    // Delay. kDelaySyncId is a list, not a toggle: "free" is one of its values rather than a
+    // second parameter, so a host automating it cannot express "synced AND free at once".
+    kDelayOnId = kDelayBaseId + 0,
+    kDelayTimeId = kDelayBaseId + 1,
+    kDelayFeedbackId = kDelayBaseId + 2,
+    kDelayToneId = kDelayBaseId + 3,
+    kDelayMixId = kDelayBaseId + 4,
+    kDelaySyncId = kDelayBaseId + 5,
+    kDelayPingPongId = kDelayBaseId + 6,
+
+    kReverbOnId = kReverbBaseId + 0,
+    kReverbDecayId = kReverbBaseId + 1,
+    kReverbToneId = kReverbBaseId + 2,
+    kReverbPreDelayId = kReverbBaseId + 3,
+    kReverbMixId = kReverbBaseId + 4,
+
     // Hidden, read-only parameters (processor -> editor via output parameter changes; never
     // automated, never persisted). The meters carry the per-block peak level mapped to 0 .. 1
     // over the meter dB range below.
@@ -149,6 +207,9 @@ enum ParamIDs : Steinberg::Vst::ParamID {
 // that exist only so that CC and Program Change have somewhere to arrive, and exists so a host
 // can fold them away instead of listing them beside Bass and Treble.
 inline constexpr Steinberg::Vst::UnitID kMidiUnitId = 1;
+// The pedalboard's own Unit, so a host's generic list groups twenty-five pedal controls together
+// rather than interleaving them with Bass, Middle and Treble.
+inline constexpr Steinberg::Vst::UnitID kPedalUnitId = 2;
 inline constexpr Steinberg::Vst::ProgramListID kMidiProgramListId = kMidiProgramChangeId;
 inline constexpr int kMidiCcCount = 128;
 inline constexpr int kMidiProgramCount = 128;
@@ -236,6 +297,192 @@ inline constexpr double kLevelMin = -12.0, kLevelMax = 12.0, kLevelDefault = 0.0
 inline constexpr double kCalMin = -60.0, kCalMax = 60.0, kCalDefault = 12.0;
 } // namespace ranges
 
+// --- The pedalboard's parameter table ---------------------------------------------------------
+//
+// ONE table, read by four things that must never disagree: the controller declares its parameters
+// from it, the processor sizes its atomic array and writes its state block from it, the editor
+// draws its knobs from it, and rations_pedalcheck sweeps it. Everything about a pedal control -
+// its range, its default, how it prints, which pedal it belongs to and where it sits on the face -
+// is decided here and nowhere else.
+//
+// This is the same reasoning as `namespace ranges` above, which exists because the controller's
+// RangeParameter and the processor's denorm() were two places to write one number. Five pedals
+// with four or five controls each would have been twenty-five such places.
+enum PedalIndex : int {
+    kPedalBoost = 0,
+    kPedalChorus,
+    kPedalFlanger,
+    kPedalDelay,
+    kPedalReverb,
+};
+inline constexpr int kPedalCount = 5;
+
+// How a control behaves, which is all the controller needs to pick a parameter class.
+enum class PedalParamKind {
+    Toggle, // step count 1; the footswitches and Ping-Pong
+    Range,  // Vst::RangeParameter over [min, max]
+    List,   // Vst::StringListParameter; the strings come from kDelaySyncNames
+};
+
+struct PedalParamSpec {
+    Steinberg::Vst::ParamID id;
+    int pedal;          // PedalIndex; which face this control is drawn on
+    const char *title;  // host-visible, disambiguated: "Delay Tone", not "Tone"
+    const char *legend; // drawn under the knob, in the pedal's own words: "Tone"
+    const char *unit;   // nullptr = none
+    PedalParamKind kind;
+    double min, max, def;
+    int precision;
+};
+
+// Delay sync divisions. "Free" is a VALUE here rather than a separate toggle, so a host cannot
+// automate the delay into being synced and free at the same time - the same reasoning that made
+// the active channel one list parameter instead of four booleans.
+inline constexpr int kDelaySyncCount = 12;
+inline constexpr const char *kDelaySyncNames[kDelaySyncCount] = {
+    "Free",  "1/1",   "1/2",    "1/4.",  "1/4",  "1/4T",
+    "1/8.",  "1/8",   "1/8T",   "1/16.", "1/16", "1/16T",
+};
+// Beats per repeat for each of the above, index 0 unused (Free reads kDelayTimeId instead).
+inline constexpr double kDelaySyncBeats[kDelaySyncCount] = {
+    0.0, 4.0, 2.0, 1.5, 1.0, 2.0 / 3.0, 0.75, 0.5, 1.0 / 3.0, 0.375, 0.25, 1.0 / 6.0,
+};
+
+// The order here is the order the state blob is written in. Entries may be APPENDED to a pedal;
+// they may never be reordered, or an old project's values land on the wrong controls.
+inline constexpr PedalParamSpec kPedalParams[] = {
+    // Boost - the TS-9. 0..10 rather than 0..1 or a percentage because that is what is printed
+    // around the knob on the pedal being modelled, and the mapping to the circuit (Drive to the
+    // clipping stage's feedback resistance, Tone to the second-order low-pass) happens in the DSP.
+    {kBoostOnId, kPedalBoost, "Boost", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+    {kBoostDriveId, kPedalBoost, "Boost Drive", "Drive", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+    {kBoostToneId, kPedalBoost, "Boost Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+    {kBoostLevelId, kPedalBoost, "Boost Level", "Level", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+
+    {kChorusOnId, kPedalChorus, "Chorus", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+    {kChorusRateId, kPedalChorus, "Chorus Rate", "Rate", "Hz", PedalParamKind::Range, 0.1, 10.0, 0.8, 2},
+    {kChorusDepthId, kPedalChorus, "Chorus Depth", "Depth", "%", PedalParamKind::Range, 0, 100, 50, 0},
+    {kChorusMixId, kPedalChorus, "Chorus Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 50, 0},
+
+    // Flanger. Regen is SIGNED: negative feedback gives the hollow "jet", positive gives peaks,
+    // and they are different enough that a player wants both from one control rather than a
+    // polarity switch. 95 rather than 100 because unity feedback in a comb filter does not decay.
+    {kFlangerOnId, kPedalFlanger, "Flanger", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+    {kFlangerRateId, kPedalFlanger, "Flanger Rate", "Rate", "Hz", PedalParamKind::Range, 0.05, 5.0, 0.3, 2},
+    {kFlangerDepthId, kPedalFlanger, "Flanger Depth", "Depth", "%", PedalParamKind::Range, 0, 100, 70, 0},
+    {kFlangerManualId, kPedalFlanger, "Flanger Manual", "Manual", "%", PedalParamKind::Range, 0, 100, 30, 0},
+    {kFlangerRegenId, kPedalFlanger, "Flanger Regen", "Regen", "%", PedalParamKind::Range, -95, 95, 50, 0},
+
+    // Delay. Time is in ms and is IGNORED while Sync names a division; the knob stays live and
+    // keeps its value so unsyncing returns to where the player left it.
+    {kDelayOnId, kPedalDelay, "Delay", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+    {kDelayTimeId, kPedalDelay, "Delay Time", "Time", "ms", PedalParamKind::Range, 20, 2000, 400, 0},
+    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Feedback", "%", PedalParamKind::Range, 0, 95, 35, 0},
+    {kDelayToneId, kPedalDelay, "Delay Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+    {kDelayMixId, kPedalDelay, "Delay Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 30, 0},
+    {kDelaySyncId, kPedalDelay, "Delay Sync", "Sync", nullptr, PedalParamKind::List, 0, kDelaySyncCount - 1, 0, 0},
+    {kDelayPingPongId, kPedalDelay, "Delay Ping-Pong", "Ping", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+
+    {kReverbOnId, kPedalReverb, "Reverb", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+    {kReverbDecayId, kPedalReverb, "Reverb Decay", "Decay", nullptr, PedalParamKind::Range, 0, 10, 4, 1},
+    {kReverbToneId, kPedalReverb, "Reverb Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+    {kReverbPreDelayId, kPedalReverb, "Reverb Pre-delay", "Pre", "ms", PedalParamKind::Range, 0, 200, 20, 0},
+    {kReverbMixId, kPedalReverb, "Reverb Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 25, 0},
+};
+
+// The largest pedal-parameter count this build will accept out of a state blob. A blob is
+// untrusted input, so the length prefix is bounded before it is believed: this is generous enough
+// that a future build with far more controls still loads what this one understands, and small
+// enough that a corrupt length cannot make the reader spin.
+inline constexpr Steinberg::int32 kPedalStateMax = 1024;
+
+// Derived, never hand-counted. The first version of this line carried a literal, got it wrong by
+// one, and the compiler caught it — but the same literal is also what the state blob writes as its
+// length prefix, where a wrong value would have been a silently truncated preset rather than a
+// build error. So it is computed.
+inline constexpr int kPedalParamCount =
+    static_cast<int>(sizeof(kPedalParams) / sizeof(kPedalParams[0]));
+
+// Each pedal's footswitch is its base id, which is what lets the editor draw five identical
+// switches and the MIDI table learn one without knowing which pedal it is.
+inline constexpr Steinberg::Vst::ParamID kPedalOnId[kPedalCount] = {
+    kBoostOnId, kChorusOnId, kFlangerOnId, kDelayOnId, kReverbOnId,
+};
+
+// Index of a pedal parameter in kPedalParams, or -1. Linear over 24 entries and called off the
+// audio thread only (the processor keeps its own dense array, indexed the same way).
+inline constexpr int pedalParamIndex(Steinberg::Vst::ParamID id)
+{
+    for (int i = 0; i < kPedalParamCount; ++i)
+        if (kPedalParams[i].id == id)
+            return i;
+    return -1;
+}
+inline constexpr bool isPedalParam(Steinberg::Vst::ParamID id)
+{
+    return pedalParamIndex(id) >= 0;
+}
+
+// kPedalParams is grouped by pedal, so each pedal owns one contiguous run of it and can be handed
+// a pointer into the middle of the array rather than the whole thing. That is what lets a pedal
+// index its own controls from 0 without knowing where it sits in the table.
+inline constexpr int pedalParamFirst(int pedal)
+{
+    for (int i = 0; i < kPedalParamCount; ++i)
+        if (kPedalParams[i].pedal == pedal)
+            return i;
+    return -1;
+}
+inline constexpr int pedalParamLen(int pedal)
+{
+    int n = 0;
+    for (int i = 0; i < kPedalParamCount; ++i)
+        if (kPedalParams[i].pedal == pedal)
+            ++n;
+    return n;
+}
+// Contiguity is the assumption every slice rests on, so it is checked rather than trusted.
+inline constexpr bool pedalParamsAreGrouped()
+{
+    for (int p = 0; p < kPedalCount; ++p) {
+        const int first = pedalParamFirst(p);
+        if (first < 0)
+            return false;
+        for (int i = 0; i < pedalParamLen(p); ++i)
+            if (kPedalParams[first + i].pedal != p)
+                return false;
+    }
+    return true;
+}
+static_assert(pedalParamsAreGrouped(), "kPedalParams must stay grouped by pedal");
+// And every pedal's slice must START with its footswitch, which is what lets the chain read the
+// engage state without a special case and the editor draw five switches from one loop.
+inline constexpr bool pedalSlicesStartWithSwitch()
+{
+    for (int p = 0; p < kPedalCount; ++p)
+        if (kPedalParams[pedalParamFirst(p)].id != kPedalOnId[p])
+            return false;
+    return true;
+}
+
+// Normalized (what the host and the parameter queue carry) to plain (what the DSP wants). One
+// function, so the controller's RangeParameter and this can never disagree about a range.
+inline double pedalPlain(const PedalParamSpec &spec, double norm)
+{
+    norm = norm < 0.0 ? 0.0 : (norm > 1.0 ? 1.0 : norm);
+    if (spec.kind == PedalParamKind::List)
+        return std::floor(norm * (spec.max - spec.min) + 0.5) + spec.min;
+    return spec.min + norm * (spec.max - spec.min);
+}
+inline double pedalNorm(const PedalParamSpec &spec, double plain)
+{
+    const double span = spec.max - spec.min;
+    if (span <= 0.0)
+        return 0.0;
+    const double n = (plain - spec.min) / span;
+    return n < 0.0 ? 0.0 : (n > 1.0 ? 1.0 : n);
+}
+
 // Version of the state blob written by getState and accepted by setState / setComponentState.
 // Version 1 ended after the two IR paths; version 2 appends the MIDI learn table; version 3
 // appends the four channel trims; version 4 appends the output section and the four capture
@@ -249,7 +496,7 @@ inline constexpr double kCalMin = -60.0, kCalMax = 60.0, kCalDefault = 12.0;
 // version 3 build resolved those from inside the bundle and never wrote down where they came
 // from. There is no honest way to recover that, so such a project opens with four empty channels
 // and the settings page asking for them - silence a user can fix, rather than a guess at a path.
-inline constexpr Steinberg::int32 kStateVersion = 4;
+inline constexpr Steinberg::int32 kStateVersion = 5;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.

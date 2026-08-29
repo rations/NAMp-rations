@@ -38,6 +38,7 @@
 #include "midilearn.h"
 #include "modelbank.h"
 #include "nativeresampler.h"
+#include "pedals/pedalchain.h"
 
 #include "test/allocation_tracking.h"
 
@@ -336,6 +337,71 @@ int main(int argc, char **argv)
                 (void)hits;
             },
             nullptr, "MIDI learn table, matching every message type");
+    }
+
+    // --- the pedalboard --------------------------------------------------------------------
+    //
+    // Both chains, every footswitch stomped and every knob moved on the counted path. The engage
+    // ramp is the part worth counting: it copies each channel to a dry buffer on every block a
+    // pedal is in or moving, and those buffers are sized in prepare() precisely so that copy never
+    // becomes an allocation.
+    //
+    // Stomping matters as much as sweeping. A pedal that has just been switched off keeps being
+    // processed until its ramp lands, and the transition where it stops is also where its state is
+    // reset - so the stomping loop is what puts resetImpl() on the counted path, where a pedal
+    // that cleared its state by reallocating a buffer instead of zeroing one would be caught.
+    {
+        constexpr int kBlock = 256;
+        Rations::pedals::PedalChain chain;
+        chain.prepare(48000.0, kBlock);
+
+        std::vector<DSP_SAMPLE> pre(kBlock, 0.0);
+        std::vector<DSP_SAMPLE> postL(kBlock, 0.0), postR(kBlock, 0.0);
+        double plain[Rations::kPedalParamCount] = {};
+
+        // Warm both chains with everything ENGAGED before counting, the way setActive() warms the
+        // gate and the tone stack: anything a pedal sizes on its first processed block has to be
+        // sized here rather than inside the count.
+        for (int i = 0; i < Rations::kPedalParamCount; ++i)
+            plain[i] = Rations::kPedalParams[i].def;
+        for (int p = 0; p < Rations::kPedalCount; ++p)
+            plain[Rations::pedalParamFirst(p)] = 1.0;
+        chain.setParams(plain);
+        for (int b = 0; b < 8; ++b) {
+            chain.processPre(pre.data(), kBlock);
+            chain.processPost(postL.data(), postR.data(), kBlock);
+        }
+
+        printf("counting       pedalboard, both chains, stomping and sweeping every control\n");
+        allocation_tracking::run_allocation_test_no_allocations(
+            nullptr,
+            [&] {
+                for (int b = 0; b < 400; ++b) {
+                    for (int i = 0; i < Rations::kPedalParamCount; ++i) {
+                        const Rations::PedalParamSpec &spec = Rations::kPedalParams[i];
+                        // Sweep every continuous control across its whole range, and stomp every
+                        // footswitch on a different period so the five are never all in the same
+                        // state at once.
+                        const double phase = static_cast<double>((b * (i + 3)) % 64) / 63.0;
+                        plain[i] = (spec.kind == Rations::PedalParamKind::Range)
+                                       ? spec.min + phase * (spec.max - spec.min)
+                                       : ((b / (i + 1)) % 2 ? spec.max : spec.min);
+                    }
+                    chain.setTempo(b % 3 ? 120.0 : 0.0);
+                    chain.setParams(plain);
+                    for (int k = 0; k < kBlock; ++k) {
+                        const double x = 0.2 * std::sin(0.05 * (b * kBlock + k));
+                        pre[k] = x;
+                        postL[k] = x;
+                        postR[k] = x;
+                    }
+                    if (chain.preActive())
+                        chain.processPre(pre.data(), kBlock);
+                    if (chain.postActive())
+                        chain.processPost(postL.data(), postR.data(), kBlock);
+                }
+            },
+            nullptr, "pedalboard, both chains, stomping and sweeping every control");
     }
 
     // Teardown happens off the counted path, which is the point of the whole retirement design.

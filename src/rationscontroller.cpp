@@ -154,6 +154,61 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
                             Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
                             kActiveChannelId);
 
+    // --- the pedalboard ------------------------------------------------------------------
+    //
+    // Declared by walking kPedalParams rather than written out twenty-five times, because that
+    // table is also what the processor stores, what the state blob is written in and what the
+    // editor draws. Five hand-written blocks would be five chances for one of them to disagree
+    // with the other four about a range or a default.
+    //
+    // Their own Unit, for the same reason the MIDI block has one.
+    addUnit(new Vst::Unit(STR16("Pedals"), kPedalUnitId, Vst::kRootUnitId));
+
+    for (int i = 0; i < kPedalParamCount; ++i) {
+        const PedalParamSpec &spec = kPedalParams[i];
+        Vst::String128 title = {};
+        UString(title, USTRINGSIZE(title)).fromAscii(spec.title);
+        Vst::String128 unit = {};
+        if (spec.unit)
+            UString(unit, USTRINGSIZE(unit)).fromAscii(spec.unit);
+        const Vst::TChar *units = spec.unit ? unit : nullptr;
+
+        switch (spec.kind) {
+            case PedalParamKind::Toggle:
+                // Step count 1, and the default is NORMALIZED here (addParameter's argument is),
+                // which for a toggle is the same 0 or 1. Every footswitch defaults OFF: a fresh
+                // instance is an amp with an empty board, and a project written before the
+                // pedalboard existed has to open sounding exactly as it did.
+                parameters.addParameter(title, nullptr, 1, spec.def,
+                                        Vst::ParameterInfo::kCanAutomate, spec.id, kPedalUnitId);
+                break;
+            case PedalParamKind::List: {
+                // Only the Delay's sync division. The strings are a saved value - a host stores
+                // the normalized position, so appending is safe and reordering is not.
+                auto *list = new Vst::StringListParameter(
+                    title, spec.id, nullptr,
+                    Vst::ParameterInfo::kCanAutomate | Vst::ParameterInfo::kIsList, kPedalUnitId);
+                for (int k = 0; k < kDelaySyncCount; ++k) {
+                    Vst::String128 entry = {};
+                    UString(entry, USTRINGSIZE(entry)).fromAscii(kDelaySyncNames[k]);
+                    list->appendString(entry);
+                }
+                list->setNormalized(spec.def / (kDelaySyncCount - 1));
+                parameters.addParameter(list);
+                break;
+            }
+            case PedalParamKind::Range: {
+                auto *range = new Vst::RangeParameter(title, spec.id, units, spec.min, spec.max,
+                                                      spec.def, 0,
+                                                      Vst::ParameterInfo::kCanAutomate,
+                                                      kPedalUnitId);
+                range->setPrecision(spec.precision);
+                parameters.addParameter(range);
+                break;
+            }
+        }
+    }
+
     // --- the MIDI block ------------------------------------------------------------------
     //
     // 129 parameters nobody will ever turn. They are here because a footswitch's messages do not
@@ -357,6 +412,24 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
             delete[] p;
         }
         mCaptureIsDir[c] = !mCapturePath[c].empty() && isDir != 0;
+    }
+
+    // Version 5 onwards: the pedalboard, length-prefixed. Mirror of the processor's own read -
+    // same order, same bounds, same treatment of a count this build does not recognise. A version
+    // 1-4 project leaves every pedal at the default the parameter was declared with, which is off.
+    if (version >= 5) {
+        int32 count = 0;
+        if (!streamer.readInt32(count))
+            return kResultFalse;
+        if (count < 0 || count > kPedalStateMax)
+            return kResultFalse;
+        for (int32 i = 0; i < count; ++i) {
+            double value = 0.0;
+            if (!streamer.readDouble(value))
+                return kResultFalse;
+            if (i < kPedalParamCount)
+                setParamNormalized(kPedalParams[i].id, std::clamp(value, 0.0, 1.0));
+        }
     }
 
     refreshParamTitles();

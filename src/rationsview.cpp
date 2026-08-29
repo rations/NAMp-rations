@@ -306,6 +306,8 @@ void RationsEditorView::drawStaticLayer(Canvas &c)
                 c.drawImage(cab, Rect(geo::kCabX, geo::kCabY, geo::kCabW, geo::kCabH));
             break;
         case geo::Page::Pedalboard:
+            drawPedalboardStatic(c);
+            break;
         case geo::Page::Settings:
             break; // nothing static beyond the ground the caller already painted
     }
@@ -563,19 +565,54 @@ void RationsEditorView::composeCabinet(Canvas &c)
 }
 
 //------------------------------------------------------------------------
+void RationsEditorView::drawPedalboardStatic(Canvas &c)
+{
+    // The enclosures. Five blank boxes, blitted at kPedalW x kPedalH from art
+    // stored at its own 468x691 — the cabinet's arrangement, not the head's,
+    // because a pedal is drawn 2.46x down and would be soft if it were stored at
+    // the size it is drawn. Everything on the face is drawn over this.
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        const geo::PedalSpec &p = geo::kPedals[i];
+        if (cairo_surface_t *art = mImages.get(p.art))
+            c.drawImage(art, Rect(static_cast<float>(geo::kPedalLeft(i)),
+                                  static_cast<float>(p.y), static_cast<float>(geo::kPedalW),
+                                  static_cast<float>(geo::kPedalH)));
+    }
+
+    // The patch cables, between neighbours within a row only. Both jacks of a
+    // pair sit at the same height, so strokeConnector's horizontal S-curve would
+    // draw a dead straight line; the control points go DOWN instead, which is the
+    // sag a slack cable has and the thing that makes it read as a cable at all.
+    c.setColor(geo::kDimColor);
+    c.setPenSize(geo::kPedalCablePen);
+    for (int i = 0; i + 1 < geo::kPedalCount; ++i) {
+        if (geo::kPedals[i].post != geo::kPedals[i + 1].post)
+            continue; // the amplifier is what sits between the two rows
+        const float x0 = static_cast<float>(geo::kPedalLeft(i) + geo::kPedalW);
+        const float x1 = static_cast<float>(geo::kPedalLeft(i + 1));
+        const float y = static_cast<float>(geo::kPedals[i].y + geo::kPedalJackY);
+        const float d = (x1 - x0) * 0.35f;
+        c.strokeBezier(x0, y, x0 + d, y + geo::kPedalCableSag, x1 - d,
+                       y + geo::kPedalCableSag, x1, y);
+    }
+
+    // Which half of the chain each row is. Michroma, like every other legend.
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kPedalRowLegendSize);
+    c.setColor(geo::kDimColor);
+    c.drawString("PRE", static_cast<float>(geo::kPedalRowLegendX),
+                 static_cast<float>(geo::kPedalRow1Y - geo::kPedalRowLegendDY));
+    c.drawString("POST", static_cast<float>(geo::kPedalRowLegendX),
+                 static_cast<float>(geo::kPedalRow2Y - geo::kPedalRowLegendDY));
+}
+
 void RationsEditorView::composePedalboard(Canvas &c)
 {
-    const float cx = static_cast<float>(geo::pageCX(geo::Page::Pedalboard));
-    c.setFont(Font::Title);
-    c.setFontSize(geo::kPedalPlaceholderSize);
-    c.setColor(geo::kDimColor);
-    c.drawString("Pedalboard", cx - c.stringWidth("Pedalboard") * 0.5f,
-                 static_cast<float>(geo::kPedalPlaceholderY));
-    c.setFont(Font::Body);
-    c.setFontSize(geo::kPedalCaptionSize);
-    const char *caption = "overdrive, flanger, chorus, delay, reverb";
-    c.drawString(caption, cx - c.stringWidth(caption) * 0.5f,
-                 static_cast<float>(geo::kPedalPlaceholderY + geo::kPedalCaptionDY));
+    // The enclosures, the cables and the row legends are static and live in
+    // drawPedalboardStatic, composited once per resize. Nothing is drawn per
+    // frame yet: the knobs, LEDs and footswitches arrive with the parameters
+    // they read, and until then this page is the board with nothing on it.
+    (void)c;
 }
 
 //------------------------------------------------------------------------

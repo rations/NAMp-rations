@@ -70,10 +70,12 @@ constexpr int kWinH = 403;
 constexpr int kCabPageW = 640;
 constexpr int kCabPageH = 460;
 
-// The pedalboard placeholder: a heading and a caption. It is small because that
-// is all there is; it grows when the pedals do.
-constexpr int kPedalPageW = 480;
-constexpr int kPedalPageH = 220;
+// The pedalboard: five enclosures on two rows, PRE above and POST below.
+// 3 * kPedalW + 2 * kPedalGap + 2 * 24 of margin across; the header band the back
+// button lives in, then the two rows and their legends, down. Mirrored in
+// gui/geometry.sh, which lays the reference render out from the same numbers.
+constexpr int kPedalPageW = 662;
+constexpr int kPedalPageH = 681;
 
 // Settings: four sections, stacked in one column - the capture loaders, the
 // channel levels, MIDI learn, and the output section.
@@ -546,14 +548,113 @@ constexpr float kIrArrowHitW = 16.0f;
 constexpr float kIrTextDX = 72.0f;
 
 // --- Pedalboard page --------------------------------------------------------
-// A placeholder in this build. The overdrive, flanger, chorus, delay and reverb
-// are built into the plug-in later; nothing here hosts anyone else's. The page
-// is sized to the caption because that is the whole content — when there are
-// pedals to draw, kPedalPageW/H grow with them and nothing else here changes.
-constexpr int kPedalPlaceholderSize = 26;
-constexpr int kPedalPlaceholderY = 112;
-constexpr int kPedalCaptionSize = 14;
-constexpr int kPedalCaptionDY = 28;
+// Five pedals built into the plug-in — Boost, Chorus, Flanger, Delay, Reverb —
+// on two rows: PRE feeds the amp, POST follows the cabinet. Nothing here hosts
+// anyone else's plug-in.
+//
+// EVERY NUMBER BELOW IS MEASURED, NOT CHOSEN. The five enclosure exports are
+// blank — no knobs, no LED, no lettering — and the control positions were
+// recovered by differencing pedal-boost-mock.png against pedal-boost-base.png
+// pixel by pixel and taking the bounding box of each connected component. Those
+// came out symmetric about the body centre to within half a pixel, which is what
+// says the mock was laid out on purpose rather than by hand:
+//
+//   knob 1 / knob 2   centre (135, 130) and (359, 130), diameter 99
+//   knob 3            centre (249, 210), diameter 99
+//   LED               centre (246.5, 369.5), diameter 26
+//   footswitch        centre (246, 484.5), diameter 107
+//   name baseline     y 638
+//
+// in the 494x740 export's own pixels. gui/make_pedals.sh trims that export to
+// 468x691 at +13+21, and the art is drawn at kPedalW x kPedalH, so a source
+// coordinate becomes a logical one as (v - 13 or 21) * kPedalW / 468. The
+// constants below are that arithmetic, rounded, and re-deriving them means
+// re-running the difference rather than trusting this comment.
+constexpr int kPedalArtW = 468; // gui/geometry.sh PEDAL_SRC_W - the trim decides it
+constexpr int kPedalArtH = 691;
+constexpr int kPedalW = 190; // drawn 2.46x down from the art, as the cabinet is
+constexpr int kPedalH = 281;
+static_assert(kPedalH == (kPedalW * kPedalArtH + kPedalArtW / 2) / kPedalArtW,
+              "pedal draw size must keep the enclosure art's own aspect");
+
+// The grid. Two pedals on the PRE row centred as a pair, three on POST centred
+// as a triple, both about the page centre, one gap between neighbours.
+constexpr int kPedalGap = 22;
+constexpr int kPedalCX = kPedalPageW / 2; // 331
+constexpr int kPedalRow1Y = 70;           // below kPageContentTop plus a legend
+constexpr int kPedalRow2Y = 380;
+constexpr int kPedalPitch = kPedalW + kPedalGap; // 212
+constexpr int kPedalPreCX[2] = {kPedalCX - kPedalPitch / 2, kPedalCX + kPedalPitch / 2};
+constexpr int kPedalPostCX[3] = {kPedalCX - kPedalPitch, kPedalCX, kPedalCX + kPedalPitch};
+static_assert(kPedalPostCX[0] - kPedalW / 2 == 24, "left margin follows from the grid");
+static_assert(kPedalPostCX[2] + kPedalW / 2 == kPedalPageW - 24, "and so does the right");
+
+// Positions WITHIN one pedal, relative to its top-left corner. All five faces
+// share them, which is why make_pedals.sh insists all five enclosures trim to
+// the same size.
+constexpr int kPedalKnobR = 20;
+constexpr int kPedalKnobDX = 45;  // from the pedal's own centre line
+constexpr int kPedalKnobRow1Y = 44;
+constexpr int kPedalKnobRow2Y = 96;  // the four-knob faces only
+constexpr int kPedalKnobMidY = 77;   // the three-knob faces' lower, centred dial
+constexpr int kPedalLabelDY = 12;    // baseline below the knob's lower edge
+constexpr int kPedalLedR = 5;
+constexpr int kPedalLedY = 141;
+constexpr int kPedalSwitchR = 22;
+constexpr int kPedalSwitchY = 188;
+constexpr int kPedalNameY = 250;      // baseline of the pedal's own name
+constexpr int kPedalNameSize = 20;
+constexpr int kPedalLabelSize = 11;
+constexpr int kPedalJackY = 125;      // where a patch cable meets the enclosure
+constexpr int kPedalBodyLeft = 14;    // the body without its jack lugs, so a
+constexpr int kPedalBodyRight = 175;  // cable starts at the lug and not in space
+
+// A four-knob face must not put its lower label row into the LED. This is the
+// tightest vertical relationship on the page, so it is asserted rather than
+// eyeballed; panelrender re-checks it against the real text metrics.
+static_assert(kPedalKnobRow2Y + kPedalKnobR + kPedalLabelDY < kPedalLedY - kPedalLedR,
+              "four-knob lower labels collide with the LED");
+static_assert(kPedalLedY + kPedalLedR < kPedalSwitchY - kPedalSwitchR,
+              "LED collides with the footswitch");
+static_assert(kPedalSwitchY + kPedalSwitchR < kPedalNameY - kPedalNameSize,
+              "footswitch collides with the pedal name");
+
+// The two row legends, in the band above each row.
+constexpr int kPedalRowLegendSize = 11;
+constexpr int kPedalRowLegendX = 24;
+constexpr int kPedalRowLegendDY = 8; // above the row's top edge
+
+// The five, in signal order: two into the amp, three after the cabinet. This is
+// the order the audio actually runs in, and the row a pedal is on is a fact about
+// the DSP graph rather than a layout choice, so the table carries both and the
+// editor never decides either.
+struct PedalSpec {
+    const char *name; // drawn on the enclosure, Michroma
+    const char *art;  // ImageCache key; resources/img/<art>.png
+    int cx;           // centre line; the blit's left edge is cx - kPedalW / 2
+    int y;            // top edge
+    bool post;        // false = before the amp, true = after the cabinet
+};
+// The count lives in rationsids.h, with the parameter table: there are five pedals because there
+// are five effects, which is a fact about the DSP and not about the layout. Re-exported so
+// geo::kPedalCount still names it (qualified lookup does not reach an enclosing namespace).
+using Rations::kPedalCount;
+constexpr PedalSpec kPedals[kPedalCount] = {
+    {"Boost", "pedal-boost", kPedalPreCX[0], kPedalRow1Y, false},
+    {"Chorus", "pedal-chorus", kPedalPreCX[1], kPedalRow1Y, false},
+    {"Flanger", "pedal-flanger", kPedalPostCX[0], kPedalRow2Y, true},
+    {"Delay", "pedal-delay", kPedalPostCX[1], kPedalRow2Y, true},
+    {"Reverb", "pedal-reverb", kPedalPostCX[2], kPedalRow2Y, true},
+};
+constexpr int kPedalLeft(int i)
+{
+    return kPedals[i].cx - kPedalW / 2;
+}
+// The patch cables run between neighbours WITHIN a row. They are not drawn from
+// the PRE row to the POST row: what sits between those two is the amplifier, and
+// a cable implying otherwise would be describing the wrong signal path.
+constexpr float kPedalCableSag = 7.0f;
+constexpr float kPedalCablePen = 2.0f;
 
 // --- Settings page ----------------------------------------------------------
 // Four sections down one column: the capture loaders, the channel trims, MIDI

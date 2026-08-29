@@ -119,6 +119,7 @@ private:
     void composeHead(Canvas &c);
     void composeCabinet(Canvas &c);
     void composePedalboard(Canvas &c);
+    void drawPedalboardStatic(Canvas &c);
     void composeSettings(Canvas &c);
     // Everything that does NOT scroll, drawn after the scroll translate is undone: the back
     // button, the scrollbar, and the browser overlay. The back button is chrome rather than page

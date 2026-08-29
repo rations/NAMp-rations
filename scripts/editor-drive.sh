@@ -33,8 +33,10 @@
 #     second process while the drag is still in flight.
 #
 # The window size doubles as the page identity, since every page brings its own: head 1133x403,
-# cabinet 640x460, pedalboard 480x220, settings 560x280 (at scale 1.0). So --size is both how the
-# window is found and how you say which page you expect to be looking at.
+# cabinet 640x460, pedalboard 662x681, settings 640x928 (at scale 1.0). So --size is both how the
+# window is found and how you say which page you expect to be looking at. Keep these in step with
+# geometry.h's kPageSizes -- the settings and pedalboard figures here were both stale once, which
+# is a comment that silently tells you to look for the wrong window.
 #
 # Usage:
 #   scripts/editor-drive.sh shot out.png

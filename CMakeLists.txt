@@ -323,8 +323,17 @@ target_include_directories(RationsDsp PUBLIC
     ${NAM_CORE_DIR}/NAM
     ${NAM_CORE_DIR}/Dependencies/nlohmann
     ${AUDIO_DSP_TOOLS_DIR}/dsp
+    # And its parent, so a header outside that directory can say "dsp/dsp.h" and mean
+    # AudioDSPTools' rather than NAM's. Both trees have a dsp.h, NAM's include dir is listed
+    # first, and a bare "dsp.h" from src/pedals therefore reaches the wrong one -- with an error
+    # about DSP_SAMPLE that says nothing about which of two identically-named headers arrived.
+    ${AUDIO_DSP_TOOLS_DIR}
     ${EIGEN_DIR}
     ${RATIONS_ROOT}/deps/tonestack
+    # The pedalboard's vendored DSP, reached as "bbm/..." and "wdl/..." so the
+    # provenance of each block stays visible at every include site. Both trees are
+    # header-only; there is nothing to add to the source list above.
+    ${RATIONS_ROOT}/deps
 )
 
 # C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20
@@ -361,6 +370,18 @@ set(RATIONS_IMG_FILES
     img/switch_up_ring.png
     img/switch_down_ring.png
     img/meter_track.png
+    # The pedalboard. Five blank enclosures, each stored at the art's own trimmed
+    # size and downscaled at draw time (the cabinet's arrangement, not the head's),
+    # plus the chrome footswitch cap. The knob and the two LEDs are NOT repeated
+    # here: the pedals blit the very same dial.png / led_on.png / led_off.png the
+    # amp head does. Built by gui/make_pedals.sh from resources/img/pedals/, which
+    # holds the untrimmed exports and the design references and ships nothing.
+    img/pedal-boost.png
+    img/pedal-chorus.png
+    img/pedal-flanger.png
+    img/pedal-delay.png
+    img/pedal-reverb.png
+    img/pedal_switch.png
     img/Folder.svg
     img/File.svg
     img/Gear.svg
@@ -446,6 +467,16 @@ set(RATIONS_PLUGIN_SOURCES
     src/irblend.cpp
     src/midilearn.h
     src/midilearn.cpp
+    # The pedalboard. Five pedals plus the two chains they sit in; the pedals themselves are
+    # header-only until the phase that gives each one a body, so only the chain has a .cpp.
+    src/pedals/pedal.h
+    src/pedals/boost.h
+    src/pedals/chorus.h
+    src/pedals/flanger.h
+    src/pedals/delay.h
+    src/pedals/reverb.h
+    src/pedals/pedalchain.h
+    src/pedals/pedalchain.cpp
     src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
@@ -758,6 +789,7 @@ add_executable(rations_rtcheck
     ${RATIONS_ROOT}/src/modelbank.cpp
     ${RATIONS_ROOT}/src/crossfadeengine.cpp
     ${RATIONS_ROOT}/src/channelrack.cpp
+    ${RATIONS_ROOT}/src/pedals/pedalchain.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
     # from throwing out of the worker thread. Linked in rather than taken from
     # RationsGfx because this target deliberately links no graphics at all — it

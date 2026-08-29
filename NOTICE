@@ -52,7 +52,41 @@ The following components are used under the MIT Licence:
 
 -------------------------------------------------------------------------------
 
-The following component is used under the zlib Licence:
+The following component is the author's own work, used under the MIT Licence:
+
+  BigBubbleMuff (haiku/source/dsp)
+  Copyright (c) 2026 BigBubbleMuff contributors
+
+  Vendored as deps/bbm/Oversampler.h, Filters.h and AudioMath.h. Oversampler.h
+  is the 4x half-band polyphase-IIR oversampler the Boost pedal's nonlinear
+  solver runs inside; its coefficients were solved by a minimax filter designer
+  and its measured figures are recorded beside each table in the file.
+  Filters.h is a TPT one-pole section; AudioMath.h supplies a linear parameter
+  smoother and a NaN guard.
+
+  A note on why the per-file grant governs. That project's top-level COPYING is
+  GNU GPL version 3, because its Linux build links JUCE. Its haiku/ subtree,
+  from which these three files come, carries its own MIT LICENSE, and every file
+  in it declares SPDX-License-Identifier: MIT in its own header. That subtree is
+  framework-free by construction -- it is described in its own comments as "the
+  Linux engine with the framework taken out" -- and includes nothing GPL, so the
+  GPLv3 at the repository root is the licence of the JUCE-linked aggregate, not
+  of these files. The author of Rations is also the rights-holder of that work
+  and has confirmed this reading. This is the same relicensing-of-own-work
+  situation already recorded below for the art scripts.
+
+  Not taken from that project: DiodeClipper.h, TransistorStage.h, Netlist.h and
+  ToneStack.h, all of which encode Big Muff Pi component values and topology.
+  The Boost pedal's clipper is a different circuit and is written against the
+  Ibanez TS-9 analysis in David Yeh's Stanford CCRMA thesis (see the reference
+  set in third_party/refs/pedals/SOURCES.md), citing that thesis' own equation
+  numbers. Where it follows DiodeClipper.h's numerical technique -- the asinh
+  initial guess and the overflow-bounded exponential that keep a Newton solve
+  real-time-safe -- it says so at the site.
+
+-------------------------------------------------------------------------------
+
+The following components are used under the zlib Licence:
 
   NanoSVG                   https://github.com/memononen/nanosvg
   Copyright (c) 2013-14 Mikko Mononen
@@ -60,6 +94,28 @@ The following component is used under the zlib Licence:
   Vendored as src/gfx/nanosvg/nanosvg.h and nanosvgrast.h, which rasterise the
   plug-in's SVG icons at runtime. The zlib licence text is retained in full at
   the top of each header.
+
+  WDL                       https://www.cockos.com/wdl/
+  Copyright (c) 2005 and later Cockos Incorporated
+
+  Vendored as deps/wdl/verbengine.h, heapbuf.h, denormal.h and wdltypes.h.
+  verbengine.h is the Reverb pedal's engine; it is in turn derived from the
+  public-domain Freeverb by Jezar at Dreampoint (June 2000,
+  http://www.dreampoint.co.uk), as its own header records. heapbuf.h is the
+  buffer it allocates through, denormal.h flushes the denormals its feedback
+  paths would otherwise generate, and wdltypes.h is what those two include.
+
+  WDL is Cockos' own platform-independent library. The copy vendored here was
+  taken from the checkout inside iPlug2 at third_party/NeuralAmpModelerPlugin,
+  because that is where a copy already sat on this machine -- but NO iPlug2 code
+  is used, linked or included. iPlug2's own IPlug/Extras headers (LFO.h, SVF.h,
+  DCBlocker.h, Smoothers.h) were considered and REJECTED, because each reaches
+  IPlugPlatform.h or IPlugConstants.h and would drag that framework into the
+  include graph. The four files above include nothing but each other and the C
+  standard library, and are verified to build on Linux with -Wall -Wextra.
+
+  The zlib terms were already accepted in this tree by AudioDSPTools'
+  ResamplingContainer.h, which carries the same licence.
 
 -------------------------------------------------------------------------------
 
