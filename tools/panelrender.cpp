@@ -949,9 +949,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "panelrender: no resource directory; pass one explicitly\n");
         return 1;
     }
-    if (scale < geo::kScaleMin || scale > geo::kScaleMax) {
+    // The lowest floor any page has, which is the settings page's: the pages do not share one
+    // any more. Each page is still rendered whole here, at its full height and with no scroll,
+    // because what this tool audits is the ART — whether a legend fits the space geometry.h gives
+    // it — and that question is asked of the page, not of the window showing part of it.
+    if (scale < geo::kSettingsScaleMin || scale > geo::kScaleMax) {
         fprintf(stderr, "panelrender: scale %.3f is outside the editor's range [%.2f, %.2f]\n",
-                scale, geo::kScaleMin, geo::kScaleMax);
+                scale, geo::kSettingsScaleMin, geo::kScaleMax);
         return 2;
     }
     printf("resources  %s\n", res.c_str());

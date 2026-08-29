@@ -493,4 +493,12 @@ bool FileBrowser::handleWheel(int delta)
     return true;
 }
 
+// The same clamp as handleWheel's, without the movement: for a card whose bounds changed under an
+// open list. visibleRows() reads the current bounds, so this is simply "is mScroll still legal".
+void FileBrowser::clampScroll()
+{
+    const int maxScroll = std::max(0, static_cast<int>(mEntries.size()) - visibleRows());
+    mScroll = std::min(std::max(mScroll, 0), maxScroll);
+}
+
 } // namespace Rations

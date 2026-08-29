@@ -46,6 +46,46 @@ static void button(int down)
     XFlush(display);
 }
 
+// The wheel is buttons 4 (up) and 5 (down) in X11, one press-and-release per click. Needed to
+// test a scrolling page: the settings page scrolls, and the only two ways to move it are this and
+// dragging the scrollbar.
+static void wheel(int clicks)
+{
+    const unsigned int b = clicks > 0 ? 4u : 5u;
+    int n = clicks > 0 ? clicks : -clicks;
+    for (; n > 0; --n) {
+        XTestFakeButtonEvent(display, b, True, CurrentTime);
+        XTestFakeButtonEvent(display, b, False, CurrentTime);
+        XFlush(display);
+        usleep(40000);
+    }
+}
+
+// Resize the host's TOP-LEVEL window, which is what makes the host call the plug-in's
+// checkSizeConstraint and then onSize. Resizing the plug-in's own child window directly would
+// change some pixels and tell the plug-in nothing, so the editor would never re-lay-out and the
+// test would prove the opposite of what it looked like it proved.
+//
+// The caller passes the plug-in's child window (it is the one findable by size), so walk up to
+// the ancestor whose parent is the root and resize that.
+static void resizeTopLevel(int w, int h)
+{
+    Window top = window;
+    for (;;) {
+        Window r = 0, parent = 0, *children = NULL;
+        unsigned int n = 0;
+        if (!XQueryTree(display, top, &r, &parent, &children, &n))
+            break;
+        if (children)
+            XFree(children);
+        if (parent == 0 || parent == r)
+            break;
+        top = parent;
+    }
+    XResizeWindow(display, top, (unsigned)w, (unsigned)h);
+    XFlush(display);
+}
+
 // One key, by keysym. Focus is set to the target window first: XTEST delivers to whatever has
 // the input focus, and without this the keys land wherever the desktop last put it - which looks
 // exactly like a plug-in that ignored them.
@@ -78,9 +118,10 @@ static void typeString(const char *text)
 int main(int argc, char **argv)
 {
     if (argc < 4) {
-        fprintf(stderr,
-                "usage: editor-drive <click|drag> <window-id> <x> <y> [dx dy]\n"
-                "       editor-drive <type|key> <window-id> <text|keysym-name>\n");
+        fprintf(stderr, "usage: editor-drive <click|drag> <window-id> <x> <y> [dx dy]\n"
+                        "       editor-drive wheel <window-id> <x> <y> <clicks>\n"
+                        "       editor-drive resize <window-id> <w> <h>\n"
+                        "       editor-drive <type|key> <window-id> <text|keysym-name>\n");
         return 2;
     }
     display = XOpenDisplay(NULL);
@@ -110,6 +151,17 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (strcmp(argv[1], "resize") == 0) {
+        if (argc < 5) {
+            fprintf(stderr, "editor-drive: resize needs w and h\n");
+            XCloseDisplay(display);
+            return 2;
+        }
+        resizeTopLevel(atoi(argv[3]), atoi(argv[4]));
+        XCloseDisplay(display);
+        return 0;
+    }
+
     if (argc < 5) {
         fprintf(stderr, "editor-drive: click and drag need x and y\n");
         XCloseDisplay(display);
@@ -117,6 +169,19 @@ int main(int argc, char **argv)
     }
     const int x = atoi(argv[3]);
     const int y = atoi(argv[4]);
+
+    if (strcmp(argv[1], "wheel") == 0) {
+        if (argc < 6) {
+            fprintf(stderr, "editor-drive: wheel needs a click count\n");
+            XCloseDisplay(display);
+            return 2;
+        }
+        moveTo(x, y);
+        usleep(50000);
+        wheel(atoi(argv[5]));
+        XCloseDisplay(display);
+        return 0;
+    }
 
     if (strcmp(argv[1], "click") == 0) {
         moveTo(x, y);

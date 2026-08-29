@@ -22,6 +22,17 @@
 // inside the device rect and centre it — so the fallback is not a second code path that only runs
 // in hosts nobody tests against; it is the same path with a different remainder.
 //
+// SCROLLING. One page — settings, at 928 units — can be taller than its window, and that is the
+// case the letterbox arithmetic above could not serve: fitting it would have meant a scale below
+// the floor, and clamping to the floor cut the ends off the page. So that page is width-locked
+// and free in height, and the band that does not fit is reached by scrolling (geo::pageScrolls).
+//
+// The scroll is ONE translate inside the page transform, not a second coordinate system. Content
+// is drawn with it and clipped to the viewport; chrome — the back button, the scrollbar and the
+// browser overlay — is drawn after it is undone; and hit-testing adds it back exactly where the
+// drawing subtracted it, in contentY(). Every page that does not scroll runs the same code with
+// mScrollY at 0.
+//
 // The page is editor-local state and is deliberately neither a parameter nor persisted: a host
 // recalling a preset must not also recall which panel the user was looking at.
 //
@@ -109,6 +120,11 @@ private:
     void composeCabinet(Canvas &c);
     void composePedalboard(Canvas &c);
     void composeSettings(Canvas &c);
+    // Everything that does NOT scroll, drawn after the scroll translate is undone: the back
+    // button, the scrollbar, and the browser overlay. The back button is chrome rather than page
+    // content because it is the way out, and a scroll that can hide the exit is a trap.
+    void composeChrome(Canvas &c);
+    void drawScrollBar(Canvas &c);
 
 public:
     // Keyboard, from the host. The SDK is explicit that a view must NOT take keys from platform
@@ -145,6 +161,9 @@ private:
     // that accepts either a folder or one file — which has been in FileBrowser since it was ported
     // and, until now, had nothing in this plug-in to call it.
     void openCaptureBrowser(int channel);
+    // Size the browser card to the VIEWPORT rather than to the page, because the settings page
+    // may be taller than the window showing it. Called at open and again on every resize.
+    void boundCaptureBrowser();
 
     // --- renaming a channel ----------------------------------------------------------------
     // The one place this editor takes typed input, and the only one it is ever likely to: every
@@ -181,6 +200,30 @@ private:
     // The blend dial only does anything with both slots filled; with one it is drawn disabled and
     // ignores input, because a mix that can attenuate a one-IR user is a bug, not a blend.
     bool blendActive() const;
+
+    //--- scrolling -------------------------------------------------------
+    // True when the current page's content is taller than the window shows. mScrollMax is 0 on
+    // every other page and on this one whenever the whole page fits, so the scrollbar is drawn
+    // and hit-tested only when it can do something.
+    bool scrolling() const
+    {
+        return mScrollMax > 0.0;
+    }
+    // The visible height of the page, in logical units. Never more than the page itself.
+    double viewportH() const;
+    // Clamp into [0, mScrollMax] and repaint if it moved. Returns whether it moved.
+    bool setScroll(double y);
+    // A page-content Y from a window Y. The one place the scroll is undone for input, mirroring
+    // the one place it is applied for drawing.
+    float contentY(float fy) const
+    {
+        return fy + static_cast<float>(mScrollY);
+    }
+    Rect scrollTrackRect() const;
+    Rect scrollThumbRect() const;
+    // Thumb grab, or a track click that pages towards the pointer. Returns whether it took the
+    // click, so the caller can fall through to the page's own rows when it did not.
+    bool handleScrollBarClick(float x, float y);
 
     static bool hitCircle(float x, float y, float cx, float cy, float r);
     static Rect buttonRect(const geo::ButtonSpec &b);
@@ -225,6 +268,17 @@ private:
     int mDevW = geo::kWinW, mDevH = geo::kWinH;
     double mScale = 1.0;
     double mOffX = 0.0, mOffY = 0.0;
+
+    // How far the current page is scrolled, in logical units, and how far it can be. Both are 0
+    // on every page but settings, and on that one whenever the window is tall enough to show all
+    // 928 units, which is the normal case at the default size.
+    double mScrollY = 0.0;
+    double mScrollMax = 0.0;
+    // A scrollbar drag, which is deliberately not an mDragParam: it edits no parameter, touches
+    // no host automation, and must survive a pointer that leaves the bar.
+    bool mScrollDrag = false;
+    float mScrollGrabY = 0.0f;
+    double mScrollGrabScroll = 0.0;
 
     FileBrowser mBrowser;
     int mBrowserSlot = 0; // which IR row opened it

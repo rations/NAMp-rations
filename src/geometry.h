@@ -84,13 +84,21 @@ constexpr int kPedalPageH = 220;
 // before MIDI, because every user has four channels to balance and only some own
 // a footswitch.
 //
-// 928 units tall, which is taller than any other page here by a long way. It is
-// not letterboxed or scrolled: the editor fits whichever page is showing inside
-// the window and this one simply gets a smaller scale in a short window - see
-// kSettingsScaleMin, which is the one thing about the page swap this section
-// changed.
+// 928 units tall, which is taller than any other page here by a long way, and
+// the only page whose window may be shorter than the page itself: it is
+// width-locked, free in height, and scrolls. See pageScrolls() below for why
+// the smaller scale kSettingsScaleMin gives it did not turn out to be enough on
+// its own.
 constexpr int kSettingsPageW = 640;
 constexpr int kSettingsPageH = 928;
+
+// The shortest that page's viewport may be dragged to, in logical units: the
+// fixed header band that carries the back button (kPageContentTop, 50) plus
+// three rows of the shared settings grid (3 * kMidiRowPitch, 120) plus a 20-unit
+// margin. Spelled as a literal here because it is needed by pageMinH() long
+// before those two constants are declared; the static_assert beside them is what
+// stops the two spellings drifting apart.
+constexpr int kSettingsMinViewH = 190;
 
 struct PageSize {
     int w, h;
@@ -127,21 +135,52 @@ constexpr double kScaleMax = 1.50;
 // head is 403 and the same multiple would mean a very different window. At 0.66
 // it would be 613 device px, which is already more than the usable height of a
 // 768-line laptop screen once the host's own furniture is accounted for; at 0.50
-// it is 464, which fits with room to spare.
-//
-// A lower floor rather than a scrollbar, and that is a deliberate choice about
-// what this editor is: one logical canvas, one cairo_scale at compose, mouse
-// divided by that scale before hit-testing. A scroll offset would put a second
-// coordinate rule on one page - one the browser overlay, the drag handling and
-// the wheel would all have to know about - and the wheel is already spoken for
-// on this page, where it nudges a channel trim by half a decibel. Shrinking is
-// the honest trade: the whole page stays visible and legible-if-small, rather
-// than becoming legible-in-pieces.
+// it is 464.
 constexpr double kSettingsScaleMin = 0.50;
 
 constexpr double pageScaleMin(Page p)
 {
     return p == Page::Settings ? kSettingsScaleMin : kScaleMin;
+}
+
+// --- The one page that scrolls ----------------------------------------------
+// A LOWER FLOOR WAS NOT ENOUGH, and that is a measurement rather than a change
+// of mind. The floor was written to make the whole page fit in a short window;
+// what it could not do is make the whole page fit in a short window ON A HOST
+// THAT WILL NOT RESIZE. Every other page is 403 units tall or less, so the
+// letterbox path — fit the page in whatever window exists and centre it — always
+// had room. This one is 928, and when the fitted scale came out below the floor
+// it was clamped UP to the floor, which put mOffY negative and cut the top and
+// bottom off the page. The sections at the ends are the capture loaders and the
+// output mode: the two a user needs most and the two that went missing.
+//
+// So the settings page is width-locked and free in height. Its scale comes from
+// the window's WIDTH alone, its height may be anything from kSettingsMinViewH
+// upward, and whatever does not fit is reached by scrolling.
+//
+// It stays ONE logical canvas. The scroll is a single translate inside the page
+// transform, undone before the chrome is drawn, and undone again on the way back
+// for hit-testing — the same shape as the cairo_scale it sits inside, and the
+// reason the three things the old comment here worried about each cost one line
+// rather than a coordinate system:
+//
+//   * the browser overlay is drawn in CHROME space, after the scroll is undone,
+//     so it never moves and its clicks need no offset. What it does need is a
+//     height taken from the viewport instead of from the page, or the card would
+//     be taller than the window it is centred in;
+//   * a drag reads deltas, and a delta is scroll-invariant as long as the scroll
+//     does not move under it, which it cannot: the wheel is consumed by the
+//     scrollbar drag while one is in progress;
+//   * the wheel keeps its jobs. Over a control that answers it, it still nudges
+//     that control; anywhere else on the page it now scrolls. A control has to
+//     be under the pointer to be nudged, so the two never both apply.
+//
+// The back button becomes chrome rather than content on a scrolling page: it is
+// the way OUT, and scrolling the exit off the screen is the one thing a scroll
+// must never do. kPageContentTop already reserved exactly that band.
+constexpr bool pageScrolls(Page p)
+{
+    return p == Page::Settings;
 }
 
 // Rounded, not truncated, so these agree with the sizes the editor actually
@@ -153,7 +192,12 @@ constexpr int pageMinW(Page p)
 }
 constexpr int pageMinH(Page p)
 {
-    return static_cast<int>(pageSize(p).h * pageScaleMin(p) + 0.5);
+    // A scrolling page's window is allowed to be shorter than the page it shows,
+    // so its floor is the shortest VIEWPORT rather than the whole page scaled
+    // down. Without this the minimum height would be the one number that made
+    // the page unreachable in the first place.
+    const int h = pageScrolls(p) ? kSettingsMinViewH : pageSize(p).h;
+    return static_cast<int>(h * pageScaleMin(p) + 0.5);
 }
 constexpr int pageMaxW(Page p)
 {
@@ -525,6 +569,40 @@ constexpr int kMidiRowX = 24;
 constexpr int kMidiRowW = kSettingsPageW - 2 * kMidiRowX; // 592
 constexpr int kMidiRowH = 32;
 constexpr int kMidiRowPitch = 40;
+
+// kSettingsMinViewH is spelled as a literal up beside kSettingsPageH, because
+// pageMinH() needs it long before this grid is declared. This is the arithmetic
+// it stands for, checked rather than trusted.
+static_assert(kSettingsMinViewH == kPageContentTop + 3 * kMidiRowPitch + 20,
+              "kSettingsMinViewH must stay the header band plus three rows plus a margin");
+
+// --- The settings page's scrollbar ------------------------------------------
+// Down the right-hand margin, in the 24 units between the rows' right edge
+// (kMidiRowX + kMidiRowW = 616) and the page edge, so it takes no width from
+// anything and no row had to move to make space for it.
+//
+// Wider than the file browser's own 3-unit scroll INDICATOR, and the difference
+// is the point: that one only reports a position, this one is dragged. Same two
+// colours, so they read as the same idea at two jobs.
+constexpr int kScrollBarW = 10;
+constexpr int kScrollBarInset = 6;
+constexpr int kScrollBarX = kSettingsPageW - kScrollBarInset - kScrollBarW; // 624
+constexpr float kScrollBarRadius = 5.0f;
+// A thumb proportional to the visible fraction, floored so that a long page
+// still leaves something to catch hold of.
+constexpr float kScrollThumbMinH = 28.0f;
+// One wheel click, in logical units: one row of the grid above, so the page
+// steps by a row rather than by an arbitrary distance.
+constexpr double kScrollWheelStep = kMidiRowPitch;
+
+// The bar takes its width out of the page's right margin and out of nothing
+// else, so no row had to move and no row may grow into it later. Checked here
+// rather than audited at render time, because it is arithmetic on two constants
+// and a compile error is a better report than a picture.
+static_assert(kMidiRowX + kMidiRowW <= kScrollBarX,
+              "the settings rows must not reach into the scrollbar's margin");
+static_assert(kScrollBarX + kScrollBarW + kScrollBarInset == kSettingsPageW,
+              "the scrollbar must sit kScrollBarInset in from the page's right edge");
 constexpr int kMidiRowCount = kChannelToggleCount;
 constexpr int kMidiRowTextSize = 15;
 
@@ -713,6 +791,12 @@ constexpr int kCaptureBrowserX = 16;
 constexpr int kCaptureBrowserY = 40;
 constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 608
 constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 848
+// That height is a CEILING now, not the size: the settings page scrolls, so the
+// window showing it may be shorter than the page, and the card is sized to the
+// viewport instead (RationsEditorView::boundCaptureBrowser). This is the floor
+// for that — the card's own header and footer plus three rows, below which it
+// stops being a list and becomes a pair of buttons.
+constexpr int kCaptureBrowserMinH = 160;
 
 } // namespace geo
 } // namespace Rations

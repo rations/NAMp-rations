@@ -42,6 +42,14 @@
 #   scripts/editor-drive.sh drag 251 226 0 -70 shot out.png     # photographed mid-drag
 #   scripts/editor-drive.sh click 140 110 type "JCM800" key Return shot out.png
 #   scripts/editor-drive.sh --size 640x460 click 320 200 shot cab.png
+#   scripts/editor-drive.sh click 981 106 resize 640 420 shot short.png   # the settings page,
+#                                                                        # short enough to scroll
+#   scripts/editor-drive.sh --size 640x420 wheel 320 300 -4 shot down.png
+#
+# `resize` resizes the HOST's top-level window, which is what makes the host ask the plug-in's
+# checkSizeConstraint and then call onSize — resizing the plug-in's child window directly would
+# repaint some pixels and tell the editor nothing. After one, pass the new size to --size on the
+# next invocation, since that is how the window is found.
 #
 # Commands are applied in order, so several clicks and shots can be chained in one session. The
 # host is started once and torn down at the end.
@@ -59,7 +67,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --size)   size="$2"; shift 2 ;;
         --settle) settle="$2"; shift 2 ;;
-        -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
         *) break ;;
     esac
 done
@@ -140,6 +148,20 @@ while [ "$#" -gt 0 ]; do
             echo "  key $2"
             sleep 1
             shift 2 ;;
+        wheel)
+            "$poke" wheel "$window" "$2" "$3" "$4"
+            echo "  wheel $2,$3 x$4"
+            sleep 1
+            shift 4 ;;
+        resize)
+            # The window keeps its id across a resize, so nothing has to be found again in this
+            # session; a LATER invocation does, which is what the --size note in the header is
+            # about. The settle is longer than a click's because the host has to round-trip the
+            # size through checkSizeConstraint before it calls onSize.
+            "$poke" resize "$window" "$2" "$3"
+            echo "  resize $2x$3"
+            sleep 2
+            shift 3 ;;
         shot)
             import -window "$window" "$2"
             echo "  shot -> $2"

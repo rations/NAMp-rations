@@ -143,6 +143,12 @@ void RationsEditorView::setPage(geo::Page page)
     // Carry the scale across, so the window changes SHAPE and not apparent size.
     const double scale = mScale;
     mPage = page;
+    // A page is entered at its top. Carrying a scroll position across would mean arriving at the
+    // settings page part-way down it, which is neither where the user left it (the page they left
+    // was a different one) nor where anything they are looking for is.
+    mScrollY = 0.0;
+    mScrollMax = 0.0;
+    mScrollDrag = false;
 
     // The browser belongs to a page's rows; leaving it open across a page change would draw a
     // picker over a panel with nothing to pick. A half-typed channel name is the same kind of
@@ -174,16 +180,61 @@ void RationsEditorView::setPage(geo::Page page)
 // Fit the current page inside the window and centre it. One rule for both cases: after a
 // successful resize the remainder is zero and this is a pure scale, and in a host that would not
 // resize it letterboxes the page in the window that exists.
+//
+// A SCROLLING PAGE TAKES ITS SCALE FROM THE WIDTH ALONE, because its height is not a constraint
+// any more — whatever does not fit is scrolled to. Fitting it by height as well is what used to
+// drive the scale under the floor, and clamping back up to the floor is what put mOffY negative
+// and cut the ends off the page.
 void RationsEditorView::recomputeLayout()
 {
     const geo::PageSize ps = geo::pageSize(mPage);
     if (mDevW <= 0 || mDevH <= 0 || ps.w <= 0 || ps.h <= 0)
         return;
-    double s = std::min(mDevW / static_cast<double>(ps.w), mDevH / static_cast<double>(ps.h));
-    s = std::min(std::max(s, geo::kScaleMin), geo::kScaleMax);
+
+    const bool scrolls = geo::pageScrolls(mPage);
+    double s = mDevW / static_cast<double>(ps.w);
+    if (!scrolls)
+        s = std::min(s, mDevH / static_cast<double>(ps.h));
+    s = std::min(std::max(s, geo::pageScaleMin(mPage)), geo::kScaleMax);
     mScale = s;
     mOffX = (mDevW - ps.w * s) * 0.5;
-    mOffY = (mDevH - ps.h * s) * 0.5;
+
+    // How much of the page the window cannot show, in logical units. Zero — and so no scrollbar
+    // and no offset anywhere — on every other page, and on this one at any height that fits.
+    const double viewH = mDevH / s;
+    mScrollMax = scrolls ? std::max(0.0, ps.h - viewH) : 0.0;
+    mScrollY = std::min(std::max(mScrollY, 0.0), mScrollMax);
+
+    // A scrolled page is pinned to the top of its window: centring it would move the content by
+    // half the remainder and then the scroll would move it again, which is two rules for one
+    // number. When it fits, the ordinary letterbox centring applies exactly as before.
+    mOffY = mScrollMax > 0.0 ? 0.0 : (mDevH - ps.h * s) * 0.5;
+
+    // The browser card is sized to the page, and on a short window the page is taller than the
+    // window. Re-bound it here rather than only at open time, so a window dragged shorter with
+    // the picker up does not leave a card hanging out of the bottom of it.
+    if (mBrowser.isOpen() && scrolls)
+        boundCaptureBrowser();
+}
+
+//------------------------------------------------------------------------
+// The visible height of the page, in logical units.
+double RationsEditorView::viewportH() const
+{
+    const geo::PageSize ps = geo::pageSize(mPage);
+    if (mScale <= 0.0)
+        return ps.h;
+    return std::min(static_cast<double>(ps.h), mDevH / mScale);
+}
+
+bool RationsEditorView::setScroll(double y)
+{
+    const double next = std::min(std::max(y, 0.0), mScrollMax);
+    if (next == mScrollY)
+        return false;
+    mScrollY = next;
+    invalidate();
+    return true;
 }
 
 //------------------------------------------------------------------------
@@ -194,9 +245,23 @@ void RationsEditorView::constrainSize(int &w, int &h) const
 {
     const geo::PageSize ps = geo::pageSize(mPage);
     const double byW = w / static_cast<double>(ps.w);
+
+    // A scrolling page is WIDTH-LOCKED AND FREE IN HEIGHT: the scale comes from the width, and
+    // the height is then anything between the shortest useful viewport and the whole page. That
+    // is the whole of the resize contract that makes the scrollbar reachable — a height taken
+    // from the aspect ratio would refuse the very window sizes it exists to serve.
+    if (geo::pageScrolls(mPage)) {
+        const double s = std::min(std::max(byW, geo::pageScaleMin(mPage)), geo::kScaleMax);
+        w = static_cast<int>(std::lround(ps.w * s));
+        const int minH = static_cast<int>(std::lround(geo::kSettingsMinViewH * s));
+        const int maxH = static_cast<int>(std::lround(ps.h * s));
+        h = std::min(std::max(h, minH), maxH);
+        return;
+    }
+
     const double byH = h / static_cast<double>(ps.h);
     double s = std::min(byW, byH);
-    s = std::min(std::max(s, geo::kScaleMin), geo::kScaleMax);
+    s = std::min(std::max(s, geo::pageScaleMin(mPage)), geo::kScaleMax);
     w = static_cast<int>(std::lround(ps.w * s));
     h = static_cast<int>(std::lround(ps.h * s));
 }
@@ -313,7 +378,25 @@ void RationsEditorView::onDraw(cairo_t *cr)
     Canvas c(cr, &mFonts, static_cast<float>(ps.w), static_cast<float>(ps.h));
     if (!mBackground)
         drawStaticLayer(c);
-    compose(c);
+
+    if (scrolling()) {
+        // The page content, moved up by the scroll and clipped to the band below the fixed
+        // header. The clip is what keeps a row that has scrolled past the top from drawing over
+        // the back button, and it is the same rect the scroll range is computed from.
+        const float top = static_cast<float>(geo::kPageContentTop);
+        c.pushClip(
+            Rect(0.0f, top, static_cast<float>(ps.w), static_cast<float>(viewportH()) - top));
+        cairo_save(cr);
+        cairo_translate(cr, 0.0, -mScrollY);
+        compose(c);
+        cairo_restore(cr);
+        c.popClip();
+    } else {
+        compose(c);
+    }
+
+    // Chrome last, and outside the translate above: it does not scroll.
+    composeChrome(c);
     cairo_restore(cr);
 }
 
@@ -333,8 +416,94 @@ void RationsEditorView::compose(Canvas &c)
             composeSettings(c);
             break;
     }
+}
+
+//------------------------------------------------------------------------
+// Everything that stays put while the page scrolls. On a page that does not scroll this is drawn
+// at exactly the coordinates it always was, so the three non-scrolling pages are unchanged.
+void RationsEditorView::composeChrome(Canvas &c)
+{
+    // The way back, on every page but the head. Chrome rather than page content because it is the
+    // exit: a scroll that can push the exit off the top of the window is a trap, and
+    // kPageContentTop already reserved this band for it.
+    if (mPage != geo::Page::Head)
+        drawButton(c, geo::kBackButton);
+    if (scrolling())
+        drawScrollBar(c);
+    // The browser is an overlay on the window, not a row of the page, so it neither scrolls nor
+    // needs its clicks un-scrolled.
     if (mBrowser.isOpen())
         mBrowser.draw(c);
+}
+
+//------------------------------------------------------------------------
+// Down the right-hand margin. Two colours and two rounded rects, which is the file browser's own
+// scroll indicator at a size that can be grabbed — see geometry.h.
+void RationsEditorView::drawScrollBar(Canvas &c)
+{
+    const Rect track = scrollTrackRect();
+    c.setColor(geo::kGold, 60);
+    c.fillRoundRect(track, geo::kScrollBarRadius);
+    c.setColor(geo::kAccent, mScrollDrag ? 255 : 200);
+    c.fillRoundRect(scrollThumbRect(), geo::kScrollBarRadius);
+}
+
+//------------------------------------------------------------------------
+// The track runs the height of the scrolling band, inset top and bottom by the same margin it is
+// inset from the page edge, so it reads as one shape rather than as a bar that touches the ends.
+Rect RationsEditorView::scrollTrackRect() const
+{
+    const float inset = static_cast<float>(geo::kScrollBarInset);
+    const float top = static_cast<float>(geo::kPageContentTop);
+    const float bottom = static_cast<float>(viewportH()) - inset;
+    return Rect::fromLTRB(static_cast<float>(geo::kScrollBarX), top,
+                          static_cast<float>(geo::kScrollBarX + geo::kScrollBarW), bottom);
+}
+
+// Length proportional to the visible fraction, floored at kScrollThumbMinH so a long page still
+// leaves something to catch hold of; position proportional to the scroll, against a travel that
+// is the track minus the thumb rather than the whole track, or the thumb would run off the end.
+Rect RationsEditorView::scrollThumbRect() const
+{
+    const Rect track = scrollTrackRect();
+    const geo::PageSize ps = geo::pageSize(mPage);
+    const double visible = viewportH();
+    const float frac = ps.h > 0 ? static_cast<float>(visible / static_cast<double>(ps.h)) : 1.0f;
+    const float thumbH = std::min(track.h, std::max(track.h * frac, geo::kScrollThumbMinH));
+    const double pos = mScrollMax > 0.0 ? mScrollY / mScrollMax : 0.0;
+    const float y = track.y + static_cast<float>(pos) * (track.h - thumbH);
+    return Rect(track.x, y, track.w, thumbH);
+}
+
+//------------------------------------------------------------------------
+// x and y are WINDOW coordinates: the bar is chrome and does not scroll with what it scrolls.
+// Returns whether the click was the bar's, so the caller can fall through to the page's own rows
+// when it was not.
+bool RationsEditorView::handleScrollBarClick(float x, float y)
+{
+    if (!scrolling())
+        return false;
+    const Rect track = scrollTrackRect();
+    // A few units of slack either side of a 10-unit bar, because at the 0.50 floor it is 5 device
+    // pixels wide and a bar that has to be hit exactly is a bar nobody uses.
+    if (!track.inset(-4.0f).contains(x, y))
+        return false;
+
+    const Rect thumb = scrollThumbRect();
+    if (y < thumb.top() || y >= thumb.bottom()) {
+        // Track click: page towards the pointer by one screenful, rather than jumping the thumb
+        // to the click. A jump would make a mis-aimed click on a bar this narrow throw the page
+        // to somewhere the user was not asking for, and there is no undo for a scroll.
+        const double page = std::max(1.0, viewportH() - geo::kPageContentTop);
+        setScroll(mScrollY + (y < thumb.top() ? -page : page));
+        return true;
+    }
+
+    mScrollDrag = true;
+    mScrollGrabY = y;
+    mScrollGrabScroll = mScrollY;
+    invalidate();
+    return true;
 }
 
 //------------------------------------------------------------------------
@@ -391,7 +560,6 @@ void RationsEditorView::composeCabinet(Canvas &c)
 
     drawIrRow(c, 0);
     drawIrRow(c, 1);
-    drawButton(c, geo::kBackButton);
 }
 
 //------------------------------------------------------------------------
@@ -408,7 +576,6 @@ void RationsEditorView::composePedalboard(Canvas &c)
     const char *caption = "overdrive, flanger, chorus, delay, reverb";
     c.drawString(caption, cx - c.stringWidth(caption) * 0.5f,
                  static_cast<float>(geo::kPedalPlaceholderY + geo::kPedalCaptionDY));
-    drawButton(c, geo::kBackButton);
 }
 
 //------------------------------------------------------------------------
@@ -524,8 +691,6 @@ void RationsEditorView::composeSettings(Canvas &c)
     c.setColor(geo::kDimColor);
     c.drawString(geo::kOutputFootnote, cx - c.stringWidth(geo::kOutputFootnote) * 0.5f,
                  static_cast<float>(geo::kOutputFootnoteY));
-
-    drawButton(c, geo::kBackButton);
 }
 
 //------------------------------------------------------------------------
@@ -1436,8 +1601,9 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
     // one deliberately does not set CS_DBLCLKS, so that the two platforms behave the same.
     if (button == 3) {
         if (mPage == geo::Page::Settings && !mBrowser.isOpen() && mController) {
+            const float cy = contentY(fy);
             for (int i = 0; i < geo::kLevelRowCount; ++i) {
-                if (!levelRowRect(i).contains(fx, fy))
+                if (!levelRowRect(i).contains(fx, cy))
                     continue;
                 const Vst::ParamID id = kChannelLevelId[i];
                 mController->beginEdit(id);
@@ -1487,7 +1653,15 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
             handleCabinetClick(fx, fy);
             return;
         case geo::Page::Settings:
-            handleSettingsClick(fx, fy);
+            // The scrollbar is chrome, so it is hit-tested in window coordinates and gets first
+            // refusal; the rows below it are page content and are asked in page coordinates.
+            // Nothing above the fixed header band is content at all, which is what stops a click
+            // beside the back button reaching a row that has scrolled underneath it.
+            if (handleScrollBarClick(fx, fy))
+                return;
+            if (fy < static_cast<float>(geo::kPageContentTop))
+                return;
+            handleSettingsClick(fx, contentY(fy));
             return;
         case geo::Page::Pedalboard:
             // A placeholder page, and the back button above is the only thing on it.
@@ -1613,7 +1787,23 @@ bool RationsEditorView::handleIrRowClick(int slot, float x, float y)
 void RationsEditorView::onMouseMove(int x, int y)
 {
     mMouseX = static_cast<float>((x - mOffX) / mScale);
-    mMouseY = static_cast<float>((y - mOffY) / mScale);
+    // In PAGE coordinates, like every rect it is tested against. A drag reads deltas, and those
+    // are the same either way, but the hover tests are not.
+    mMouseY = contentY(static_cast<float>((y - mOffY) / mScale));
+
+    if (mScrollDrag) {
+        // The thumb's travel is the track minus the thumb, and the scroll's range is mScrollMax,
+        // so a pixel of thumb is that ratio of page. Computed from the CURRENT thumb rather than
+        // a value cached at grab time, because nothing can change its size mid-drag and reading
+        // it here is one fewer thing that can go stale.
+        const Rect track = scrollTrackRect();
+        const float travel = track.h - scrollThumbRect().h;
+        const float dy = static_cast<float>((y - mOffY) / mScale) - mScrollGrabY;
+        setScroll(travel > 0.0f ? mScrollGrabScroll + dy * (mScrollMax / travel)
+                                : mScrollGrabScroll);
+        return;
+    }
+
     if (!mDragParam || !mController)
         return;
     double norm;
@@ -1638,6 +1828,10 @@ void RationsEditorView::onMouseUp(int /*x*/, int /*y*/, int button)
 {
     if (button != 1)
         return;
+    if (mScrollDrag) {
+        mScrollDrag = false;
+        invalidate(); // the thumb goes back to its resting brightness
+    }
     if (mDragParam && mController) {
         mController->endEdit(mDragParam);
         mDragParam = 0;
@@ -1663,11 +1857,33 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
         return;
     }
     if (mPage == geo::Page::Settings) {
+        // WHEN THERE IS A SCROLLBAR, THE WHEEL SCROLLS. Nothing else on this page gets it.
+        //
+        // The first rule written here was the polite one — a control under the pointer keeps the
+        // wheel, the background scrolls — and driving the built editor is what showed it does not
+        // work. This page is rows: twelve of them, 592 units wide on a 640-unit page, with 8-unit
+        // gaps. The pointer is almost always over one, so "scrolls unless over a control" means
+        // "does not scroll", and the first test of it wound a channel trim to -11.5 dB while
+        // trying to reach the output section.
+        //
+        // So the rule follows the scrollbar, which is the thing the user can see: a scrollbar
+        // means the wheel scrolls, no scrollbar means it nudges whatever is under it. Nothing is
+        // lost at the size the nudge was designed for, because a window showing the whole page
+        // has no scrollbar and behaves exactly as it did. And at a short window the trims are
+        // still dragged and still right-click back to 0 dB — the wheel was the third way to reach
+        // them, not the only one.
+        if (scrolling()) {
+            // Wheel up scrolls the content up, which is towards the top of the page — the same
+            // sign convention the file browser's own list uses.
+            setScroll(mScrollY - delta * geo::kScrollWheelStep);
+            return;
+        }
+        const float cy = contentY(fy);
         // One click is kLevelWheelDb, so a trim can be set to a round number without aiming: a
         // drag lands wherever the pointer does, and these are values a player wants to be able
         // to repeat on the other three channels.
         for (int i = 0; i < geo::kLevelRowCount; ++i) {
-            if (levelRowRect(i).contains(fx, fy)) {
+            if (levelRowRect(i).contains(fx, cy)) {
                 nudgeParam(kChannelLevelId[i],
                            delta * geo::kLevelWheelDb / (ranges::kLevelMax - ranges::kLevelMin));
                 return;
@@ -1675,7 +1891,7 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
         }
         // The interface calibration level, in whole decibels: an interface's stated level is a
         // round number, and this is how a user lands on theirs without aiming a drag at it.
-        if (inputCalibrationAvailable() && calValueRect().contains(fx, fy)) {
+        if (inputCalibrationAvailable() && calValueRect().contains(fx, cy)) {
             nudgeParam(kInputCalLevelId,
                        delta * geo::kCalWheelDb / (ranges::kCalMax - ranges::kCalMin));
             return;
@@ -1927,13 +2143,31 @@ tresult PLUGIN_API RationsEditorView::onKeyUp(char16, int16, int16)
 // Either answer is ordinary. A folder of captures is what a channel's dial sweeps and is the
 // normal case; a single .nam is an ordinary thing to own, and everything below the editor has
 // always been able to play one as a bank of one.
+// The card is inset into the SETTINGS PAGE, and that page can be taller than the window showing
+// it. So the height comes from the viewport rather than from the page: a card sized to 928 units
+// in a window showing 400 of them would hang out of the bottom, taking its Choose button with it.
+// recomputeLayout() calls this again on every resize, so a window dragged shorter with the picker
+// already up is the same case rather than a special one.
+void RationsEditorView::boundCaptureBrowser()
+{
+    const float y = static_cast<float>(geo::kCaptureBrowserY);
+    const float maxH = static_cast<float>(viewportH()) - 2.0f * y;
+    const float h = std::max(std::min(static_cast<float>(geo::kCaptureBrowserH), maxH),
+                             static_cast<float>(geo::kCaptureBrowserMinH));
+    mBrowser.setBounds(Rect(static_cast<float>(geo::kCaptureBrowserX), y,
+                            static_cast<float>(geo::kCaptureBrowserW), h));
+    // A card that just got shorter shows fewer rows, and the list may be scrolled past what is
+    // left of it. The browser clamps its own scroll on the next wheel click, which is too late to
+    // stop this frame drawing an empty list.
+    mBrowser.clampScroll();
+}
+
 void RationsEditorView::openCaptureBrowser(int channel)
 {
     if (!mController)
         return;
     mBrowserChannel = channel;
-    mBrowser.setBounds(Rect(geo::kCaptureBrowserX, geo::kCaptureBrowserY, geo::kCaptureBrowserW,
-                            geo::kCaptureBrowserH));
+    boundCaptureBrowser();
     // Seeded from what this channel already has, so reopening the picker starts where the user
     // last was rather than at their home directory. That is the whole of "remembering" a folder
     // here: the path is in the state blob, so it survives the session too.

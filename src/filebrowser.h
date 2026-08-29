@@ -115,6 +115,11 @@ public:
     void draw(Canvas &c);
     Result handleClick(float x, float y);
     bool handleWheel(int delta);
+    // Pull the scroll back into range for the bounds the card has NOW. handleWheel already does
+    // this for itself, which is enough while the card is a fixed size; it is not enough when the
+    // card can be re-bounded under an open list by a window resize, because the next frame is
+    // drawn before the next wheel click and would show an empty list.
+    void clampScroll();
 
 private:
     struct Entry {
