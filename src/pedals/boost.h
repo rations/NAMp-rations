@@ -182,7 +182,8 @@ protected:
         // One smoothing step and one coefficient rebuild per block. exp() once per block, never
         // per sample.
         const double alpha =
-            1.0 - std::exp(-(static_cast<double>(numSamples) / mSampleRate) / ts9::kControlSmoothSec);
+            1.0
+            - std::exp(-(static_cast<double>(numSamples) / mSampleRate) / ts9::kControlSmoothSec);
         const double driveWas = mDrive;
         const double toneWas = mTone;
         mDrive += (mDriveTarget - mDrive) * alpha;
