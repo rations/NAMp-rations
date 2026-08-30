@@ -20,6 +20,7 @@
 #include "pedals/delay.h"
 #include "pedals/flanger.h"
 #include "pedals/primitives.h"
+#include "pedals/reverb.h"
 
 #include <algorithm>
 #include <cmath>
@@ -557,6 +558,202 @@ bool hasSubnormal(const std::vector<double> &v)
         if (x != 0.0 && std::fabs(x) < 2.2250738585072014e-308)
             return true;
     return false;
+}
+
+//==================================================================================================
+// P7 — the Reverb.
+//
+// The references are PASP's "Freeverb" and the two pages under it, "Freeverb Main Loop" and
+// "Lowpass-Feedback Comb Filter", copies in third_party/refs/pedals/pasp/. What is under test is
+// the WRAPPER — the map from the four knobs onto the vendored engine's two settings, the pre-delay,
+// the level compensation and the mix — because the engine itself is Cockos' file and this tree does
+// not get to change it. That is not a weaker test than the other four pedals get: every claim the
+// panel makes is a claim about the wrapper, and PASP states what the engine's settings mean
+// precisely enough to check every one of them.
+//==================================================================================================
+
+using ReverbBoard = Board<Reverb, 5>;
+
+// THE ENGINE'S STRUCTURE, WRITTEN OUT A SECOND TIME ON PURPOSE. These are read out of
+// deps/wdl/verbengine.h — `wdl_verb__combtunings[]`, the six-entry `wdl_verb__allpasstunings[]`,
+// the 0.5 fed to every `setfeedback` in Reset(), and Freeverb's 0.015 that WDL applies to the
+// engine's input — and they are duplicated here rather than included for the reason the Delay's
+// tone corners are: a constant that both sides of a comparison read cannot be checked by that
+// comparison. If a re-vendored verbengine.h ever changes its tuning table, this is what says so.
+constexpr int kVerbCombTunings[] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617, 1685, 1748};
+constexpr int kVerbCombCount = static_cast<int>(sizeof(kVerbCombTunings) / sizeof(int));
+constexpr int kVerbAllpassCount = 6;
+constexpr double kVerbAllpassG = 0.5;
+constexpr double kVerbFixedGain = 0.015;
+constexpr double kVerbTuningRate = 44100.0;
+
+// The Decay knob's declared span, and Tone's declared direction. Literals, same rule.
+constexpr double kExpT60MinSec = 0.4;
+constexpr double kExpT60MaxSec = 6.0;
+
+double expectedT60(double decayPlain)
+{
+    return kExpT60MinSec
+           * std::pow(kExpT60MaxSec / kExpT60MinSec, std::clamp(decayPlain * 0.1, 0.0, 1.0));
+}
+
+// The engine's comb lengths at a given rate, reproducing its own `(int)(tuning * srate/44100)`.
+std::vector<int> combLengths(double rate)
+{
+    std::vector<int> n;
+    for (int t : kVerbCombTunings)
+        n.push_back(static_cast<int>(static_cast<double>(t) * rate / kVerbTuningRate));
+    return n;
+}
+
+// T60 by Schroeder backward integration and a least-squares fit over the standard -5 to -35 dB
+// window, extrapolated to -60. The window is part of the definition and not a detail: the ensemble
+// ratio below is a property of it, and a different window would give a different constant.
+double t60Of(const std::vector<double> &h, double rate)
+{
+    const size_t n = h.size();
+    std::vector<double> e(n + 1, 0.0);
+    for (size_t i = n; i-- > 0;)
+        e[i] = e[i + 1] + h[i] * h[i];
+    if (e[0] <= 0.0)
+        return -1.0;
+    auto db = [&](size_t i) { return 10.0 * std::log10(std::max(1e-300, e[i] / e[0])); };
+    long i1 = -1, i2 = -1;
+    for (size_t i = 0; i < n; ++i) {
+        if (i1 < 0 && db(i) <= -5.0)
+            i1 = static_cast<long>(i);
+        if (i2 < 0 && db(i) <= -35.0) {
+            i2 = static_cast<long>(i);
+            break;
+        }
+    }
+    if (i1 < 0 || i2 <= i1)
+        return -1.0;
+    double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    const double m = static_cast<double>(i2 - i1 + 1);
+    for (long i = i1; i <= i2; ++i) {
+        const double t = static_cast<double>(i) / rate;
+        const double y = db(static_cast<size_t>(i));
+        sx += t;
+        sy += y;
+        sxx += t * t;
+        sxy += t * y;
+    }
+    const double slope = (m * sxy - sx * sy) / (m * sxx - sx * sx);
+    return (slope < 0.0) ? -60.0 / slope : -1.0;
+}
+
+// THE ENSEMBLE RATIO, DERIVED HERE FROM THE TEN COMB LENGTHS AND NOTHING ELSE.
+//
+// PASP's LBCF gives the decay of ONE comb exactly. Ten of them in parallel decay at ten different
+// rates, so a T30 fit over the -5 to -35 dB window lands short of what the longest comb alone would
+// give. That shortfall is what reverbdef::kEnsembleT60Ratio corrects for, and this function is the
+// independent second derivation of it that the header's prose promises.
+//
+// Comb i's ENERGY decays as exp(2*t*fs*ln(f)/N_i), so writing u = t*fs*|ln f| the bank's energy is
+// sum(exp(-2u/N_i)) and its Schroeder integral is sum((N_i/2)*exp(-2u/N_i)) in closed form — no
+// impulse response and no reverb needed. Because u carries both t and f, the curve only stretches
+// when f changes, so the fitted-to-asymptotic ratio is a constant of the lengths and the window.
+double ensembleT60Ratio(double rate)
+{
+    const std::vector<int> n = combLengths(rate);
+    int nmax = 0;
+    for (int v : n)
+        nmax = std::max(nmax, v);
+    auto sch = [&](double u) {
+        double a = 0.0;
+        for (int v : n)
+            a += static_cast<double>(v) * std::exp(-2.0 * u / static_cast<double>(v));
+        return a;
+    };
+    const double s0 = sch(0.0);
+    auto db = [&](double u) {
+        const double v = sch(u);
+        return (v > 0.0) ? 10.0 * std::log10(v / s0) : -1e9;
+    };
+    auto solve = [&](double target) {
+        double lo = 0.0, hi = 20.0 * static_cast<double>(nmax);
+        for (int k = 0; k < 200; ++k) {
+            const double mid = 0.5 * (lo + hi);
+            (db(mid) > target ? lo : hi) = mid;
+        }
+        return 0.5 * (lo + hi);
+    };
+    const double u1 = solve(-5.0), u2 = solve(-35.0);
+    const int m = 4000;
+    double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    for (int k = 0; k < m; ++k) {
+        const double u = u1 + (u2 - u1) * static_cast<double>(k) / static_cast<double>(m - 1);
+        const double y = db(u);
+        sx += u;
+        sy += y;
+        sxx += u * u;
+        sxy += u * y;
+    }
+    const double slope = (m * sxy - sx * sy) / (m * sxx - sx * sx);
+    // The asymptote is the longest comb on its own: its AMPLITUDE falls by 60 dB after
+    // 3*ln(10)*N_max of u, which is the same relation PASP's "Achieving Desired Reverberation
+    // Times" states as G = 10^(-3/n60) per sample.
+    return (-60.0 / slope) / (3.0 * std::log(10.0) * static_cast<double>(nmax));
+}
+
+// The engine's broadband amplitude gain BEFORE the wrapper's kWetNorm, derived from the structural
+// constants above. For a broadband input a filter's power gain is the sum of the squares of its
+// impulse response, which is 1 per comb once the wrapper's sqrt(1 - f^2) compensation is in, and
+// 1 + 1/(1 - g^2) per Freeverb "allpass" — see reverb.h for the same derivation in prose.
+//
+// IT MUST NOT READ reverbdef::kWetNorm, and that is not fastidiousness. The first version of this
+// multiplied it in and compared the result against the measurement, so doubling the pedal's
+// kWetNorm moved both sides of the comparison by 6 dB and the deliberate fault walked straight
+// through. It is the Chorus's frozen-tap mistake exactly, in a third place. What the check does now
+// is derive what kWetNorm SHOULD be and compare the constant itself, then assert the measured gain
+// is unity — two independent statements, neither of which can absorb an error in the other.
+double predictedRawWetGain()
+{
+    const double perAllpass = 1.0 + 1.0 / (1.0 - kVerbAllpassG * kVerbAllpassG);
+    return kVerbFixedGain * std::sqrt(static_cast<double>(kVerbCombCount))
+           * std::pow(perAllpass, 0.5 * static_cast<double>(kVerbAllpassCount));
+}
+
+// The wet impulse response of one channel, at Mix 100 %.
+std::vector<double> verbWetIr(ReverbBoard &b, size_t n, bool rightChannel = false)
+{
+    std::vector<double> l(n, 0.0), r(n, 0.0);
+    l[0] = r[0] = 1.0;
+    b.run(l.data(), r.data(), n);
+    return rightChannel ? r : l;
+}
+
+// A two-pole band-pass, built as the difference of two two-pole low-passes, for splitting a tail
+// into the bands PASP's damping sentence is about. Zero-phase would be better and is not needed:
+// what is measured is a DECAY RATE, and a fixed filter delays the whole curve without tilting it.
+std::vector<double> bandOf(const std::vector<double> &x, double rate, double loHz, double hiHz)
+{
+    const double aHi = 1.0 - std::exp(-2.0 * kPi * hiHz / rate);
+    const double aLo = 1.0 - std::exp(-2.0 * kPi * loHz / rate);
+    std::vector<double> y(x.size());
+    double s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0;
+    for (size_t i = 0; i < x.size(); ++i) {
+        s1 += aHi * (x[i] - s1);
+        s2 += aHi * (s1 - s2);
+        s3 += aLo * (s2 - s3);
+        s4 += aLo * (s3 - s4);
+        y[i] = s2 - s4;
+    }
+    return y;
+}
+
+// Normalized cross-correlation at zero lag. 1.0 is the same signal, 0.0 is no shared structure.
+double correlation(const std::vector<double> &a, const std::vector<double> &b)
+{
+    double sa = 0.0, sb = 0.0, sab = 0.0;
+    const size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        sa += a[i] * a[i];
+        sb += b[i] * b[i];
+        sab += a[i] * b[i];
+    }
+    return sab / std::max(1e-300, std::sqrt(sa * sb));
 }
 
 } // namespace
@@ -2009,6 +2206,482 @@ int main(int argc, char **argv)
             ++gFailures;
         }
     }
+
+    //==============================================================================================
+    // THE REVERB. Every expected number below comes from PASP's account of what the vendored
+    // engine's two settings mean, or from the engine's own tuning table written out again above.
+    //==============================================================================================
+    printf("\n-- Reverb -----------------------------------------------------------------------\n");
+
+    auto reverbAt = [](ReverbBoard &b, double decay, double tone, double preMs, double mixPct) {
+        b.set(Reverb::kDecay, decay);
+        b.set(Reverb::kTone, tone);
+        b.set(Reverb::kPreDelay, preMs);
+        b.set(Reverb::kMix, mixPct);
+        b.restart();
+    };
+
+    // The constant that converts one comb's decay into the bank's, derived here from the ten comb
+    // lengths and compared against the literal the pedal carries. This is the whole of what makes
+    // the Decay knob's map a derivation rather than a curve fitted to a previous run.
+    printf("the ensemble T60 ratio, derived from the ten comb lengths\n");
+    {
+        const double r48 = ensembleT60Ratio(kRate);
+        const double r44 = ensembleT60Ratio(44100.0);
+        const double r96 = ensembleT60Ratio(96000.0);
+        check("ensemble ratio at 48 kHz vs reverb.h's own constant", r48,
+              reverbdef::kEnsembleT60Ratio, 0.005, "");
+        // If this were rate-dependent the pedal's single constant would be wrong at every rate but
+        // one, and T60 would silently follow the sample rate.
+        check("the same ratio at 44.1 kHz", r44, r48, 0.002, "");
+        check("the same ratio at 96 kHz", r96, r48, 0.002, "");
+    }
+
+    // T60 against the Decay control — the phase's own milestone.
+    printf("T60 against Decay, by Schroeder backward integration and a -5..-35 dB fit\n");
+    {
+        double worstErr = 0.0;
+        for (double decay = 0.0; decay <= 10.001; decay += 1.25) {
+            ReverbBoard b;
+            // Tone wide open, so the tail is undamped and what is measured is f alone; PASP: at
+            // d = 0 "the LBCF reduces to the feedback comb filter ... in which the feedback was
+            // not filtered".
+            reverbAt(b, decay, 10.0, 0.0, 100.0);
+            const double want = expectedT60(decay);
+            // Long enough for the fit window to close at the longest decay the knob offers.
+            const std::vector<double> ir = verbWetIr(b, size_t(kRate * (2.5 * want + 1.0)));
+            const double got = t60Of(ir, kRate);
+            const double relPct = 100.0 * (got / want - 1.0);
+            worstErr = std::max(worstErr, std::fabs(relPct));
+            if (gVerbose)
+                printf("    Decay %4.2f: T60 %7.3f s, asked for %7.3f s (%+.2f %%)\n", decay, got,
+                       want, relPct);
+        }
+        // 3 %, against a measured worst of 1.35 %. The residual has a name and is not noise: the
+        // six diffusion allpasses ring at a fixed g = 0.5 whatever f is, so they add a decay the
+        // ensemble derivation does not model, and they add relatively more of it at the short end —
+        // which is the direction the error drifts. Above the measured worst rather than at it, the
+        // rule the alias and IR-blend gates follow.
+        check("worst T60 error over the whole Decay knob", worstErr, 0.0, 3.0, "%");
+    }
+
+    // AND DECAY HAS TO WORK WHILE THE PEDAL IS RUNNING, which is not the same statement as the one
+    // above and is not implied by it. Every measurement so far restarts the pedal at the setting it
+    // is about to measure, so all of them would pass a build whose knob only took effect on a
+    // reset — and that fault was tried and did pass them. The engine's feedback and damping live
+    // inside thirty-two vendored filter objects and reach them only through a Reset(false) that the
+    // wrapper calls itself, guarded on the value having changed; this is what says the guard lets a
+    // change through. A user turning Decay mid-song is the ordinary case, not an edge one.
+    printf("Decay takes effect on a running pedal, not only on a reset\n");
+    {
+        ReverbBoard b;
+        reverbAt(b, 0.0, 10.0, 0.0, 100.0); // restarted at the SHORT end
+        b.silence(size_t(kRate * 0.5));
+        b.set(Reverb::kDecay, 10.0); // and moved to the long end with no restart at all
+        b.silence(size_t(kRate * 0.5)); // long enough for the smoother to land
+        std::vector<double> l(size_t(kRate * 16.0), 0.0), r(l.size(), 0.0);
+        l[0] = r[0] = 1.0;
+        b.run(l.data(), r.data(), l.size());
+        const double got = t60Of(l, kRate);
+        printf("    Decay driven 0 -> 10 without a reset: T60 %.3f s\n", got);
+        check("T60 after a mid-run Decay change", got, expectedT60(10.0),
+              0.03 * expectedT60(10.0), "s");
+    }
+
+    // T60 must not follow the sample rate. The engine scales its own tuning table by srate/44100
+    // and the pedal derives its lap length the same way, so the two have to agree — and if either
+    // drifted, a project would change its decay time when the interface did.
+    printf("T60 does not follow the sample rate\n");
+    {
+        double at[2] = {0.0, 0.0};
+        const double rates[2] = {44100.0, kRate};
+        for (int k = 0; k < 2; ++k) {
+            ReverbBoard b(rates[k]);
+            reverbAt(b, 5.0, 10.0, 0.0, 100.0);
+            at[k] = t60Of(verbWetIr(b, size_t(rates[k] * 5.0)), rates[k]);
+        }
+        printf("    Decay 5: %.3f s at 44.1 kHz, %.3f s at 48 kHz\n", at[0], at[1]);
+        check("T60 at 44.1 kHz against T60 at 48 kHz", at[0], at[1], 0.03 * at[1], "s");
+    }
+
+    // TONE IS DAMPING, NOT A LOW-PASS ACROSS THE OUTPUT, and this is the check that tells the two
+    // apart. PASP: "the roomsize parameter can be interpreted as setting the low-frequency T60,
+    // while the damping parameter controls how rapidly T60 shortens as a function of increasing
+    // frequency". So the low band's decay must ignore Tone and the high band's must follow it. A
+    // low-pass on the wet output would sound similar on a first listen, would pass any test that
+    // only looked at the spectrum of the tail, and fails this: it shortens NOTHING.
+    printf("Tone is the engine's damping: T60 by band, against PASP's own sentence\n");
+    {
+        double lowAt[3] = {0, 0, 0}, highAt[3] = {0, 0, 0};
+        const double tones[3] = {0.0, 5.0, 10.0};
+        for (int k = 0; k < 3; ++k) {
+            ReverbBoard b;
+            reverbAt(b, 5.0, tones[k], 0.0, 100.0);
+            const std::vector<double> ir = verbWetIr(b, size_t(kRate * 6.0));
+            lowAt[k] = t60Of(bandOf(ir, kRate, 100.0, 400.0), kRate);
+            highAt[k] = t60Of(bandOf(ir, kRate, 4000.0, 9000.0), kRate);
+            printf("    Tone %4.1f: T60 is %.3f s from 100-400 Hz and %.3f s from 4-9 kHz\n",
+                   tones[k], lowAt[k], highAt[k]);
+        }
+        // The low band is the room size and nothing else. 3 % over the whole Tone knob.
+        check("low-band T60 at Tone 0 against Tone 10", lowAt[0], lowAt[2], 0.03 * lowAt[2], "s");
+        // The high band has to move, and by enough that it is the control and not a rounding.
+        // Measured: 1.117 s at full damping against 1.532 s at none, which is 27 % shorter.
+        const double shortenPct = 100.0 * (1.0 - highAt[0] / std::max(1e-9, highAt[2]));
+        printf("    full damping shortens the 4-9 kHz tail by %.1f %%\n", shortenPct);
+        if (shortenPct < 15.0) {
+            fprintf(stderr, "pedalcheck: Tone shortens the high-frequency tail by only %.1f %% — "
+                            "that is not damping in the feedback loop, which is what PASP says "
+                            "the engine's second parameter does\n",
+                    shortenPct);
+            ++gFailures;
+        }
+        // And it has to be monotonic, or the knob does two things at once somewhere in the middle.
+        if (!(highAt[0] < highAt[1] && highAt[1] < highAt[2])) {
+            fprintf(stderr, "pedalcheck: the high-band tail is not monotonic in Tone: %.3f, %.3f, "
+                            "%.3f s\n",
+                    highAt[0], highAt[1], highAt[2]);
+            ++gFailures;
+        }
+    }
+
+    // Pre-delay, to the sample. The engine has no feedthrough — a comb's output is what its line
+    // holds, so nothing reaches the output before the SHORTEST comb has run once — which makes the
+    // arrival of the first wet sample an exact quantity: the pre-delay plus that comb's length.
+    printf("pre-delay, measured as the arrival of the first wet sample\n");
+    {
+        std::vector<int> lens = combLengths(kRate);
+        const int shortest = *std::min_element(lens.begin(), lens.end());
+        for (double ms : {0.0, 10.0, 20.0, 50.0, 100.0, 200.0}) {
+            ReverbBoard b;
+            reverbAt(b, 5.0, 10.0, ms, 100.0);
+            const std::vector<double> ir = verbWetIr(b, size_t(kRate * 0.6));
+            long first = -1;
+            for (size_t i = 1; i < ir.size(); ++i)
+                if (std::fabs(ir[i]) > 1e-14) {
+                    first = static_cast<long>(i);
+                    break;
+                }
+            // The line's own floor is one sample, because the cubic kernel reaches one sample
+            // newer than the read point and x[n] is the newest there is — so Pre at 0 is 21 us
+            // rather than nothing. reverb.h says so at the read; this is what holds it to it.
+            const long want =
+                static_cast<long>(std::max(1.0, std::round(ms * kRate * 0.001))) + shortest;
+            check(("first wet sample at Pre " + std::to_string(int(ms)) + " ms").c_str(),
+                  double(first), double(want), 0.0, "samples");
+        }
+    }
+
+    // Both channels decorrelated — the phase's second milestone. The engine detunes its right bank
+    // against its left by `stereospread` = 23 samples per line, and the wrapper leaves width at
+    // 1.0, which is PASP's wet2 = 0, "maximally different left and right reverberation signals".
+    // Fed the SAME signal on both inputs, the two tails must therefore share nothing.
+    printf("both channels decorrelated, on identical input\n");
+    {
+        for (double decay : {0.0, 5.0, 10.0}) {
+            ReverbBoard b;
+            reverbAt(b, decay, 10.0, 0.0, 100.0);
+            std::vector<double> l(size_t(kRate * 6.0), 0.0), r(l.size(), 0.0);
+            l[0] = r[0] = 1.0;
+            b.run(l.data(), r.data(), l.size());
+            const double rho = correlation(l, r);
+            if (gVerbose)
+                printf("    Decay %4.1f: correlation between the two tails %+.5f\n", decay, rho);
+            if (std::fabs(rho) > 0.10) {
+                fprintf(stderr, "pedalcheck: the two reverb tails correlate at %+.4f on identical "
+                                "input — the stereo banks are not detuned against each other\n",
+                        rho);
+                ++gFailures;
+            }
+        }
+
+        // THE ENGINE IS TRUE STEREO, and this is what says so — the check the correlation test
+        // above CANNOT make, because it feeds both channels the same signal and so cannot tell a
+        // pedal that keeps them apart from one that quietly feeds both banks from the left input.
+        // That fault was tried and walked straight past it. At width 1.0 there is no cross-feed at
+        // all (PASP's wet2 = 0), so an impulse on the LEFT alone must leave the right output
+        // holding nothing but its own dry silence — bit-zero, not merely quiet.
+        {
+            ReverbBoard t;
+            reverbAt(t, 5.0, 10.0, 0.0, 100.0);
+            std::vector<double> l(size_t(kRate * 2.0), 0.0), r(l.size(), 0.0);
+            l[0] = 1.0;
+            t.run(l.data(), r.data(), l.size());
+            double leak = 0.0, sig = 0.0;
+            for (size_t i = 0; i < r.size(); ++i) {
+                leak = std::max(leak, std::fabs(r[i]));
+                sig = std::max(sig, std::fabs(l[i]));
+            }
+            printf("    an impulse on the left alone: left peaks at %.4f, right at %.4g\n", sig,
+                   leak);
+            check("cross-feed from the left input to the right output", leak, 0.0, 0.0, "");
+        }
+
+        // AND THE MEASUREMENT HAS TO BE ABLE TO REPORT A ONE, or "uncorrelated" means nothing. At
+        // Mix 0 the output is the input, which is the same signal on both channels, so this is the
+        // same statistic over a case whose answer is known.
+        ReverbBoard b;
+        reverbAt(b, 5.0, 10.0, 0.0, 0.0);
+        std::vector<double> l(size_t(kRate * 0.5)), r(l.size());
+        for (size_t i = 0; i < l.size(); ++i)
+            l[i] = r[i] = std::sin(2.0 * kPi * 220.0 * double(i) / kRate);
+        b.run(l.data(), r.data(), l.size());
+        check("the same statistic on two channels that ARE the same", correlation(l, r), 1.0, 1e-12,
+              "");
+    }
+
+    // The wet level, against the prediction made from the engine's structure. Two claims: that it
+    // does not move as Decay is swept, which is what makes the Mix knob stay put, and that it is
+    // unity, which is what makes Mix at 100 % a replacement for the dry signal rather than a jump.
+    printf("wet level: flat across Decay, and equal to what the structure predicts\n");
+    {
+        // A deterministic broadband stimulus, so the figure is repeatable: a chirp covering the
+        // band, which has flat magnitude by construction and needs no generator.
+        const size_t n = size_t(kRate * 8.0);
+        std::vector<double> src(n);
+        for (size_t i = 0; i < n; ++i) {
+            const double t = double(i) / kRate;
+            src[i] = std::sin(2.0 * kPi * (20.0 * t + 0.5 * 2400.0 * t * t));
+        }
+        const double inRms = std::pow(10.0, rmsDb(src) / 20.0);
+        double lo = 1e9, hi = -1e9;
+        for (double decay = 0.0; decay <= 10.001; decay += 2.5) {
+            ReverbBoard b;
+            reverbAt(b, decay, 10.0, 0.0, 100.0);
+            std::vector<double> l = src, r = src;
+            b.run(l.data(), r.data(), n);
+            // Skip the first two seconds: the tail has to be established before its level means
+            // anything, and at Decay 10 that takes a while.
+            const double gainDb = rmsDb(l, size_t(kRate * 2.0)) - 20.0 * std::log10(inRms);
+            if (gVerbose)
+                printf("    Decay %4.1f: wet gain %+.3f dB\n", decay, gainDb);
+            lo = std::min(lo, gainDb);
+            hi = std::max(hi, gainDb);
+        }
+        printf("    wet gain spans %+.3f to %+.3f dB over the whole Decay knob\n", lo, hi);
+        // The compensation's whole job. Without it this spread is 9.75 dB.
+        check("spread of the wet level across Decay", hi - lo, 0.0, 0.5, "dB");
+        // kWetNorm is the reciprocal of what the structure gives, derived here from the tuning
+        // table and the allpass gain rather than read out of the pedal.
+        check("reverb.h's kWetNorm against the structural derivation", reverbdef::kWetNorm,
+              1.0 / predictedRawWetGain(), 0.01, "");
+        // And the product of the two is unity, which is what Mix at 100 % being a REPLACEMENT for
+        // the dry signal means. Measured 0.12 dB under, which is the 1.4 % the derivation's
+        // "the cross terms vanish" step waves away.
+        check("wet level at Mix 100 %", 0.5 * (lo + hi), 0.0, 0.5, "dB");
+    }
+
+    // Mix at 0 is the pedal not being there at all — bit-identical, not merely quiet, because
+    // anything else means an engaged-but-dry pedal colours the signal.
+    printf("Mix at 0 leaves the signal bit-identical\n");
+    {
+        ReverbBoard b;
+        reverbAt(b, 7.0, 3.0, 40.0, 0.0);
+        const size_t n = size_t(kRate * 0.5);
+        std::vector<double> l(n), r(n);
+        for (size_t i = 0; i < n; ++i) {
+            l[i] = std::sin(2.0 * kPi * 220.0 * double(i) / kRate);
+            r[i] = std::sin(2.0 * kPi * 330.0 * double(i) / kRate);
+        }
+        const std::vector<double> refL = l, refR = r;
+        b.run(l.data(), r.data(), n);
+        double worst = 0.0;
+        for (size_t i = 0; i < n; ++i)
+            worst = std::max(worst, std::max(std::fabs(l[i] - refL[i]), std::fabs(r[i] - refR[i])));
+        check("worst |out - in| at Mix 0", worst, 0.0, 0.0, "");
+    }
+
+    // The tail reaches silence — the phase's third milestone — and gets there without spending
+    // time in the subnormal range on the way.
+    //
+    // SEEDED 300 DECADES DOWN, for the Delay's reason and by the Delay's licence: this is a linear
+    // system, so an impulse of 1e-300 is the identical signal some forty T60s later, and measuring
+    // it there costs seconds instead of the ten minutes an impulse of 1.0 would need to decay into
+    // the subnormals. Decay at 0 for the shortest T60 the knob offers.
+    printf("the tail decays to exact zero, with no subnormals on the way\n");
+    {
+        ReverbBoard b;
+        reverbAt(b, 0.0, 10.0, 0.0, 100.0);
+        const size_t n = size_t(kRate * 4.0);
+        std::vector<double> l(n, 0.0), r(n, 0.0);
+        l[0] = r[0] = 1e-300;
+        b.run(l.data(), r.data(), n);
+        if (hasSubnormal(l) || hasSubnormal(r)) {
+            fprintf(stderr, "pedalcheck: the reverb tail passes subnormal samples to its output\n");
+            ++gFailures;
+        }
+        double tail = 0.0;
+        for (size_t i = size_t(kRate * 3.0); i < n; ++i)
+            tail = std::max(tail, std::max(std::fabs(l[i]), std::fabs(r[i])));
+        check("largest sample in the last second of a 4 s tail", tail, 0.0, 0.0, "");
+    }
+
+    // Zipper, by the same self-calibrating comparison the Flanger and the Delay use.
+    //
+    // ONLY MIX IS IN THIS LIST, and the other three knobs are absent because the fault sweep proved
+    // this measurement cannot see them — not because they were forgotten. It is worth setting out
+    // why, because the reason is a property of the pedal rather than of the test, and it is the
+    // same reason for all three.
+    //
+    // Mix scales the OUTPUT, so a step in it is a step in the output on the sample it lands. Decay,
+    // Tone and Pre-delay all act UPSTREAM of the engine — the first two on what is written into the
+    // ten comb lines, the third on what is fed to them — and everything upstream of the engine
+    // reaches the output only through the engine, which begins by multiplying its input by
+    // Freeverb's `fixedgain` of 0.015. That is 36 dB of attenuation before anything can be
+    // measured, and what survives it is then spread across ten comb lengths that are not whole
+    // multiples of the block, of the coefficient chunk, or of each other. A step arrives as ten
+    // unaligned, attenuated contributions inside a tail that is already dense.
+    //
+    // Measured rather than argued: snapping Decay, Tone or Pre-delay outright — no smoothing at all
+    // — changes nothing this file can detect, and neither does widening the engine's coefficient
+    // chunk from 16 samples to a whole block. Snapping Mix is caught at 2.25x. So Mix is gated here
+    // and the other three are gated by what they can be seen to do: Pre-delay by the arrival of the
+    // first wet sample, to the sample, at six settings; Decay by T60 to 3 %; Tone by the split
+    // between the two bands. Their smoothers are margin, and reverb.h says so.
+    printf("no zipper under a dragged control: block-boundary steps vs steps inside a block\n");
+    {
+        ReverbBoard b;
+        // ALL WET, and at 25 Hz. A mix step moves the output by the step times (wet - dry), so what
+        // this can see is bounded below by the stimulus's own sample-to-sample slope — and the
+        // first version ran at 150 Hz, where that slope is 0.0196 and a deliberately per-block Mix
+        // (a step of 0.004 a block) sat comfortably underneath it. At 25 Hz the floor is 0.0057 and
+        // the same fault stands 2.25x clear of it. The Delay's first version of this made the same
+        // mistake in the same place.
+        reverbAt(b, 5.0, 10.0, 40.0, 100.0);
+        b.silence(size_t(kRate * 0.3));
+        const size_t n = size_t(kRate * 1.2);
+        const size_t from = size_t(kRate * 0.6);
+        // The drag is short on purpose: what is being looked for is one block's worth of change, so
+        // a slower drag shrinks the fault without lowering the floor it is measured against.
+        const size_t span = size_t(kRate * 0.3);
+        std::vector<double> l(n), r(n);
+        for (size_t i = 0; i < n; ++i)
+            l[i] = r[i] = std::sin(2.0 * kPi * 25.0 * double(i) / kRate);
+
+        double boundary = 0.0, inside = 0.0;
+        for (size_t i = 0; i < n; i += kBlock) {
+            const size_t k = std::min<size_t>(kBlock, n - i);
+            const double t = (i < from) ? 0.0 : std::min(1.0, double(i - from) / double(span));
+            b.set(Reverb::kMix, 100.0 * t);
+            const double before = (i > 0) ? l[i - 1] : 0.0;
+            b.run(l.data() + i, r.data() + i, k);
+            if (i < from || i > from + span)
+                continue;
+            boundary = std::max(boundary, std::fabs(l[i] - before));
+            for (size_t j = 1; j < k; ++j)
+                inside = std::max(inside, std::fabs(l[i + j] - l[i + j - 1]));
+        }
+        printf("    dragging Mix: worst step at a boundary %.6f, inside a block %.6f\n", boundary,
+               inside);
+        if (boundary > inside * 1.5) {
+            fprintf(stderr, "pedalcheck: dragging Mix steps %.2fx harder at block boundaries than "
+                            "inside a block — the control is not smoothed per sample\n",
+                    boundary / std::max(1e-12, inside));
+            ++gFailures;
+        }
+    }
+
+    // Slamming Decay and Tone from one end of their travel to the other in a single push, which is
+    // the worst thing a host automating either can do.
+    //
+    // WHAT THIS ACTUALLY GUARDS is the wet-level compensation, and that is worth naming rather than
+    // leaving as "no zipper on Decay". A Decay move changes two things: the comb feedback, which
+    // the note above shows cannot step the output, and the sqrt(1 - f^2) wet gain, which is a plain
+    // multiplier on the output and steps it by a factor of three across this slam if it is not
+    // ramped. Snapping that gain is caught here at 17.5x — and was NOT caught by the first version,
+    // whose scoring window began one sample after the slam and so stepped over the very sample the
+    // step lands on. The slam is placed on a block boundary on purpose; the window starts on it.
+    printf("slamming Decay and Tone end to end does not step the output\n");
+    {
+        for (int which : {Reverb::kDecay, Reverb::kTone}) {
+            ReverbBoard b;
+            reverbAt(b, which == Reverb::kDecay ? 0.0 : 0.0, which == Reverb::kTone ? 0.0 : 10.0,
+                     0.0, 100.0);
+            const size_t n = size_t(kRate * 2.0);
+            const size_t slam = size_t(kRate * 1.0);
+            std::vector<double> l(n), r(n);
+            for (size_t i = 0; i < n; ++i)
+                l[i] = r[i] = std::sin(2.0 * kPi * 150.0 * double(i) / kRate);
+            for (size_t i = 0; i < n; i += kBlock) {
+                const size_t k = std::min<size_t>(kBlock, n - i);
+                b.set(which, i >= slam ? 10.0 : 0.0);
+                b.run(l.data() + i, r.data() + i, k);
+            }
+            double before = 0.0, after = 0.0;
+            for (size_t i = 1; i < n; ++i) {
+                const double step = std::fabs(l[i] - l[i - 1]);
+                if (i > size_t(kRate * 0.5) && i < slam)
+                    before = std::max(before, step);
+                // FROM `slam`, NOT FROM slam + 1. The push lands on the first block boundary at
+                // or after the slam, and the slam is placed on one — so the step this is looking
+                // for is l[slam] - l[slam-1], which a window starting at slam + 1 steps over. A
+                // deliberately snapped wet-level compensation, which steps the output by a factor
+                // of three, walked past the first version of this for exactly that one index.
+                else if (i >= slam && i < slam + size_t(kRate * 0.3))
+                    after = std::max(after, step);
+            }
+            const char *name = (which == Reverb::kDecay) ? "Decay" : "Tone";
+            printf("    slamming %-5s: worst step before %.6f, after %.6f\n", name, before, after);
+            if (after > before * 2.0) {
+                fprintf(stderr, "pedalcheck: slamming %s steps the output %.2fx harder than the "
+                                "material's own slope — the control is not ramped\n",
+                        name, after / std::max(1e-12, before));
+                ++gFailures;
+            }
+        }
+    }
+
+    // Stomping the footswitch. The base class crossfades a pedal in and out over kEngageMs, and
+    // the reverb is where getting that wrong is loudest, because what is being faded is a tail that
+    // outlives the fade by seconds.
+    //
+    // THE CONTROL IS A SPLICE, and the first version of this had none worth the name. It used
+    // Mix = 0 as the "hard switch", which is not hard at all — Mix has a 20 ms smoother of its own,
+    // longer than the 8 ms engage ramp it was supposed to expose — and both numbers came out at
+    // 0.019766 against 0.019765, which is 2*pi*151/48000: the STIMULUS's own sample-to-sample
+    // slope, and nothing to do with the pedal. The control now runs the pedal engaged for the whole
+    // take and splices the dry signal in at the stomp, which is exactly what a footswitch with no
+    // ramp would produce and cannot be smoothed by anything.
+    printf("stomping the footswitch crossfades rather than switching\n");
+    {
+        const size_t n = size_t(kRate * 2.0);
+        const size_t stomp = size_t(kRate * 1.0);
+        const size_t window = size_t(kRate * 0.2);
+        std::vector<double> dry(n);
+        for (size_t i = 0; i < n; ++i)
+            dry[i] = std::sin(2.0 * kPi * 151.0 * double(i) / kRate);
+
+        auto worstStep = [&](const std::vector<double> &v) {
+            double w = 0.0;
+            for (size_t i = stomp; i < stomp + window; ++i)
+                w = std::max(w, std::fabs(v[i] - v[i - 1]));
+            return w;
+        };
+
+        ReverbBoard fade;
+        reverbAt(fade, 5.0, 5.0, 0.0, 100.0);
+        std::vector<double> fl = dry, fr = dry;
+        fade.run(fl.data(), fr.data(), stomp);
+        fade.pedal().setEngaged(false);
+        fade.run(fl.data() + stomp, fr.data() + stomp, n - stomp);
+
+        ReverbBoard held;
+        reverbAt(held, 5.0, 5.0, 0.0, 100.0);
+        std::vector<double> hl = dry, hr = dry;
+        held.run(hl.data(), hr.data(), n);
+        for (size_t i = stomp; i < n; ++i)
+            hl[i] = dry[i];
+
+        const double faded = worstStep(fl), hard = worstStep(hl);
+        printf("    worst step at the stomp: %.6f faded, %.6f spliced\n", faded, hard);
+        if (faded > hard * 0.25) {
+            fprintf(stderr, "pedalcheck: the faded stomp steps %.6f against the splice's %.6f — "
+                            "the engage ramp is not doing anything\n",
+                    faded, hard);
+            ++gFailures;
+        }
+    }
+
 
     printf("\n");
     if (gFailures) {
