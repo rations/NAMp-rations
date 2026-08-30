@@ -634,16 +634,49 @@ int main(int argc, char **argv)
         rig.run(teach);
         check(!teach.sawChannelEcho, "the PC that teaches a row does not perform it");
 
+        // Quiet between the messages, because that is what a stomp looks like. The SAME program
+        // number in the very next block is a host resending rather than a foot arriving twice, and
+        // the plug-in is entitled to tell the difference - a player cannot press twice inside one
+        // 2.67 ms period. This test used to send them back to back and it was the wrong sequence.
+        Block quiet;
+        rig.run(quiet, 8);
+
         Block use;
         use.params.push_back(pc(7));
         rig.run(use);
         check(use.sawChannelEcho && near(use.channelEcho, channelValue(kCrunch)),
               "a learned Program Change switches the channel");
 
+        rig.run(quiet, 8);
         Block other;
         other.params.push_back(pc(8));
         rig.run(other);
         check(!other.sawChannelEcho, "a different Program Change number does nothing");
+
+        // The same program pressed again, spaced as a foot spaces it, acts again - which is the
+        // whole of what a programmable footswitch does and the thing a toggle row depends on. A
+        // Program Change has no release, so there is no edge here to look for and never was.
+        rig.run(quiet, 8);
+        Block again;
+        again.params.push_back(pc(7));
+        rig.run(again);
+        check(again.sawChannelEcho, "the same Program Change pressed again acts again");
+
+        // ... and the same program arriving block after block acts once, not once per block.
+        //
+        // The LEARNED program, which the first version of this check got wrong: it used an
+        // unlearned number, so "no echo" was true whether the guard existed or not and the check
+        // asserted nothing at all. Caught by removing the guard and watching this pass.
+        rig.run(quiet, 8);
+        Block held;
+        held.params.push_back(pc(7));
+        rig.run(held, 20);
+        // echoOf, never sawChannelEcho: the latter is set once before the repeats and stays set,
+        // so it answers "did any of the twenty blocks act" where the question here is "did the
+        // LAST one". The echo list is cleared per block and is the one that can tell.
+        double lastBlockEcho = 0.0;
+        check(!echoOf(held, kChannelId, lastBlockEcho),
+              "a Program Change repeated block after block stops acting after the first");
     }
 
     // --- 3. Note On, and the channel it came in on -------------------------------------------
@@ -1007,6 +1040,60 @@ int main(int argc, char **argv)
         Block learnChannel;
         learnChannel.params.push_back(cc(110, 127));
         rig.run(learnChannel);
+
+        // A PROGRAMMABLE footswitch, which is what a player actually stomps on: each slot is
+        // programmed to send one number, so the identical message arrives on every press and
+        // nothing arrives on release. There is no rising edge after the first press, and the rule
+        // that looked for one made such a pedal work once and then go dead - invisible on a channel
+        // row, because selecting Clean twice is selecting Clean, and fatal on a pedal row.
+        setPedals(0.0);
+        {
+            Block release;
+            release.params.push_back(cc(100, 0));
+            rig.run(release);
+            const double kAfter[3] = {1.0, 0.0, 1.0};
+            bool everyPress = true;
+            for (int i = 0; i < 3; ++i) {
+                // Blocks of nothing between the presses, because that is what a stomp looks like:
+                // one message, then quiet, then another message some tenths of a second later.
+                // Delivering three presses in three CONSECUTIVE blocks would be a host resending
+                // rather than a player pressing, and the rule under test is allowed to tell the
+                // difference - it is the whole reason the second half of it exists. Caught by
+                // being written the wrong way round first.
+                Block quiet;
+                rig.run(quiet, 8);
+                Block press;
+                press.params.push_back(cc(100, 127));
+                rig.run(press);
+                everyPress =
+                    everyPress && echoOf(press, kPedalOnId[kPedalBoost], v) && near(v, kAfter[i]);
+            }
+            check(everyPress, "a slot that sends the same value every press toggles on every press");
+        }
+
+        // And the other half of that rule, which is what the rising edge was really protecting. A
+        // host writing the same value into a CC parameter block after block - a drawn automation
+        // lane, or a resend - must act ONCE, not at three hundred and seventy-five presses a
+        // second. Consecutive blocks is exactly what rig.run(b, n) delivers.
+        setPedals(0.0);
+        {
+            Block held;
+            held.params.push_back(cc(101, 127));
+            rig.run(held, 20);
+            check(!echoOf(held, kPedalOnId[kPedalChorus], v),
+                  "the same value repeated block after block stops acting after the first");
+
+            // The echo above says the LAST block did nothing; the state says how many of the
+            // twenty did anything at all. One toggle leaves Chorus on, twenty leave it off.
+            MemoryStream blob;
+            double t[kChannelCount] = {};
+            std::vector<double> p;
+            const int chorusOn = pedalParamIndex(kPedalOnId[kPedalChorus]);
+            check(component->getState(&blob) == kResultOk && readTrims(blob, t, &p) &&
+                      chorusOn >= 0 && static_cast<int>(p.size()) > chorusOn &&
+                      near(p[static_cast<size_t>(chorusOn)], 1.0),
+                  "... having acted exactly once");
+        }
 
         Block pedalPress = stomp(rig, 100 + kPedalDelay);
         check(!pedalPress.sawChannelEcho, "a pedal stomp does not move the channel");

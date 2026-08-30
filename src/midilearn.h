@@ -41,20 +41,34 @@
 // only ever turn a pedal ON would need a second button to turn it off - five pedals would eat ten
 // of the four buttons a footswitch has.
 //
-// Toggling on the press is not free of a compromise, and the compromise is in the pedal rather
-// than in this file, so it is written down here rather than discovered. A footswitch controller
-// sends one of two things for one physical press:
+// WHAT COUNTS AS A PRESS depends on the controller, and there are three kinds. This mattered more
+// than it looks, because the rule here was originally written for one of them and quietly broke
+// the other:
 //
-//   * MOMENTARY - 127 down, 0 up (or nothing on the way up). The rising edge is one press, so a
-//     toggle is exactly right and this is the common case.
-//   * LATCHING - 127, then 0, then 127, alternating with each press. Only every other press is a
-//     rising edge, so a toggle changes the pedal on every SECOND press.
+//   * PROGRAMMED - each slot sends one fixed number on every press and nothing on release
+//     (CC 4 value 127, say, or Program Change 4). This is what a programmable MIDI footswitch
+//     normally is, and the identical message arrives every time.
+//   * MOMENTARY - 127 when the foot goes down, 0 when it comes up. A spring-return switch.
+//   * ALTERNATING - 127, then 0, then 127, one message per press, the value tracking a latch
+//     inside the controller.
 //
-// No single rule serves both, because the two send contradictory messages for the same gesture.
-// Following the value instead ("64 and over is on") would serve the latching pedal perfectly and
-// make the momentary one useless - the pedal would be on only while a foot was held down. So the
-// press is what acts, one rule for the whole table and the same edge the channel rows already
-// use, and a latching controller costs its owner a second stamp rather than anything worse.
+// A press is therefore any value at or above 64 - the MIDI switch threshold - and a value below it
+// is a release and does nothing. The rule used to require a RISING edge, at or above 64 having
+// previously been below, which serves a momentary switch exactly and makes a PROGRAMMED one work
+// once and then go dead: its second press is not an edge. That was invisible on a channel row,
+// because selecting Clean twice is selecting Clean, and it would have been fatal on a pedal row.
+// Measured against the built bundle rather than reasoned about: three presses of one value gave
+// on, nothing, nothing.
+//
+// What the edge test was really protecting is done by the BLOCK instead, in the processor: the
+// thing that must not fire repeatedly is a host writing the same value into the parameter every
+// block, and that is exactly a repeat in the immediately following block. A foot cannot arrive
+// twice inside one 2.67 ms period, so no real press is suppressed and no clock is consulted.
+//
+// ALTERNATING is the one kind not fully served: its releases are indistinguishable from a
+// momentary switch's, so it takes two stamps per change. Serving it instead would mean following
+// the value, which would make a momentary switch useless - on only while a foot was held down -
+// so it is a mode to avoid programming rather than a case to guess at.
 
 #pragma once
 

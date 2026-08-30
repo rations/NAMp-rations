@@ -161,6 +161,19 @@ private:
     // on the release, and not once per block for as long as a pedal is held down. Audio thread
     // only. uint8 rather than a float: what matters is which side of 64 it was on.
     std::uint8_t mCcLast[kMidiCcCount] = {};
+    // ... and which BLOCK each controller number last delivered a point in, which is what
+    // separates a second press from a host writing the same value over and over. See the press
+    // rule in handleParameterChanges. Block indices are compared, never subtracted from a clock:
+    // 0 means "never", mBlockIndex counts from 1, and it is monotonic, so a stale entry can only
+    // ever fail to match. Audio thread only.
+    std::uint32_t mCcLastBlock[kMidiCcCount] = {};
+    // The same pair for Program Change, which arrives on one parameter carrying a program NUMBER
+    // rather than on 128 of them. -1 is "nothing seen yet", which no program number can be.
+    int mPcLast = -1;
+    std::uint32_t mPcLastBlock = 0;
+    // Counts process() calls, so "the block before this one" is a comparison rather than a time.
+    // Wraps after 132 years at a 128-frame period, and a wrap costs one missed suppression.
+    std::uint32_t mBlockIndex = 0;
     // Parameter changes this plug-in made to itself this block, to be echoed to the host so its
     // automation lane and the editor agree with the audio. Fixed capacity, filled and drained
     // inside one process() call, so it never grows on the audio thread.

@@ -354,11 +354,34 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             const int cc = static_cast<int>(id - kMidiCcBaseId);
             const int ccValue = std::clamp(static_cast<int>(std::lround(value * 127.0)), 0, 127);
             const int last = mCcLast[cc];
+            const std::uint32_t lastBlock = mCcLastBlock[cc];
             mCcLast[cc] = static_cast<std::uint8_t>(ccValue);
+            mCcLastBlock[cc] = mBlockIndex;
 
-            // Matching fires on the PRESS: not on the release, and not once per block while a
-            // foot rests on a latching pedal. 64 is the MIDI switch threshold, and the rising
-            // edge is what makes a momentary pedal and a latching one behave the same way.
+            // Matching fires on the PRESS. 64 is the MIDI switch threshold, so anything at or
+            // above it is a press and anything below it is a release, which does nothing.
+            //
+            // WHAT A PRESS LOOKS LIKE DEPENDS ON THE CONTROLLER, and this used to assume one kind
+            // of them. The rule was a RISING edge - at or above 64 having previously been below -
+            // which is exactly right for a MOMENTARY switch, 127 down and 0 up. A programmable
+            // footswitch is normally not that: a slot programmed to send CC 4 value 127 sends the
+            // identical message on every press and nothing at all on release, so the second press
+            // was not an edge and did nothing. On a channel row that is invisible, because
+            // selecting Clean twice is selecting Clean; on a pedal row it is a footswitch that
+            // works once and is then dead. Measured against the built bundle, not reasoned about:
+            // three presses of one value gave on, nothing, nothing.
+            //
+            // So a press is any value at or above 64, and what the edge test was really protecting
+            // is done by the BLOCK instead. The thing that must not fire repeatedly is a host
+            // writing the same value into this parameter every block - a drawn automation lane, or
+            // a controller resend - and that is precisely a repeat in the immediately following
+            // block. A human cannot press twice inside one 2.67 ms period, so no real press is
+            // ever suppressed, and no wall clock is consulted.
+            //
+            // The one controller this does not fully serve is an ALTERNATING latching one, which
+            // sends 127, then 0, then 127, one message per press: its releases are indistinguishable
+            // from a momentary switch's, so it takes two stamps per change. That is a mode to avoid
+            // programming rather than a case to guess at; midilearn.h sets out all three kinds.
             //
             // LEARNING asks a different question, and gating it on the same edge is a bug that
             // only shows up in the most ordinary re-mapping there is: moving a pedal that is
@@ -369,19 +392,26 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             // sending the same value. A host flushing initial zeroes at a parameter that was
             // already zero is neither, and does not teach anything.
             const bool learning = mMidiLearnRow.load(std::memory_order_relaxed) >= 0;
+            const bool resent = ccValue == last && lastBlock + 1 == mBlockIndex && lastBlock != 0;
             const bool fire =
-                learning ? (ccValue != last || ccValue >= 64) : (ccValue >= 64 && last < 64);
+                learning ? (ccValue != last || ccValue >= 64) : (ccValue >= 64 && !resent);
             if (fire)
                 midiTrigger(MidiMsg::ControlChange, kMidiAnyChannel, cc);
             continue;
         }
         if (id == kMidiProgramChangeId) {
             // The parameter is the program list's own, so its value is the program number over
-            // the list's step count - 127 steps for 128 programs. A Program Change has no
-            // release, so there is no edge to look for.
+            // the list's step count - 127 steps for 128 programs. A Program Change has no release,
+            // so every message is a press; the only thing to suppress is the same program arriving
+            // again in the very next block, which is a host resending rather than a second stamp.
+            // Same rule as the CC branch above and for the same reason.
             const int program =
                 std::clamp(static_cast<int>(std::lround(value * (kMidiProgramCount - 1))), 0, 127);
-            midiTrigger(MidiMsg::ProgramChange, kMidiAnyChannel, program);
+            const bool resent = program == mPcLast && mPcLastBlock + 1 == mBlockIndex;
+            mPcLast = program;
+            mPcLastBlock = mBlockIndex;
+            if (!resent)
+                midiTrigger(MidiMsg::ProgramChange, kMidiAnyChannel, program);
             continue;
         }
 
@@ -560,6 +590,10 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     // Anything the MIDI table makes this plug-in do to itself is collected here and reported
     // before the first early return below, so a message that lands on a block with no audio in it
     // is not silently dropped.
+    // Counted before anything reads it, so "the block before this one" is a comparison of two
+    // indices rather than a duration. See the press rule in handleParameterChanges.
+    ++mBlockIndex;
+
     mEchoCount = 0;
     handleParameterChanges(data.inputParameterChanges);
     handleInputEvents(data.inputEvents);
