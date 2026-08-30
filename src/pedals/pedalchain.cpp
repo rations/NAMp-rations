@@ -28,13 +28,18 @@ int PedalChain::latencySamples()
 
 void PedalChain::setParams(const double *plain)
 {
+    // BEFORE the loop, not after it: Delay::setParams is where a sync division is turned into a
+    // time, so it needs the tempo that is in force for this block. Pushed after, the delay would
+    // answer every tempo change one sub-block late — inaudible, but wrong, and the kind of wrong
+    // that only shows up as a gate that will not settle.
+    mDelay.setTempo(mTempoBpm);
+
     for (int i = 0; i < kPedalCount; ++i) {
         const int first = pedalParamFirst(i);
         // Slice 0 is the footswitch, by the static_assert in rationsids.h.
         mAll[i]->setEngaged(plain[first] > 0.5);
         mAll[i]->setParams(plain + first);
     }
-    mDelay.setTempo(mTempoBpm);
 }
 
 void PedalChain::processPre(DSP_SAMPLE *mono, int numSamples)

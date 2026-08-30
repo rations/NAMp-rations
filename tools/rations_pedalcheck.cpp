@@ -17,6 +17,7 @@
 
 #include "pedals/boost.h"
 #include "pedals/chorus.h"
+#include "pedals/delay.h"
 #include "pedals/flanger.h"
 #include "pedals/primitives.h"
 
@@ -370,6 +371,90 @@ private:
 
 using ChorusBoard = Board<Chorus, 4>;
 using FlangerBoard = Board<Flanger, 5>;
+using DelayBoard = Board<Delay, 7>;
+
+//------------------------------------------------------------------------------------------------
+// THE DELAY's LOOP FILTER, WRITTEN OUT FROM ITS DECLARED CORNERS, and these three numbers are
+// LITERALS ON PURPOSE. Reading delaydef's own constants for the expectation is what the Chorus's
+// first frozen-tap check did, and it had no teeth at all: moving a corner moved both sides of the
+// comparison and everything still passed. A corner frequency is a design decision rather than
+// something derivable from physics, so the only way to pin it is to write it down twice and make
+// the two disagree when one of them moves.
+constexpr double kExpToneLoHz = 800.0;
+constexpr double kExpToneHiHz = 12000.0;
+constexpr double kExpLoopHpHz = 40.0;
+
+// Where Tone puts the low-pass, geometrically over that span. The knob is 0..10.
+double toneCornerHz(double tonePlain)
+{
+    return kExpToneLoHz * std::pow(kExpToneHiHz / kExpToneLoHz, tonePlain * 0.1);
+}
+
+// H(e^jw) of the loop filter: a one-pole low-pass, then that low-pass's complement as the
+// high-pass, which is how the DSP builds it (`return mLp - mHp`). Derived from the corner
+// frequencies above, not from the DSP's own variables, so a transcription error in one cannot
+// hide in the other.
+std::complex<double> loopFilterH(double tonePlain, double w)
+{
+    const std::complex<double> z = std::exp(std::complex<double>(0.0, -w));
+    const double aLp = 1.0 - std::exp(-2.0 * kPi * toneCornerHz(tonePlain) / kRate);
+    const double aHp = 1.0 - std::exp(-2.0 * kPi * kExpLoopHpHz / kRate);
+    const std::complex<double> lp = aLp / (1.0 - (1.0 - aLp) * z);
+    const std::complex<double> hp = aHp / (1.0 - (1.0 - aHp) * z);
+    return lp * (1.0 - hp);
+}
+
+// The phase of a wet impulse response at one low FFT bin.
+//
+// This is how the delay time is measured, and the reason it is not the Flanger's echo centroid is
+// worth stating: the loop's high-pass has ZERO gain at DC, so the impulse response sums to zero
+// and its first moment is 0/0. Every DC-referenced moment is degenerate here, which the centroid
+// method has no way to report.
+//
+// A single bin low enough that w*D stays under pi needs no unwrapping: arg(Y_k) = -w_k*D +
+// arg(H(w_k)), so D falls straight out. At 2^19 points a four-second delay is 2.3 radians, which
+// is inside pi with room to spare.
+constexpr int kPhaseFftLog2 = 19;
+constexpr int kPhaseBin = 1;
+
+double wetPhaseAtBin(const std::vector<double> &ir)
+{
+    const size_t n = size_t(1) << kPhaseFftLog2;
+    std::vector<std::complex<double>> spec(n, {0.0, 0.0});
+    for (size_t i = 0; i < n && i < ir.size(); ++i)
+        spec[i] = ir[i];
+    fft(spec);
+    return std::arg(spec[kPhaseBin]);
+}
+
+constexpr double kPhaseBinW = 2.0 * kPi * kPhaseBin / double(size_t(1) << kPhaseFftLog2);
+
+// The wet impulse response of a Delay at the settings already on the board: Mix at 100 % so the
+// output is the line read and nothing else, and Feedback at 0 so there is exactly one echo.
+std::vector<double> delayWetIr(DelayBoard &b, size_t n)
+{
+    std::vector<double> l(n, 0.0), r(n, 0.0);
+    l[0] = r[0] = 1.0;
+    b.run(l.data(), r.data(), n);
+    return l;
+}
+
+// Delay in samples, from the phase at that bin with the loop filter's own phase taken off.
+//
+// ONE SUBTRACTION AND NOT TWO, which the first version of this got wrong in a way worth keeping:
+// it removed arg(H) and THEN removed the filter's group delay as well, and every delay in the
+// pedal came out 4.0205 ms short — identically, at every setting, which is what said it was the
+// measurement rather than the DSP. 4.0205 ms is 193 samples, and the loop filter's group delay at
+// this bin is 190.5 (the 40 Hz high-pass) + 0.5 (its zero at z = 1) + 2.0 (the low-pass) = 193.0.
+// Subtracting arg(H) IS subtracting the group delay, because arg(H) = -w*tau near DC; doing both
+// counts it twice. The model-free difference check below is what proves this subtraction is not
+// quietly wrong in some other way, since the filter cancels there without being modelled at all.
+double measuredDelaySamples(DelayBoard &b, double tonePlain, size_t n)
+{
+    const std::vector<double> ir = delayWetIr(b, n);
+    const double phase = wetPhaseAtBin(ir);
+    return (std::arg(loopFilterH(tonePlain, kPhaseBinW)) - phase) / kPhaseBinW;
+}
 
 //------------------------------------------------------------------------------------------------
 // Where a delay line's echo actually landed, in samples, from the impulse response.
@@ -1359,6 +1444,569 @@ int main(int argc, char **argv)
                         name, boundary / std::max(1e-12, inside));
                 ++gFailures;
             }
+        }
+    }
+
+    //==============================================================================================
+    // THE DELAY. Structure and stability condition from PASP's "Feedback Comb Filters"; the loop
+    // filter's corners are a voicing decision and are pinned against literals written above.
+    //==============================================================================================
+    printf("\n-- Delay ------------------------------------------------------------------------\n");
+
+    // A helper for every measurement below: a board at one setting, restarted so the smoothers are
+    // already where the knobs are rather than on their way there.
+    auto delayAt = [](DelayBoard &b, double timeMs, double fbPct, double tone, double mixPct,
+                      int sync, bool ping) {
+        b.set(Delay::kTime, timeMs);
+        b.set(Delay::kFeedback, fbPct);
+        b.set(Delay::kTone, tone);
+        b.set(Delay::kMix, mixPct);
+        b.set(Delay::kSync, double(sync));
+        b.set(Delay::kPingPong, ping ? 1.0 : 0.0);
+        b.restart();
+    };
+
+    // Delay time, free-running. The whole span of the knob, and the tolerance is a thousandth of a
+    // sample rather than the milestone's one sample, because the loop is either exactly the length
+    // the knob says or it is not.
+    printf("delay time: the loop is as long as the knob says, over the whole span\n");
+    {
+        const size_t n = size_t(1) << kPhaseFftLog2;
+        for (double ms : {20.0, 100.0, 400.0, 1000.0, 2000.0}) {
+            DelayBoard b;
+            delayAt(b, ms, 0.0, 5.0, 100.0, 0, false);
+            const double got = measuredDelaySamples(b, 5.0, n);
+            char label[64];
+            snprintf(label, sizeof(label), "Time %.0f ms", ms);
+            check(label, got / (kRate * 0.001), ms, 1e-3, "ms");
+        }
+    }
+
+    // The same measurement with NO model of the filter in it at all. Two runs at different times
+    // share every coefficient, so the loop filter's contribution to the phase is identical and
+    // cancels exactly in the difference — which is what makes this the check on the check: if the
+    // closed form above were wrong, the absolute figures would all be wrong together and only this
+    // would notice.
+    printf("delay time, model-free: the DIFFERENCE between two settings cancels the filter\n");
+    {
+        const size_t n = size_t(1) << kPhaseFftLog2;
+        auto phaseAt = [&](double ms) {
+            DelayBoard b;
+            delayAt(b, ms, 0.0, 5.0, 100.0, 0, false);
+            return wetPhaseAtBin(delayWetIr(b, n));
+        };
+        const double p1 = phaseAt(150.0), p2 = phaseAt(950.0);
+        const double diff = (p1 - p2) / kPhaseBinW / (kRate * 0.001);
+        check("950 ms minus 150 ms", diff, 800.0, 1e-3, "ms");
+    }
+
+    // Tempo sync. kDelaySyncBeats is in quarter notes, so a division of b beats at t BPM is
+    // b*60/t seconds; every expectation here is that arithmetic and nothing else.
+    printf("tempo sync: a division is beats x 60 / BPM, and it re-locks when the tempo moves\n");
+    {
+        const size_t n = size_t(1) << kPhaseFftLog2;
+        const double bpm = 120.0;
+        for (int sync : {1, 2, 3, 4, 5, 7, 10}) {
+            DelayBoard b;
+            b.pedal().setTempo(bpm);
+            // Time is left at a value the division must OVERRIDE, so a sync that quietly did
+            // nothing would read as 400 ms rather than as the division.
+            delayAt(b, 400.0, 0.0, 5.0, 100.0, sync, false);
+            const double want = kDelaySyncBeats[sync] * 60000.0 / bpm;
+            const double got = measuredDelaySamples(b, 5.0, n) / (kRate * 0.001);
+            char label[64];
+            snprintf(label, sizeof(label), "%-5s at 120 BPM", kDelaySyncNames[sync]);
+            check(label, got, want, 1e-3, "ms");
+        }
+
+        // A tempo CHANGE, with no restart: the time smoother has to walk from one division to the
+        // other and land exactly on it. Three seconds of silence is comfortably longer than the
+        // 1.8 s that smoother needs to close 8000 samples to within its snap threshold.
+        DelayBoard b;
+        b.pedal().setTempo(120.0);
+        delayAt(b, 400.0, 0.0, 5.0, 100.0, 4, false); // 1/4
+        b.silence(size_t(kRate * 0.5));
+        b.pedal().setTempo(90.0);
+        b.silence(size_t(kRate * 3.0));
+        const double got = measuredDelaySamples(b, 5.0, n) / (kRate * 0.001);
+        check("1/4 after 120 -> 90 BPM", got, 60000.0 / 90.0, 1e-3, "ms");
+
+        // And the two ways of asking for free-running. A host that supplies no tempo must not be
+        // able to silence the division by leaving the delay at zero length.
+        DelayBoard f;
+        f.pedal().setTempo(0.0);
+        delayAt(f, 333.0, 0.0, 5.0, 100.0, 4, false);
+        check("1/4 with no host tempo", measuredDelaySamples(f, 5.0, n) / (kRate * 0.001), 333.0,
+              1e-3, "ms");
+
+        DelayBoard g;
+        g.pedal().setTempo(120.0);
+        delayAt(g, 333.0, 0.0, 5.0, 100.0, 0, false); // Free
+        check("Free with a host tempo", measuredDelaySamples(g, 5.0, n) / (kRate * 0.001), 333.0,
+              1e-3, "ms");
+    }
+
+    // The loop filter. Magnitude only, so the delay's own linear phase drops out, and against the
+    // closed form written from the literal corners above.
+    printf("loop filter: one-pole low-pass swept by Tone, over a fixed high-pass\n");
+    {
+        const int n = 1 << 16;
+        for (double tone : {0.0, 5.0, 10.0}) {
+            DelayBoard b;
+            delayAt(b, 100.0, 0.0, tone, 100.0, 0, false);
+            const std::vector<double> mag = magnitudeOf(delayWetIr(b, size_t(n)), n);
+
+            double worst = 0.0, worstHz = 0.0;
+            for (double f : {30.0, 60.0, 120.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0,
+                             16000.0}) {
+                const int k = int(f * n / kRate + 0.5);
+                const double fBin = double(k) * kRate / n;
+                const double w = 2.0 * kPi * fBin / kRate;
+                const double got = 20.0 * std::log10(std::max(1e-300, mag[size_t(k)]));
+                const double want = 20.0 * std::log10(std::abs(loopFilterH(tone, w)));
+                if (std::fabs(got - want) > worst) {
+                    worst = std::fabs(got - want);
+                    worstHz = fBin;
+                }
+            }
+            // The corner the filter actually has, which at the bright end is NOT the nominal
+            // 12 kHz: 1 - exp(-2pi f/fs) is a quarter of the sample rate away from its own
+            // half-power point up there. Printed rather than asserted, because what is asserted is
+            // the whole response.
+            double cornerHz = 0.0;
+            const double ref = std::abs(loopFilterH(tone, 2.0 * kPi * 500.0 / kRate));
+            for (int k = 1; k < n / 2; ++k) {
+                const double f = double(k) * kRate / n;
+                if (f > 500.0 && mag[size_t(k)] < ref * 0.70794578) {
+                    cornerHz = f;
+                    break;
+                }
+            }
+            printf("    Tone %-4.1f: nominal %7.1f Hz, measured -3 dB at %7.1f Hz; worst error "
+                   "%.4f dB at %.0f Hz\n",
+                   tone, toneCornerHz(tone), cornerHz, worst, worstHz);
+            if (worst > 0.02) {
+                fprintf(stderr,
+                        "pedalcheck: the loop filter at Tone %.1f is %.3f dB from its declared "
+                        "corners at %.0f Hz\n",
+                        tone, worst, worstHz);
+                ++gFailures;
+            }
+        }
+    }
+
+    // Decay. PASP states the condition this rests on: |g| < 1, or "each echo will be louder than
+    // the previous echo, producing a never-ending, growing series". The knob stops at 95, and the
+    // loop filter can only lose, so every repeat must be quieter than the one before it.
+    printf("decay: |g| < 1, so the repeats must shrink and the tail must reach true zero\n");
+    {
+        DelayBoard b;
+        delayAt(b, 100.0, 95.0, 5.0, 100.0, 0, false);
+        const size_t d = size_t(kRate * 0.1);
+        const size_t n = size_t(kRate * 60.0);
+        std::vector<double> l(n, 0.0), r(n, 0.0);
+        l[0] = r[0] = 1.0;
+        b.run(l.data(), r.data(), n);
+
+        // Energy in the window around each of the first eight repeats.
+        double prev = 0.0;
+        double worstRatioDb = -1e9;
+        for (int k = 1; k <= 8; ++k) {
+            double e = 0.0;
+            for (size_t i = k * d - d / 4; i < k * d + d / 4 && i < n; ++i)
+                e += l[i] * l[i];
+            const double db = 10.0 * std::log10(std::max(1e-300, e));
+            if (k > 1)
+                worstRatioDb = std::max(worstRatioDb, db - prev);
+            prev = db;
+        }
+        printf("    worst repeat-to-repeat change over eight repeats: %+.3f dB\n", worstRatioDb);
+        if (worstRatioDb > 0.0) {
+            fprintf(stderr, "pedalcheck: a repeat was %+.3f dB LOUDER than the one before it — the "
+                            "loop is not decaying\n",
+                    worstRatioDb);
+            ++gFailures;
+        }
+
+        const std::vector<double> tail(l.begin() + long(n - size_t(kRate)), l.end());
+        const double tailDb = rmsDb(tail);
+        printf("    tail after 60 s: %.1f dB\n", tailDb);
+        if (tailDb > -120.0) {
+            fprintf(stderr, "pedalcheck: the delay tail is still at %.1f dB after sixty seconds\n",
+                    tailDb);
+            ++gFailures;
+        }
+    }
+
+    // And it must reach true zero rather than settling into the subnormal range, where every
+    // operation costs about a hundred times what it should — the lesson the Flanger's tail taught,
+    // which is that flushing what goes INTO the line is not enough on its own: the line still holds
+    // ordinary values just above the floor for one delay's worth of samples after the loop bottoms
+    // out, and a fraction of one of those is subnormal. FTZ/DAZ is deliberately NOT armed in this
+    // tool, because a flush that only worked because the audio thread had armed it would be a flush
+    // this cannot see, and the same DSP is reachable from tools that arm nothing.
+    //
+    // THE IMPULSE IS 1e-300 AND NOT 1, which is the only reason this is affordable. The Flanger's
+    // loop is 4 ms round and crosses the subnormal range unaided in 38 s; this one is 20 ms round
+    // at its shortest and loses about 0.9 dB a lap, so reaching 1e-308 from unity takes some 6800
+    // laps — eleven minutes of audio to test one thing. The loop is linear, so an input 300 decades
+    // down is the identical signal 250 seconds later, and starting there measures exactly the same
+    // arithmetic in thirty seconds. Mix is at 50 % rather than 100 % because at 100 % the output IS
+    // the line read and nothing scales it, and it is the scaling that turns the line's last
+    // ordinary values into subnormals.
+    printf("the tail reaches true zero rather than the subnormal range\n");
+    {
+        DelayBoard b;
+        delayAt(b, 20.0, 95.0, 10.0, 50.0, 0, false);
+        const size_t n = size_t(kRate * 30.0);
+        std::vector<double> l(n, 0.0), r(n, 0.0);
+        l[0] = r[0] = 1e-300;
+        b.run(l.data(), r.data(), n);
+        // What this can see is the OUTPUT flush. The loop filter's own flush is invisible here by
+        // construction — whatever those states hold reaches the buffer only through this same
+        // output flush — so its justification is cost, and the cost is measured rather than
+        // asserted: removing it takes this whole tool from 1.94 s to 4.39 s. See LoopTone.
+        printf("    seeded at 1e-300; subnormals in the output: %s\n",
+               hasSubnormal(l) || hasSubnormal(r) ? "YES" : "no");
+        if (hasSubnormal(l) || hasSubnormal(r)) {
+            fprintf(stderr, "pedalcheck: the delay's feedback path produced subnormal samples\n");
+            ++gFailures;
+        }
+    }
+
+    // And the feedback is the number the knob says, not merely something below one.
+    //
+    // THIS CHECK EXISTS BECAUSE THE ONE ABOVE HAS A HOLE, found by deliberately putting the
+    // feedback 6 % over what the knob asked for: the loop filter loses more than 6 % per pass, so
+    // the repeats still shrink and "it decays" is still true. Decaying is the stability condition
+    // and it is worth asserting on its own, but it says nothing about the coefficient.
+    //
+    // Echo k+1 IS echo k convolved with fb times the loop filter — exactly, since the loop is
+    // linear — so the ratio of their spectra at any frequency is fb*|H(f)| and nothing else. That
+    // makes the expectation the knob's own value times the closed form written from the literal
+    // corners, with no envelope, no windowing assumption and no fitting.
+    printf("feedback: the ratio of one repeat's spectrum to the next is exactly fb x |H(f)|\n");
+    {
+        const double fbPct = 95.0;
+        DelayBoard b;
+        delayAt(b, 300.0, fbPct, 5.0, 100.0, 0, false);
+        const size_t d = size_t(kRate * 0.3);
+        const size_t n = d * 5;
+        std::vector<double> l(n, 0.0), r(n, 0.0);
+        l[0] = r[0] = 1.0;
+        b.run(l.data(), r.data(), n);
+
+        const int m = 1 << 14;
+        auto echoSpectrum = [&](size_t k) {
+            std::vector<double> w(size_t(m), 0.0);
+            const size_t from = k * d - d / 3;
+            for (size_t i = 0; i < size_t(m) && from + i < n && i < d * 2 / 3; ++i)
+                w[i] = l[from + i];
+            return magnitudeOf(w, m);
+        };
+        const std::vector<double> s1 = echoSpectrum(1), s2 = echoSpectrum(2), s3 = echoSpectrum(3);
+
+        for (double f : {200.0, 500.0, 1000.0, 2000.0}) {
+            const int k = int(f * m / kRate + 0.5);
+            const double fBin = double(k) * kRate / m;
+            const double want =
+                20.0 * std::log10(fbPct * 0.01
+                                  * std::abs(loopFilterH(5.0, 2.0 * kPi * fBin / kRate)));
+            char label[64];
+            snprintf(label, sizeof(label), "repeat 2/1 at %.0f Hz", fBin);
+            check(label, 20.0 * std::log10(s2[size_t(k)] / s1[size_t(k)]), want, 0.02);
+            snprintf(label, sizeof(label), "repeat 3/2 at %.0f Hz", fBin);
+            check(label, 20.0 * std::log10(s3[size_t(k)] / s2[size_t(k)]), want, 0.02);
+        }
+    }
+
+    // Ping-pong, verified by CHANNEL rather than by listening: repeat 1 belongs to the left, 2 to
+    // the right, 3 to the left again.
+    printf("ping-pong: the repeats alternate channels, and off, the two loops never meet\n");
+    {
+        DelayBoard b;
+        delayAt(b, 100.0, 60.0, 5.0, 100.0, 0, true);
+        const size_t d = size_t(kRate * 0.1);
+        const size_t n = d * 5;
+        std::vector<double> l(n, 0.0), r(n, 0.0);
+        l[0] = r[0] = 1.0; // correlated, which is what the cabinet hands over
+        b.run(l.data(), r.data(), n);
+
+        auto energyDb = [&](const std::vector<double> &v, size_t k) {
+            double e = 0.0;
+            for (size_t i = k * d - d / 4; i < k * d + d / 4 && i < n; ++i)
+                e += v[i] * v[i];
+            return 10.0 * std::log10(std::max(1e-300, e));
+        };
+        double worstSep = 1e9;
+        for (int k = 1; k <= 4; ++k) {
+            const double le = energyDb(l, size_t(k)), re = energyDb(r, size_t(k));
+            const bool wantLeft = (k % 2) == 1;
+            const double sep = wantLeft ? le - re : re - le;
+            printf("    repeat %d: L %7.1f dB, R %7.1f dB — expected on the %s, by %.1f dB\n", k,
+                   le, re, wantLeft ? "left " : "right", sep);
+            worstSep = std::min(worstSep, sep);
+        }
+        if (worstSep < 40.0) {
+            fprintf(stderr, "pedalcheck: a ping-pong repeat is only %.1f dB louder on the channel "
+                            "it belongs to than on the other one\n",
+                    worstSep);
+            ++gFailures;
+        }
+
+        // With ping-pong OFF the two loops are independent, and the strongest form of that claim
+        // is the one worth asserting: an impulse on the left alone must leave the right BIT-EXACTLY
+        // untouched. A crossfeed of any size at all fails this.
+        DelayBoard s;
+        delayAt(s, 100.0, 60.0, 5.0, 100.0, 0, false);
+        std::vector<double> l2(n, 0.0), r2(n, 0.0);
+        l2[0] = 1.0;
+        s.run(l2.data(), r2.data(), n);
+        double leak = 0.0;
+        for (size_t i = 0; i < n; ++i)
+            leak = std::max(leak, std::fabs(r2[i]));
+        check("crossfeed with ping-pong off", leak, 0.0, 0.0, "");
+    }
+
+    // Mix at 0 is the dry signal and nothing else — the same bit-exactness the Chorus is held to,
+    // and what makes a pedal that is engaged but turned down cost the player nothing.
+    printf("mix at 0 %%: the output is the input, bit for bit\n");
+    {
+        DelayBoard b;
+        delayAt(b, 250.0, 80.0, 5.0, 0.0, 0, false);
+        const size_t n = size_t(kRate * 0.5);
+        std::vector<double> l(n), r(n), refL(n), refR(n);
+        for (size_t i = 0; i < n; ++i) {
+            l[i] = refL[i] = std::sin(2.0 * kPi * 220.0 * double(i) / kRate);
+            r[i] = refR[i] = std::sin(2.0 * kPi * 310.0 * double(i) / kRate);
+        }
+        b.run(l.data(), r.data(), n);
+        double worst = 0.0;
+        for (size_t i = 0; i < n; ++i)
+            worst = std::max(worst, std::max(std::fabs(l[i] - refL[i]), std::fabs(r[i] - refR[i])));
+        check("worst |out - in| at Mix 0", worst, 0.0, 0.0, "");
+    }
+
+    // Zipper, by the same self-calibrating comparison the Flanger uses: a per-block control steps
+    // at block boundaries and nowhere else. Time is included even though its smoother is
+    // deliberately the slowest in the tree, because "deliberately slow" and "not smoothed at all"
+    // look identical until they are measured.
+    printf("no zipper under a dragged control: block-boundary steps vs steps inside a block\n");
+    {
+        // TONE IS NOT IN THIS LIST, and that is a finding rather than an omission: a per-block
+        // Tone was tried as a deliberate fault and this test did not catch it. It cannot. A
+        // one-pole's output is continuous in its coefficient — a step of da moves the output by
+        // da*(x - lp), which is a fraction of a step the signal's own slope already exceeds —
+        // where a stepped delay TIME teleports the read head and a stepped gain steps the level
+        // outright. So Tone is asserted by its settling time instead, below.
+        for (int which : {Delay::kTime, Delay::kFeedback, Delay::kMix}) {
+            DelayBoard b;
+            // MIX AT 100 %, and a stimulus whose own slope is gentle, because the first version of
+            // this had no teeth at all and the numbers said so: at Mix 50 % with a 700 Hz tone,
+            // three different controls reported the same worst step to six digits, which was the
+            // DRY sine's own sample-to-sample slope and nothing to do with the delay. All wet, and
+            // at 200 Hz, the floor this compares against is 0.026 instead of 0.046, and what is
+            // being measured is the delayed signal rather than the input.
+            // MIX GETS ITS OWN OPERATING POINT, and the choice is what gives that one teeth. A
+            // mix step moves the output by the step times (wet - dry), so it is invisible while
+            // the two are similar — at 200 Hz through a 200 ms line they are merely uncorrelated,
+            // and a deliberately per-block Mix walked past the first version of this. At the
+            // shortest delay the knob offers, 20 ms, a 175 Hz tone comes back three and a half
+            // periods later, which is ANTIPHASE: wet is -dry, the difference is 2x, and Mix maps
+            // straight onto amplitude.
+            const bool antiphase = (which == Delay::kMix);
+            const double baseMs = antiphase ? 20.0 : 200.0;
+            const double stimHz = antiphase                  ? 75.0
+                                  : (which == Delay::kTime)  ? 200.0
+                                                             : 100.0;
+            // FEEDBACK IS DRAGGED DOWNWARDS FROM ITS MAXIMUM, and with Tone wide open, and both
+            // are what give that one teeth. A step in feedback is a step of dfb times whatever is
+            // ALREADY GOING ROUND, so dragging up from zero measures it against an echo that is
+            // still nearly silent; and the step is then written through the loop's own low-pass,
+            // which at Tone 5 passes only a third of it on the sample it lands. Loaded, and at
+            // Tone 10, the same fault moves the figure by ten times as much.
+            const bool loaded = (which == Delay::kFeedback);
+            delayAt(b, baseMs, loaded ? 95.0 : 60.0, loaded ? 10.0 : 5.0, 100.0, 0, false);
+            b.silence(size_t(kRate * 0.3));
+            if (loaded) {
+                // AND THE LOOP HAS TO BE FULL BEFORE THE DRAG, which is the third thing this one
+                // needed. At 95 % feedback the loop builds with a time constant of the delay over
+                // (1 - fb), so 4 s at 200 ms; scored half a second in it has been round twice and
+                // is carrying about 0.3, which is why a step of dfb TIMES WHAT IS GOING ROUND was
+                // too small to see. Two seconds of the tone first — 100 Hz is a multiple of the
+                // comb's own 5 Hz spacing, so it lands on a peak and the loop loads properly.
+                std::vector<double> pl(size_t(kRate * 2.0)), pr(pl.size());
+                for (size_t i = 0; i < pl.size(); ++i)
+                    pl[i] = pr[i] = std::sin(2.0 * kPi * stimHz * double(i) / kRate);
+                b.run(pl.data(), pr.data(), pl.size());
+            }
+
+            const double lo = (which == Delay::kTime)       ? 200.0
+                              : (which == Delay::kFeedback) ? 95.0
+                                                            : 0.0;
+            const double hi = (which == Delay::kTime)       ? 600.0
+                              : (which == Delay::kFeedback) ? 0.0
+                                                            : 100.0;
+            // The line has to be FULL of signal before anything is measured, or at Mix 100 % the
+            // first delay's worth of output is the silence that primed it and every step reads as
+            // zero — which is how the first run of this reported a perfect result while measuring
+            // nothing at all. So the drag runs over six tenths of a second and only the last two
+            // are scored, by which time the longest delay asked for here has been through twice.
+            const size_t n = size_t(kRate * 0.6);
+            const size_t from = size_t(kRate * 0.5);
+            const size_t span = n - from;
+
+            // WHEN THE KNOB IS DRAGGED IS PART OF THE TEST, and getting it wrong is why a
+            // deliberately per-block Feedback walked past the first two versions of this. Time and
+            // Mix act on the sample in hand — one moves the read head, the other mixes the output —
+            // so they are dragged across the window being scored. Feedback acts on what is
+            // WRITTEN, and what is written is not heard until one delay later, so it is dragged one
+            // delay BEFORE the window instead. The 200 ms it is measured at is 9600 samples, which
+            // is exactly 75 blocks, so a step written at a block boundary still arrives at one; at
+            // a delay that was not a whole number of blocks the step would land somewhere inside a
+            // block and inflate the very figure it is being compared against.
+            const size_t sweepFrom = (which == Delay::kFeedback)
+                                         ? from - size_t(baseMs * kRate * 0.001)
+                                         : from;
+            std::vector<double> l(n), r(n);
+            for (size_t i = 0; i < n; ++i)
+                l[i] = r[i] = std::sin(2.0 * kPi * stimHz * double(i) / kRate);
+
+            double boundary = 0.0, inside = 0.0;
+            for (size_t i = 0; i < n; i += kBlock) {
+                const size_t k = std::min<size_t>(kBlock, n - i);
+                const double t =
+                    (i < sweepFrom) ? 0.0 : std::min(1.0, double(i - sweepFrom) / double(span));
+                b.set(which, lo + (hi - lo) * t);
+                const double before = (i > 0) ? l[i - 1] : 0.0;
+                b.run(l.data() + i, r.data() + i, k);
+                if (i < from)
+                    continue;
+                if (i > 0)
+                    boundary = std::max(boundary, std::fabs(l[i] - before));
+                for (size_t j = 1; j < k; ++j)
+                    inside = std::max(inside, std::fabs(l[i + j] - l[i + j - 1]));
+            }
+            const char *name = which == Delay::kTime       ? "Time"
+                               : which == Delay::kFeedback ? "Repeats"
+                                                           : "Mix";
+            printf("    dragging %-7s: worst step at a boundary %.6f, inside a block %.6f\n", name,
+                   boundary, inside);
+            if (boundary > inside * 1.5) {
+                fprintf(stderr, "pedalcheck: dragging %s steps %.2fx harder at block boundaries "
+                                "than inside a block — the control is not smoothed per sample\n",
+                        name, boundary / std::max(1e-12, inside));
+                ++gFailures;
+            }
+        }
+    }
+
+    // Ping-pong is a SWITCH, so it cannot be dragged and the zipper test above has nothing to say
+    // about it — but stomping it is a change of topology, which is exactly the kind of thing that
+    // steps. Its effect reaches the output one delay later, like feedback's and for the same
+    // reason, so it is scored one delay after the stomp at a delay that is a whole number of
+    // blocks (200 ms is 9600 samples, which is 75 of them).
+    printf("ping-pong is stomped, not stepped: the crossfade reaches the output smoothly\n");
+    {
+        DelayBoard b;
+        delayAt(b, 200.0, 70.0, 10.0, 100.0, 0, false);
+        const size_t d = size_t(kRate * 0.2);
+        const size_t n = d * 5;
+        std::vector<double> l(n), r(n);
+        // 101 Hz AND NOT 100, and the odd number is the whole test. What ping-pong changes when
+        // the two channels carry the same signal is the RIGHT line's injection, which goes from x
+        // to zero — so the step it makes is the size of x at the instant of the stomp. The stomp
+        // is at 0.6 s, and any frequency that fits a whole number of periods into 0.6 s is at a
+        // zero crossing there: at 100 Hz the step is exactly nothing, and a hard switch and a
+        // crossfade produce bit-identical output. 101 Hz lands at 0.59 of full scale instead.
+        for (size_t i = 0; i < n; ++i)
+            l[i] = r[i] = std::sin(2.0 * kPi * 101.0 * double(i) / kRate);
+
+        const size_t stomp = d * 3;
+        for (size_t i = 0; i < n; i += kBlock) {
+            const size_t k = std::min<size_t>(kBlock, n - i);
+            b.set(Delay::kPingPong, i >= stomp ? 1.0 : 0.0);
+            b.run(l.data() + i, r.data() + i, k);
+        }
+        double before = 0.0, after = 0.0;
+        for (size_t i = 1; i < n; ++i) {
+            const double step = std::max(std::fabs(l[i] - l[i - 1]), std::fabs(r[i] - r[i - 1]));
+            if (i > d && i < stomp)
+                before = std::max(before, step);
+            else if (i > stomp && i < stomp + 2 * d)
+                after = std::max(after, step);
+        }
+        printf("    worst step before the stomp %.5f, in the two delays after it %.5f\n", before,
+               after);
+        if (after > before * 1.5) {
+            fprintf(stderr, "pedalcheck: stomping ping-pong steps %.2fx harder than the signal's "
+                            "own slope — the routing is switched rather than crossfaded\n",
+                    after / std::max(1e-12, before));
+            ++gFailures;
+        }
+    }
+
+    // Tone sweeps rather than steps, asserted by how long it TAKES rather than by what it does to
+    // any one sample. A control smoothed per sample over kSmoothSec cannot reach its new value
+    // inside a block; one applied per block reaches it inside one, which is the whole difference
+    // and is the only form of it this signal can see.
+    printf("Tone sweeps rather than steps: the response settles over tens of ms, not one block\n");
+    {
+        DelayBoard b;
+        delayAt(b, 20.0, 0.0, 0.0, 100.0, 0, false);
+        const size_t n = size_t(kRate * 0.4);
+        std::vector<double> l(n), r(n);
+        for (size_t i = 0; i < n; ++i)
+            l[i] = r[i] = std::sin(2.0 * kPi * 5000.0 * double(i) / kRate);
+
+        // A 5 kHz tone, so the two ends of Tone are far apart in level: the low-pass sits at
+        // 800 Hz at one end and 12 kHz at the other.
+        const size_t flip = size_t(kRate * 0.2);
+        b.run(l.data(), r.data(), flip);
+        b.set(Delay::kTone, 10.0);
+        b.run(l.data() + flip, r.data() + flip, n - flip);
+
+        // Envelope by peak over a 1 ms window, and the 10 % to 90 % crossing of the change.
+        const size_t w = size_t(kRate * 0.001);
+        auto env = [&](size_t at) {
+            double e = 0.0;
+            for (size_t i = at; i < at + w && i < n; ++i)
+                e = std::max(e, std::fabs(l[i]));
+            return e;
+        };
+        const double before = env(flip - 3 * w);
+        const double after = env(n - 2 * w);
+        double t10 = -1.0, t90 = -1.0;
+        for (size_t i = flip; i + w < n; i += w) {
+            const double e = (env(i) - before) / std::max(1e-12, after - before);
+            if (t10 < 0.0 && e >= 0.1)
+                t10 = double(i - flip) / kRate * 1000.0;
+            if (t90 < 0.0 && e >= 0.9)
+                t90 = double(i - flip) / kRate * 1000.0;
+        }
+        // THE RISE, from 10 % to 90 %, and NOT the time from the push — which is what the first
+        // version of this measured and is why a deliberately per-block Tone walked straight past
+        // it. The delay line is 20 ms long, so the change cannot appear at the output until 20 ms
+        // after the push however the coefficient is applied; a threshold on the arrival is a
+        // threshold on the delay time. The rise itself is the smoother and nothing else.
+        const double rise = t90 - t10;
+        printf("    5 kHz level %.4f -> %.4f; 10 %% at %.1f ms, 90 %% at %.1f ms, rise %.1f ms\n",
+               before, after, t10, t90, rise);
+        // A one-pole at kSmoothSec spans 10 % to 90 % in about 2.2 time constants, so 44 ms; a
+        // snapped coefficient rises only as fast as the filter behind it settles, which is a
+        // handful of samples.
+        if (rise < 10.0) {
+            fprintf(stderr, "pedalcheck: Tone went from 10 %% to 90 %% of its change in %.1f ms — "
+                            "that is the filter settling and not a smoother, so the coefficient is "
+                            "being applied per block\n",
+                    rise);
+            ++gFailures;
+        }
+        if (rise > 150.0) {
+            fprintf(stderr, "pedalcheck: Tone took %.1f ms to cross its own change, which is a "
+                            "knob that lags the hand turning it\n",
+                    rise);
+            ++gFailures;
         }
     }
 

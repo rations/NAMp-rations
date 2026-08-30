@@ -172,6 +172,20 @@ run_states() {  # $1 = label prefix
         args="${state%%|*}"
         name="${state##*|}"
         printf '  %-58s ' "$name"
+        # THE PERIOD IS RE-CHECKED BEFORE EVERY STATE, not just once per buffer size, because this
+        # script prints the size it ASKED for as a heading and the deadline it MEASURED in each
+        # row, and nothing used to make the two agree. A jackd restarted underneath a run - by a
+        # session manager, by a GUI, or by another copy of this script exiting late and firing its
+        # own restore trap - silently produced rows reading "3.44 ms of a 5.33 ms period" under a
+        # "128 frames" heading, which is a 256-frame measurement filed as a 128-frame one. That is
+        # worse than a failure: it is a number that looks like the gate passing at a size it never
+        # ran at. Observed, not hypothetical.
+        now=$(jack_bufsize 2>/dev/null)
+        if [ "$now" != "$period" ]; then
+            printf 'server is at %s frames, not %s | NO RESULT\n' "${now:-?}" "$period"
+            noresult=$((noresult + 1))
+            continue
+        fi
         # shellcheck disable=SC2086
         out=$("$jackcheck" "$bundle" --captures "$captures" --seconds "$seconds" $args 2>&1)
         block=$(echo "$out" | grep -o 'worst block .*' | sed 's/worst block *//')
