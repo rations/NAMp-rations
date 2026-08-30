@@ -318,7 +318,18 @@ int main(int argc, char **argv)
             table[r].store(Rations::packBinding(b));
         }
 
-        printf("counting       MIDI learn table, matching every message type\n");
+        // Matching is only half of it. What a matched row PERFORMS is on the same thread and is
+        // where the pedal footswitch rows added work: a channel row stores one atomic, a pedal row
+        // looks its parameter up in kPedalParams by a linear scan and then reads a value back
+        // before writing it. Both are counted here, in the same shape midiTrigger runs them, so
+        // that a later row type whose action wanted a map or a string is caught here rather than
+        // in somebody's session.
+        std::atomic<double> channelNorm{0.0};
+        std::atomic<double> pedalNorm[Rations::kPedalParamCount];
+        for (auto &p : pedalNorm)
+            p.store(0.0, std::memory_order_relaxed);
+
+        printf("counting       MIDI learn table, matching every message type and performing it\n");
         allocation_tracking::run_allocation_test_no_allocations(
             nullptr,
             [&] {
@@ -330,13 +341,27 @@ int main(int argc, char **argv)
                     for (int r = 0; r < Rations::kMidiLearnRowCount; ++r) {
                         const Rations::MidiBinding bound =
                             Rations::unpackBinding(table[r].load(std::memory_order_acquire));
-                        if (Rations::bindingMatches(bound, msg, channel, data1))
-                            hits = hits + 1;
+                        if (!Rations::bindingMatches(bound, msg, channel, data1))
+                            continue;
+                        hits = hits + 1;
+                        const Rations::MidiLearnTarget &target = Rations::kMidiLearnRows[r];
+                        if (target.param == Rations::kChannelId) {
+                            channelNorm.store(target.value, std::memory_order_relaxed);
+                        } else if (const int pedalIndex = Rations::pedalParamIndex(target.param);
+                                   pedalIndex >= 0) {
+                            const double now =
+                                pedalNorm[pedalIndex].load(std::memory_order_relaxed);
+                            pedalNorm[pedalIndex].store(
+                                target.action == Rations::MidiAction::Toggle
+                                    ? (now > 0.5 ? 0.0 : 1.0)
+                                    : target.value,
+                                std::memory_order_relaxed);
+                        }
                     }
                 }
                 (void)hits;
             },
-            nullptr, "MIDI learn table, matching every message type");
+            nullptr, "MIDI learn table, matching every message type and performing it");
     }
 
     // --- the pedalboard --------------------------------------------------------------------

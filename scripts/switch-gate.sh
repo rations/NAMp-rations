@@ -29,6 +29,15 @@
 #   scripts/switch-gate.sh --periods "128"          # one buffer size
 #   scripts/switch-gate.sh --budgets "2.4 2.5 2.6"  # SWEEP: edits engineconfig.h, see below
 #   scripts/switch-gate.sh --settle 10              # longer for the card after a jackd restart
+#   scripts/switch-gate.sh --pedals                 # the same three states with all five pedals on
+#   scripts/switch-gate.sh --pedals chorus,delay    # ... or with only the ones named
+#
+# --pedals engages the whole pedalboard for the run. It is OFF by default and that is deliberate:
+# what this gate protects is the channel switch's budget, a disengaged pedal is skipped outright
+# rather than processed and mixed out, so the default run measures the switch and nothing else and
+# stays comparable with every figure recorded for it before the pedalboard existed. Turning it on
+# asks the other question - whether the board and the switch fit in one period together - and that
+# is the question scripts/pedal-gate.sh exists to ask.
 #
 # NOTHING ELSE MAY BE RUNNING while this measures. It restarts jackd, and a build, another gate,
 # or a second copy of this script will disturb the server underneath it and produce numbers that
@@ -50,6 +59,7 @@ periods="128 256"
 budgets=""
 seconds=15
 passes=1
+pedals=
 # Seconds to leave the server alone after it reports itself available, before anything is
 # measured through it. Not a guess at how long jackd takes to start - jackd_wait_ready above
 # waits for that properly - but a margin over the card being reopened underneath it.
@@ -62,7 +72,16 @@ while [ "$#" -gt 0 ]; do
         --seconds)  seconds="$2"; shift 2 ;;
         --passes)   passes="$2"; shift 2 ;;
         --settle)   settle="$2"; shift 2 ;;
-        -h|--help)  sed -n '2,37p' "$0"; exit 0 ;;
+        --pedals)
+            # An optional argument: bare --pedals means all five, and a following word that is not
+            # another option names the ones to engage. Naming them is how "the board does not fit"
+            # becomes "this pedal does not fit", which is the only form of that finding anyone can
+            # act on.
+            case "${2:-}" in
+                ""|--*) pedals="--pedals all"; shift ;;
+                *)      pedals="--pedals $2"; shift 2 ;;
+            esac ;;
+        -h|--help)  sed -n '2,45p' "$0"; exit 0 ;;
         *) echo "switch-gate: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
@@ -187,7 +206,7 @@ run_states() {  # $1 = label prefix
             continue
         fi
         # shellcheck disable=SC2086
-        out=$("$jackcheck" "$bundle" --captures "$captures" --seconds "$seconds" $args 2>&1)
+        out=$("$jackcheck" "$bundle" --captures "$captures" --seconds "$seconds" $pedals $args 2>&1)
         block=$(echo "$out" | grep -o 'worst block .*' | sed 's/worst block *//')
         verdict=$(echo "$out" | grep -oE '^(PASSED|FAILED)')
         # No verdict at all means jackcheck never got far enough to have an opinion - no server,
@@ -217,7 +236,7 @@ for period in $periods; do
         echo "switch-gate: no usable jack server; refusing to report a measurement" >&2
         exit 1
     }
-    echo "########## $rate Hz, $frames frames ##########"
+    echo "########## $rate Hz, $frames frames${pedals:+, pedals: ${pedals#--pedals }} ##########"
     if [ -n "$budgets" ]; then
         for budget in $budgets; do
             set_budget "$budget"

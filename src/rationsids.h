@@ -401,6 +401,13 @@ inline constexpr PedalParamSpec kPedalParams[] = {
 // enough that a corrupt length cannot make the reader spin.
 inline constexpr Steinberg::int32 kPedalStateMax = 1024;
 
+// The same bound for the MIDI learn table's own length prefix, which state version 6 gave it for
+// the same reason: the table stopped being four rows the moment the pedalboard wanted five more,
+// and a fixed count in the middle of a blob makes every later row of it unreadable when the count
+// changes. 256 rather than 1024 only because a learn table is a list of footswitch buttons and
+// nobody has 1024 of those.
+inline constexpr Steinberg::int32 kMidiRowStateMax = 256;
+
 // Derived, never hand-counted. The first version of this line carried a literal, got it wrong by
 // one, and the compiler caught it — but the same literal is also what the state blob writes as its
 // length prefix, where a wrong value would have been a silently truncated preset rather than a
@@ -548,7 +555,7 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // Version of the state blob written by getState and accepted by setState / setComponentState.
 // Version 1 ended after the two IR paths; version 2 appends the MIDI learn table; version 3
 // appends the four channel trims; version 4 appends the output section and the four capture
-// sources. An older blob is still loaded - it is a project saved before the pedal, the trims or
+// sources; version 5 appends the pedalboard, length-prefixed. An older blob is still loaded - it is a project saved before the pedal, the trims or
 // the loader could do anything - so this is a minimum-compatible marker rather than a gate, and
 // the readers check the version before reading anything an older writer would not have written.
 //
@@ -558,7 +565,17 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // version 3 build resolved those from inside the bundle and never wrote down where they came
 // from. There is no honest way to recover that, so such a project opens with four empty channels
 // and the settings page asking for them - silence a user can fix, rather than a guess at a path.
-inline constexpr Steinberg::int32 kStateVersion = 5;
+//
+// Version 6 does not APPEND anything, which is why it is a version at all. It gives the MIDI
+// learn table a length prefix, in the middle of the blob where that table has always sat, because
+// the pedalboard's five footswitch rows made kMidiLearnRowCount grow from four to nine - and a
+// fixed count in the middle of a blob is unreadable by a build that disagrees about it. A version
+// 2-5 reader would take the first four words and then read five of them as channel trims; a
+// version 6 reader given an old blob would eat five of the trims as bindings. So the count is
+// written down, an old blob is read as exactly kMidiLearnRowsV2 rows (frozen at 4 in midilearn.h),
+// and rows beyond what this build has are skipped rather than refused - which is what lets a blob
+// from a build with MORE rows still open here.
+inline constexpr Steinberg::int32 kStateVersion = 6;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.

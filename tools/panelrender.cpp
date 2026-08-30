@@ -614,12 +614,18 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
         {MidiMsg::NoteOn, 15, 1}, // "Note C#-2 ch 16"
         {MidiMsg::ProgramChange, kMidiAnyChannel, 127},
         {MidiMsg::Unlearned, kMidiAnyChannel, 0},
+        // The five pedal rows, which are the same row drawn against the widest pedal names. Two
+        // are left unlearned, because a half-mapped board is the ordinary state of one.
+        {MidiMsg::ControlChange, kMidiAnyChannel, 80},
+        {MidiMsg::NoteOn, 0, 127}, // "Note G8 ch 1"
+        {MidiMsg::ProgramChange, kMidiAnyChannel, 5},
+        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
+        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
     };
     const int kArmed = 2; // one row shown listening, so that state is on screen too
 
     for (int i = 0; i < geo::kMidiRowCount; ++i) {
-        const Rect r(geo::kMidiRowX, geo::kMidiRowY0 + i * geo::kMidiRowPitch, geo::kMidiRowW,
-                     geo::kMidiRowH);
+        const Rect r(geo::kMidiRowX, geo::midiRowY(i), geo::kMidiRowW, geo::kMidiRowH);
         c.setColor(0x0C0B0A);
         c.fillRoundRect(r, 4.0f);
         c.setColor(geo::kGold, 190);
@@ -667,6 +673,8 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
                      geo::kSettingsFootnote, cx, static_cast<float>(geo::kSettingsFootnoteY));
     drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
                      geo::kSettingsFootnote2, cx, static_cast<float>(geo::kSettingsFootnote2Y));
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     geo::kSettingsFootnote3, cx, static_cast<float>(geo::kSettingsFootnote3Y));
 
     // --- the output section ------------------------------------------------------------------
     // Drawn with Calibrated GATED and the calibration block live, which is the mixed state: a
@@ -1272,7 +1280,9 @@ bool auditText(FontStack &fonts)
     // which is the negative extreme, since the minus sign is wider than the plus.
     fits.push_back({"level heading", Font::Title, geo::kSettingsHeadingSize, geo::kLevelHeading,
                     static_cast<float>(geo::kMidiRowW)});
-    for (int i = 0; i < kMidiLearnRowCount; ++i)
+    // Four, not kMidiLearnRowCount: the MIDI list has the pedals in it too and the levels do not,
+    // and the two counts stopped being the same number when the footswitch rows landed.
+    for (int i = 0; i < geo::kLevelRowCount; ++i)
         fits.push_back({"level row", Font::Title, geo::kMidiRowTextSize, kMidiLearnRows[i].label,
                         static_cast<float>(geo::kLevelSliderX) - 20.0f});
     static char levelReadout[2][24];
@@ -1315,6 +1325,8 @@ bool auditText(FontStack &fonts)
                     geo::kSettingsFootnote, static_cast<float>(geo::kMidiRowW)});
     fits.push_back({"settings footnote 2", Font::Body, geo::kSettingsFootnoteSize,
                     geo::kSettingsFootnote2, static_cast<float>(geo::kMidiRowW)});
+    fits.push_back({"settings footnote 3", Font::Body, geo::kSettingsFootnoteSize,
+                    geo::kSettingsFootnote3, static_cast<float>(geo::kMidiRowW)});
 
     int bad = 0;
     for (const TextFit &f : fits) {

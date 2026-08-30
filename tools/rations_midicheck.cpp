@@ -97,12 +97,15 @@ void fail(const char *what, const char *detail = nullptr)
     ++gFailures;
 }
 
-void check(bool condition, const char *what, const char *detail = nullptr)
+// Returns what it was told, so a check that GATES something after it can be written as one
+// statement rather than as a condition tested twice.
+bool check(bool condition, const char *what, const char *detail = nullptr)
 {
     if (condition)
         ok(what);
     else
         fail(what, detail);
+    return condition;
 }
 
 bool parseArgs(int argc, char **argv, Options &opt)
@@ -183,7 +186,23 @@ struct Block {
     bool sawChannelEcho = false;
     double channelEcho = 0.0;
     double activeChannel = -1.0;
+    // Every parameter the plug-in reported changing this block. The two fields above are the
+    // channel's, kept because four sections were written against them; the pedal rows need the
+    // general form, because what a footswitch row echoes is a value it COMPUTED and the whole
+    // point is to check which one.
+    std::vector<std::pair<Vst::ParamID, double>> echoes;
 };
+
+// What the plug-in said it did to one parameter this block, if it said anything.
+bool echoOf(const Block &b, Vst::ParamID id, double &value)
+{
+    for (const auto &e : b.echoes)
+        if (e.first == id) {
+            value = e.second;
+            return true;
+        }
+    return false;
+}
 
 struct Harness {
     Vst::IAudioProcessor *processor = nullptr;
@@ -225,6 +244,7 @@ struct Harness {
         b.sawChannelEcho = false;
         b.channelEcho = 0.0;
         b.activeChannel = -1.0;
+        b.echoes.clear();
 
         for (int r = 0; r < repeats; ++r) {
             paramChanges.clearQueue();
@@ -238,6 +258,7 @@ struct Harness {
                 eventList.addEvent(e);
 
             outParamChanges.clearQueue();
+            b.echoes.clear();
             processor->process(data);
 
             // The plug-in reporting a parameter it changed by itself, and the hidden read-only
@@ -257,6 +278,11 @@ struct Harness {
                 } else if (q->getParameterId() == kActiveChannelId) {
                     b.activeChannel = v;
                 }
+                // kActiveChannelId is the plug-in REPORTING, not the plug-in acting, so it is
+                // deliberately left out of the echo list: what that list is for is "which
+                // parameter did a footswitch move", and a read-only meter is not an answer.
+                if (q->getParameterId() != kActiveChannelId)
+                    b.echoes.push_back({q->getParameterId(), v});
             }
         }
     }
@@ -278,7 +304,8 @@ std::pair<Vst::ParamID, double> cc(int number, int value)
 // read forward - and, since it has to, it reads forward through everything rather than seeking by
 // arithmetic, which is the version of "a second copy of the layout" that fails loudly when the
 // layout changes under it instead of returning four plausible wrong numbers.
-bool readTrims(MemoryStream &s, double out[kChannelCount])
+bool readTrims(MemoryStream &s, double out[kChannelCount],
+               std::vector<double> *pedals = nullptr)
 {
     s.seek(0, IBStream::kIBSeekSet, nullptr);
     IBStreamer streamer(&s, kLittleEndian);
@@ -299,13 +326,19 @@ bool readTrims(MemoryStream &s, double out[kChannelCount])
             return false;
         delete[] p;
     }
-    // The MIDI table, from version 2.
-    if (version >= 2) {
-        for (int row = 0; row < kMidiLearnRowCount; ++row) {
-            int32 word = 0;
-            if (!streamer.readInt32(word))
-                return false;
-        }
+    // The MIDI table, from version 2 - four rows until version 6 gave the block its own count.
+    // Spelled out here rather than shared with the plug-in, because walking a blob by a layout
+    // this file keeps its own copy of is the whole point: a reader that agreed with the writer by
+    // construction would agree with it about a mistake too.
+    int32 midiRows = (version >= 2) ? kMidiLearnRowsV2 : 0;
+    if (version >= 6 && !streamer.readInt32(midiRows))
+        return false;
+    if (midiRows < 0 || midiRows > kMidiRowStateMax)
+        return false;
+    for (int32 row = 0; row < midiRows; ++row) {
+        int32 word = 0;
+        if (!streamer.readInt32(word))
+            return false;
     }
     // A version 1 or 2 blob stops here and has no trims to read. That is not a failure of this
     // helper - it is the case the caller is asserting about - so it answers with the defaults the
@@ -313,11 +346,109 @@ bool readTrims(MemoryStream &s, double out[kChannelCount])
     if (version < 3) {
         for (int c = 0; c < kChannelCount; ++c)
             out[c] = 0.5;
+        if (pedals)
+            pedals->clear();
         return true;
     }
     for (int c = 0; c < kChannelCount; ++c)
         if (!streamer.readDouble(out[c]))
             return false;
+    if (!pedals)
+        return true;
+
+    // On to the pedalboard, which means reading past the output section and the four capture
+    // sources first. This is where the MIDI block's length prefix is really tested: get that count
+    // wrong and everything from here on is read at the wrong offset, so a wrong answer here is a
+    // loud failure rather than four plausible numbers.
+    pedals->clear();
+    if (version < 4)
+        return true;
+    for (int i = 0; i < 3; ++i) // output mode, calibrate, calibration level
+        if (!streamer.readDouble(skip))
+            return false;
+    for (int c = 0; c < kChannelCount; ++c) {
+        int32 isDir = 0;
+        if (!streamer.readInt32(isDir))
+            return false;
+        for (int f = 0; f < 2; ++f) { // the path, then the name override
+            char8 *p = streamer.readStr8();
+            if (!p)
+                return false;
+            delete[] p;
+        }
+    }
+    if (version < 5)
+        return true;
+    int32 count = 0;
+    if (!streamer.readInt32(count) || count < 0 || count > kPedalStateMax)
+        return false;
+    for (int32 i = 0; i < count; ++i) {
+        double v = 0.0;
+        if (!streamer.readDouble(v))
+            return false;
+        pedals->push_back(v);
+    }
+    return true;
+}
+
+// Rewrite a state blob's MIDI block: a different version word, a different number of rows, and a
+// length prefix only from version 6. Everything else is copied BYTE FOR BYTE, which is what makes
+// this a fixture for the reader rather than a second implementation of the writer - the two halves
+// of the blob this test is not asking about cannot be got wrong by it.
+//
+// Two blobs are made this way, and they are the two ends of the compatibility claim: a version 5
+// blob with four rows (what every project written before the pedalboard's footswitches looks like)
+// and a version 6 blob with more rows than this build has (what a project written by a later build
+// with a sixth pedal would look like).
+bool rewriteMidiBlock(MemoryStream &src, int32 version, int32 rows, std::vector<char> &out)
+{
+    const char *bytes = src.getData();
+    const int64 size = src.getSize();
+    if (!bytes || size <= 0)
+        return false;
+
+    src.seek(0, IBStream::kIBSeekSet, nullptr);
+    IBStreamer streamer(&src, kLittleEndian);
+    int32 srcVersion = 0;
+    if (!streamer.readInt32(srcVersion) || srcVersion < 6)
+        return false; // this only downgrades from the current writer
+
+    double skip = 0.0;
+    for (int i = 0; i < 8 + 1 + kChannelCount + 1; ++i)
+        if (!streamer.readDouble(skip))
+            return false;
+    for (int slot = 0; slot < kIrSlotCount; ++slot) {
+        char8 *p = streamer.readStr8();
+        if (!p)
+            return false;
+        delete[] p;
+    }
+    const int64 midiStart = streamer.tell();
+    int32 srcRows = 0;
+    if (!streamer.readInt32(srcRows) || srcRows < 0 || srcRows > kMidiRowStateMax)
+        return false;
+    std::vector<int32> words(static_cast<size_t>(srcRows), 0);
+    for (int32 i = 0; i < srcRows; ++i)
+        if (!streamer.readInt32(words[static_cast<size_t>(i)]))
+            return false;
+    const int64 midiEnd = streamer.tell();
+
+    auto put = [&out](const void *p, size_t n) {
+        const char *c = static_cast<const char *>(p);
+        out.insert(out.end(), c, c + n);
+    };
+    out.clear();
+    put(&version, sizeof(version));
+    put(bytes + sizeof(int32), static_cast<size_t>(midiStart) - sizeof(int32));
+    if (version >= 6)
+        put(&rows, sizeof(rows));
+    for (int32 i = 0; i < rows; ++i) {
+        // Rows the source does not have are written UNLEARNED, which is what a build with more
+        // rows than the source would itself have stored for them.
+        const int32 w = (i < srcRows) ? words[static_cast<size_t>(i)] : 0;
+        put(&w, sizeof(w));
+    }
+    put(bytes + midiEnd, static_cast<size_t>(size - midiEnd));
     return true;
 }
 
@@ -338,6 +469,20 @@ Vst::Event noteOn(int channel, int pitch, float velocity = 0.8f)
     e.noteOn.velocity = velocity;
     e.noteOn.noteId = -1;
     return e;
+}
+
+// A footswitch press, as a controller actually sends one: the release first, so that the 127 is a
+// RISING edge. Nothing else is acted on - a held pedal must fire once and not once per block - so a
+// press sent without a release ahead of it would silently do nothing at all.
+Block stomp(Harness &rig, int number)
+{
+    Block release;
+    release.params.push_back(cc(number, 0));
+    rig.run(release);
+    Block press;
+    press.params.push_back(cc(number, 127));
+    rig.run(press);
+    return press;
 }
 
 // The value kChannelId takes for channel `c` - the same arithmetic the plug-in's own table uses,
@@ -389,6 +534,16 @@ int main(int argc, char **argv)
     FUnknownPtr<Vst::IAudioProcessor> processor(component);
     if (!component || !processor) {
         fprintf(stderr, "rations_midicheck: no audio processor\n");
+        return 1;
+    }
+    // The EDITOR half. Its setComponentState walks the same blob the processor's setState does and
+    // has to walk it in the same steps, or every field after the first disagreement is read at the
+    // wrong offset. Nothing in this tree tested that until the MIDI table's length prefix made it
+    // possible to get wrong - and the SDK validator does not: a controller reading the blob wrongly
+    // still returns kResultOk, so all 47 of its tests pass while the editor shows the wrong panel.
+    Vst::IEditController *controller = provider->getController();
+    if (!controller) {
+        fprintf(stderr, "rations_midicheck: no edit controller\n");
         return 1;
     }
 
@@ -737,6 +892,231 @@ int main(int argc, char **argv)
             arrived = near(settle.activeChannel, channelValue(kOd2));
         }
         check(arrived, "and OD2 becomes the channel that is sounding");
+    }
+
+
+    // --- 7. the pedalboard's footswitches -----------------------------------------------------
+    //
+    // Five more rows in the same table, and nothing new in the mechanism - which is the claim D8
+    // made when it wrote the table generic over ParamID, so this is where it gets checked. What IS
+    // new is what a row DOES: a channel row sets, a pedal row toggles, and the difference is the
+    // reason a footswitch with four buttons can drive five pedals at all.
+    printf("pedal footswitches\n");
+    {
+        auto setPedals = [&rig](double value) {
+            Block set;
+            for (int p = 0; p < kPedalCount; ++p)
+                set.params.push_back({kPedalOnId[p], value});
+            rig.run(set);
+        };
+
+        int row = kMidiLearnChannelRows + kPedalBoost;
+        sendMessage(hostContext, component, kMsgMidiLearn, &row);
+        setPedals(0.0);
+        Block teach;
+        teach.params.push_back(cc(100, 127));
+        rig.run(teach);
+        double v = 0.0;
+        check(!echoOf(teach, kPedalOnId[kPedalBoost], v),
+              "the press that teaches a pedal row does not also stomp the pedal");
+
+        // The claim the row rests on: one button, one pedal, on and off and on again. A row that
+        // SET rather than toggled would echo 1.0 three times and pass every check but this one.
+        const double kWanted[3] = {1.0, 0.0, 1.0};
+        bool alternates = true;
+        for (int i = 0; i < 3; ++i) {
+            Block press = stomp(rig, 100);
+            alternates =
+                alternates && echoOf(press, kPedalOnId[kPedalBoost], v) && near(v, kWanted[i]);
+        }
+        check(alternates, "a pedal row toggles: three presses give on, off, on");
+
+        // ... and it toggles from what the PARAMETER holds, not from a count of its own presses.
+        // A host, a preset or an automation lane may have moved that footswitch since the last
+        // stomp, and the next stomp has to answer to what the player can see. Boost is on at this
+        // point, so a build tracking its own state would turn it off here and a correct one turns
+        // it on.
+        Block off;
+        off.params.push_back({kPedalOnId[kPedalBoost], 0.0});
+        rig.run(off);
+        Block afterHost = stomp(rig, 100);
+        check(echoOf(afterHost, kPedalOnId[kPedalBoost], v) && near(v, 1.0),
+              "a stomp toggles from the parameter's value, not from a private one");
+
+        // One row per pedal, each moving its own. The table's order is a static_assert in
+        // midilearn.h; this is the end-to-end half of it, through the real parameter queue.
+        setPedals(0.0);
+        for (int p = 0; p < kPedalCount; ++p) {
+            row = kMidiLearnChannelRows + p;
+            sendMessage(hostContext, component, kMsgMidiLearn, &row);
+            Block learn;
+            learn.params.push_back(cc(100 + p, 127));
+            rig.run(learn);
+        }
+
+        // The board as it stands before any of them is stomped, read out of the plug-in's own
+        // state. See the check below for why the echoes are not enough on their own.
+        MemoryStream beforeBlob;
+        double beforeTrims[kChannelCount] = {};
+        std::vector<double> before;
+        check(component->getState(&beforeBlob) == kResultOk &&
+                  readTrims(beforeBlob, beforeTrims, &before) &&
+                  static_cast<int>(before.size()) == kPedalParamCount,
+              "the board's whole parameter set can be read before the stomps");
+
+        // "and nothing else" is spelled out as the other four pedals and the channel rather than
+        // as an echo COUNT: the output queue also carries the level meter and the sounding-channel
+        // report, which are the plug-in describing itself and not the plug-in acting.
+        bool eachOwn = true;
+        for (int p = 0; p < kPedalCount; ++p) {
+            Block press = stomp(rig, 100 + p);
+            eachOwn = eachOwn && echoOf(press, kPedalOnId[p], v) && near(v, 1.0) &&
+                      !press.sawChannelEcho;
+            for (int q = 0; q < kPedalCount; ++q)
+                if (q != p)
+                    eachOwn = eachOwn && !echoOf(press, kPedalOnId[q], v);
+        }
+        check(eachOwn, "each pedal row moves its own pedal and nothing else");
+
+        // And what the plug-in STORED, which is not the same question and needed a fault to prove
+        // it. The echo carries the ParamID out of the learn table while the store goes to an index
+        // the processor computes, so a build that stored one parameter along - a footswitch stomp
+        // that quietly moved that pedal's Drive knob instead - echoed the right thing and passed
+        // every check above. The state blob is the second route and it is the one that sees it:
+        // exactly the five footswitches may have moved, and nothing else on the board.
+        MemoryStream afterBlob;
+        double afterTrims[kChannelCount] = {};
+        std::vector<double> after;
+        check(component->getState(&afterBlob) == kResultOk &&
+                  readTrims(afterBlob, afterTrims, &after) && after.size() == before.size(),
+              "the board's whole parameter set can be read after them");
+        bool onlySwitches = after.size() == before.size();
+        for (size_t i = 0; i < after.size() && onlySwitches; ++i) {
+            bool isSwitch = false;
+            for (int p = 0; p < kPedalCount; ++p)
+                isSwitch = isSwitch || static_cast<int>(i) == pedalParamIndex(kPedalOnId[p]);
+            onlySwitches = isSwitch ? near(after[i], 1.0) : near(after[i], before[i]);
+        }
+        check(onlySwitches, "five stomps turn on five footswitches and touch nothing else");
+
+        // The two halves of the table do not reach into each other. A pedal stomp must leave the
+        // channel alone, and a channel stomp must leave the board alone - which is the failure a
+        // table indexed one row out would produce, and it would produce it silently.
+        int od1 = kOd1;
+        sendMessage(hostContext, component, kMsgMidiLearn, &od1);
+        Block learnChannel;
+        learnChannel.params.push_back(cc(110, 127));
+        rig.run(learnChannel);
+
+        Block pedalPress = stomp(rig, 100 + kPedalDelay);
+        check(!pedalPress.sawChannelEcho, "a pedal stomp does not move the channel");
+        Block channelPress = stomp(rig, 110);
+        bool touchedNoPedal = true;
+        for (int p = 0; p < kPedalCount; ++p)
+            touchedNoPedal = touchedNoPedal && !echoOf(channelPress, kPedalOnId[p], v);
+        check(channelPress.sawChannelEcho && near(channelPress.channelEcho, channelValue(kOd1)) &&
+                  touchedNoPedal,
+              "a channel stomp moves the channel and no pedal");
+    }
+
+    // --- 7b. nine rows in the state blob, and four in an old one ------------------------------
+    //
+    // The MIDI table sits in the MIDDLE of the blob, so its length is not a detail: a reader that
+    // takes the wrong number of words reads everything after it - the trims, the output section,
+    // the capture paths, the pedalboard - at the wrong offset. That is why state version 6 gave
+    // the block a count, and it is the only thing version 6 does.
+    printf("state, nine rows\n");
+    {
+        MemoryStream saved;
+        check(component->getState(&saved) == kResultOk, "state saves with pedal rows learned");
+        double trims[kChannelCount] = {};
+        std::vector<double> pedals;
+        check(readTrims(saved, trims, &pedals) &&
+                  static_cast<int>(pedals.size()) == kPedalParamCount,
+              "the saved blob still reads through to the pedalboard");
+
+        auto reloadAndCheck = [&](MemoryStream &blob, const char *what) {
+            blob.seek(0, IBStream::kIBSeekSet, nullptr);
+            if (!check(component->setState(&blob) == kResultOk, what))
+                return;
+            MemoryStream again;
+            double t[kChannelCount] = {};
+            std::vector<double> p;
+            check(component->getState(&again) == kResultOk && readTrims(again, t, &p),
+                  "... and saves again");
+            bool same = p.size() == pedals.size();
+            for (int c = 0; c < kChannelCount && same; ++c)
+                same = near(t[c], trims[c]);
+            for (size_t i = 0; i < p.size() && same; ++i)
+                same = near(p[i], pedals[i]);
+            check(same, "... with every trim and every pedal value where it was");
+        };
+
+        // The editor's own reader, against the processor's. Both sides walk this blob, and the
+        // one thing the length prefix can break is the OFFSET everything after it is read at - so
+        // what is compared is the fields on the far side of the MIDI block, through the only
+        // window a host has on the controller: the parameters themselves.
+        {
+            saved.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(controller->setComponentState(&saved) == kResultOk,
+                  "the editor accepts the same blob");
+            bool mirrors = true;
+            for (int c = 0; c < kChannelCount; ++c)
+                mirrors = mirrors && near(controller->getParamNormalized(kChannelLevelId[c]),
+                                          trims[c]);
+            for (int i = 0; i < kPedalParamCount; ++i)
+                mirrors = mirrors && near(controller->getParamNormalized(kPedalParams[i].id),
+                                          pedals[static_cast<size_t>(i)]);
+            check(mirrors, "and reads every trim and every pedal value at the same offset");
+        }
+
+        // Round trip at the current version: the pedal rows come back and still work.
+        for (int r = 0; r < kMidiLearnRowCount; ++r)
+            sendMessage(hostContext, component, kMsgMidiClear, &r);
+        reloadAndCheck(saved, "a version 6 blob reloads");
+        {
+            Block press = stomp(rig, 100 + kPedalFlanger);
+            double v = 0.0;
+            check(echoOf(press, kPedalOnId[kPedalFlanger], v),
+                  "a pedal row survives save and reload");
+        }
+
+        // A project written before the footswitch rows existed: version 5, four rows, no count.
+        // Its four channel bindings must survive intact and its five pedal rows must come back
+        // unlearned - and, the part that costs a misread, everything AFTER the table must land
+        // where it belongs.
+        std::vector<char> older;
+        check(rewriteMidiBlock(saved, 5, kMidiLearnRowsV2, older),
+              "a version 5 blob can be built from this one");
+        {
+            MemoryStream blob(older.data(), static_cast<TSize>(older.size()));
+            reloadAndCheck(blob, "a version 5 blob loads");
+        }
+        {
+            Block press = stomp(rig, 100 + kPedalFlanger);
+            double v = 0.0;
+            check(!echoOf(press, kPedalOnId[kPedalFlanger], v),
+                  "a version 5 project opens with its pedal rows unlearned");
+            Block channel = stomp(rig, 110);
+            check(channel.sawChannelEcho && near(channel.channelEcho, channelValue(kOd1)),
+                  "... and with its channel rows exactly as they were");
+        }
+
+        // And a project written by a LATER build with more rows than this one has. Its extra rows
+        // are read and dropped, not seeked past, so the trims after them still line up.
+        std::vector<char> newer;
+        check(rewriteMidiBlock(saved, 6, kMidiLearnRowCount + 3, newer),
+              "a blob with more rows than this build can be built");
+        {
+            MemoryStream blob(newer.data(), static_cast<TSize>(newer.size()));
+            reloadAndCheck(blob, "a blob with more rows than this build loads");
+        }
+        {
+            Block press = stomp(rig, 100 + kPedalFlanger);
+            double v = 0.0;
+            check(echoOf(press, kPedalOnId[kPedalFlanger], v),
+                  "... and the rows this build does have still work");
+        }
     }
 
     processor->setProcessing(false);

@@ -32,6 +32,13 @@ using namespace Steinberg;
 namespace Rations
 {
 
+// The settings page's MIDI section is laid out in geometry.h and populated from midilearn.h, and
+// this is the only file that includes both, so it is where the two spellings of "how many rows"
+// are made to agree. A pedal added to kPedalParams grows both; a mismatch would draw eight rows
+// over nine bindings and silently lose one.
+static_assert(geo::kMidiRowCount == kMidiLearnRowCount,
+              "the settings page must draw exactly the rows the learn table has");
+
 namespace
 {
 
@@ -824,7 +831,7 @@ void RationsEditorView::composeSettings(Canvas &c)
         c.setFont(Font::Title);
         c.setFontSize(geo::kMidiRowTextSize);
         c.setColor(geo::kTextColor);
-        c.drawString(c.clipToWidth(mController->channelName(i), geo::kMidiTextX - 20.0f).c_str(),
+        c.drawString(c.clipToWidth(mController->midiRowLabel(i), geo::kMidiTextX - 20.0f).c_str(),
                      r.x + 12.0f, base);
 
         const MidiBinding binding = mController ? mController->midiBinding(i) : MidiBinding();
@@ -854,9 +861,16 @@ void RationsEditorView::composeSettings(Canvas &c)
     // every MIDI channel, because VST3 hands those over as parameter changes with the channel
     // already discarded (see midilearn.h) - so a player whose pedal sends on channel 2 and whose
     // keyboard sends the same CC on channel 1 needs to know that before they find out by playing.
-    const char *notes[2] = {geo::kSettingsFootnote, geo::kSettingsFootnote2};
-    const int noteY[2] = {geo::kSettingsFootnoteY, geo::kSettingsFootnote2Y};
-    for (int i = 0; i < 2; ++i)
+    //
+    // The third is the one the pedal rows made necessary: the two halves of this list do different
+    // things with a press, and nothing about a row says which half it is in.
+    const char *notes[geo::kSettingsFootnoteCount] = {geo::kSettingsFootnote,
+                                                      geo::kSettingsFootnote2,
+                                                      geo::kSettingsFootnote3};
+    const int noteY[geo::kSettingsFootnoteCount] = {geo::kSettingsFootnoteY,
+                                                    geo::kSettingsFootnote2Y,
+                                                    geo::kSettingsFootnote3Y};
+    for (int i = 0; i < geo::kSettingsFootnoteCount; ++i)
         c.drawString(notes[i], cx - c.stringWidth(notes[i]) * 0.5f, static_cast<float>(noteY[i]));
 
     // Section 4: the output section. Last because it is set once when a rig is assembled.
@@ -1220,8 +1234,7 @@ void RationsEditorView::drawOutputSection(Canvas &c)
 // theoretical risk.
 Rect RationsEditorView::midiRowRect(int row)
 {
-    return Rect(static_cast<float>(geo::kMidiRowX),
-                static_cast<float>(geo::kMidiRowY0 + row * geo::kMidiRowPitch),
+    return Rect(static_cast<float>(geo::kMidiRowX), static_cast<float>(geo::midiRowY(row)),
                 static_cast<float>(geo::kMidiRowW), static_cast<float>(geo::kMidiRowH));
 }
 

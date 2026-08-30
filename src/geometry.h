@@ -86,13 +86,15 @@ constexpr int kPedalPageH = 681;
 // before MIDI, because every user has four channels to balance and only some own
 // a footswitch.
 //
-// 928 units tall, which is taller than any other page here by a long way, and
+// 1146 units tall, which is taller than any other page here by a long way, and
 // the only page whose window may be shorter than the page itself: it is
 // width-locked, free in height, and scrolls. See pageScrolls() below for why
 // the smaller scale kSettingsScaleMin gives it did not turn out to be enough on
-// its own.
+// its own. It grew by 238 when the pedalboard's five footswitches joined the
+// MIDI list, and that cost nothing but scrolling, which is exactly what a page
+// that already scrolls is for.
 constexpr int kSettingsPageW = 640;
-constexpr int kSettingsPageH = 928;
+constexpr int kSettingsPageH = 1166;
 
 // The shortest that page's viewport may be dragged to, in logical units: the
 // fixed header band that carries the back button (kPageContentTop, 50) plus
@@ -870,8 +872,9 @@ constexpr int pedalKnobLabelAllowance(int pedal, int k)
 
 // --- Settings page ----------------------------------------------------------
 // Four sections down one column: the capture loaders, the channel trims, MIDI
-// learn, and the output section. The first three are four rows each and share
-// one grid; the fourth is a different shape and is laid out below them.
+// learn, and the output section. The first two are four rows each, MIDI learn is
+// nine (four channels and five pedals), and all three share one grid; the fourth
+// is a different shape and is laid out below them.
 //
 // All of them share kMidiRowX / kMidiRowW / kMidiRowH / kMidiRowPitch and the
 // same kMidiTextX for their second column, so the channel names and the controls
@@ -916,7 +919,16 @@ static_assert(kMidiRowX + kMidiRowW <= kScrollBarX,
               "the settings rows must not reach into the scrollbar's margin");
 static_assert(kScrollBarX + kScrollBarW + kScrollBarInset == kSettingsPageW,
               "the scrollbar must sit kScrollBarInset in from the page's right edge");
-constexpr int kMidiRowCount = kChannelToggleCount;
+// Nine rows: the four channels, then the pedalboard's five footswitches. Spelled here in the
+// editor's own vocabulary and checked against kMidiLearnRowCount, which is the processor's, at the
+// one site that includes both.
+constexpr int kMidiRowCount = kChannelToggleCount + kPedalCount;
+// Half a row of air between the two halves, because they are two halves: a channel row selects
+// and a pedal row toggles, and a footnote saying so under nine identical rows is a footnote
+// nobody connects to anything. Drawn as a gap rather than as a second heading because the
+// section already has one and the rows are self-labelling.
+constexpr int kMidiPedalGap = 20;
+constexpr int kMidiPedalFirstRow = kChannelToggleCount;
 constexpr int kMidiRowTextSize = 15;
 
 // Section 1: the capture loaders. One row per channel, each carrying the
@@ -987,6 +999,15 @@ constexpr int kLevelFootnoteY = 486;
 // on the MIDI path at all.
 constexpr int kSettingsHeadingY = 514;
 constexpr int kMidiRowY0 = 532;
+
+// The top edge of one MIDI row. One function rather than the arithmetic written at each site,
+// for the same reason contentY() is one function: the painter, the hit test and the art audit
+// have to agree about where a row is, and a gap in the middle of the list is exactly the kind of
+// detail two of the three would keep and the third would forget.
+constexpr int midiRowY(int row)
+{
+    return kMidiRowY0 + row * kMidiRowPitch + (row >= kMidiPedalFirstRow ? kMidiPedalGap : 0);
+}
 // Where the learned binding is written, as an offset from the row's left edge.
 // Far enough right to clear the widest channel name at kMidiRowTextSize, which
 // the art audit measures rather than assumes.
@@ -1003,9 +1024,11 @@ constexpr int kMidiButtonGap = 6;
 // Clear is the one that appears once there is a binding to describe.
 constexpr int kMidiTextW =
     kMidiRowW - kMidiLearnInset - kMidiLearnW - kMidiButtonGap - kMidiClearW - kMidiTextX - 8;
-constexpr int kSettingsFootnoteY = 704;
-constexpr int kSettingsFootnote2Y = 722;
+constexpr int kSettingsFootnoteY = 924;
+constexpr int kSettingsFootnote2Y = 942;
+constexpr int kSettingsFootnote3Y = 960;
 constexpr int kSettingsFootnoteSize = 12;
+constexpr int kSettingsFootnoteCount = 3;
 
 // Section 4: the output section. Three radio rows for the mode, then the input
 // calibration pair beside each other on one row.
@@ -1014,8 +1037,8 @@ constexpr int kSettingsFootnoteSize = 12;
 // all because it was previously nowhere: the plug-in was hard-wired to
 // Normalized with no way to see or change it, while both plug-ins it descends
 // from expose exactly these three controls.
-constexpr int kOutputHeadingY = 750;
-constexpr int kOutputRowY0 = 768;
+constexpr int kOutputHeadingY = 988;
+constexpr int kOutputRowY0 = 1006;
 constexpr int kOutputRowPitch = 26;
 constexpr int kOutputRowH = 22;
 constexpr int kOutputRowW = 300;
@@ -1026,7 +1049,7 @@ constexpr float kOutputDotFillR = 3.0f;
 constexpr int kOutputTextX = 26;
 // The calibration row: a bat toggle on the left and the dBu value box to its
 // right, both drawn only as far as the loaded captures can honour them.
-constexpr int kCalRowY = 860;
+constexpr int kCalRowY = 1098;
 constexpr int kCalToggleCX = kMidiRowX + 40;
 constexpr int kCalToggleCY = kCalRowY + 20;
 constexpr int kCalLabelX = kMidiRowX + 70;
@@ -1037,7 +1060,7 @@ constexpr int kCalValueY = kCalRowY + 7;
 // One wheel click on the calibration level, in dB. Whole decibels: an interface's
 // stated level is a round number and this is how a user lands on theirs.
 constexpr double kCalWheelDb = 1.0;
-constexpr int kOutputFootnoteY = 906;
+constexpr int kOutputFootnoteY = 1144;
 
 // The Learn button's two states, named here so the panel and the art audit
 // cannot disagree about which strings have to fit inside it.
@@ -1064,6 +1087,12 @@ constexpr const char *kMidiHeading = "MIDI Learn";
 constexpr const char *kLevelFootnote = "Right-click a slider to return it to 0.0 dB.";
 constexpr const char *kSettingsFootnote2 =
     "CC and Program Change answer on any MIDI channel; a note answers on its own.";
+// The third footnote is the one the pedal rows made necessary, and it says the
+// thing a player would otherwise have to work out by stamping: the two halves of
+// this list do different things with a press. See midilearn.h for why a pedal has
+// to toggle and a channel must not.
+constexpr const char *kSettingsFootnote3 =
+    "A channel row selects that channel; a pedal row toggles that pedal on and off.";
 
 // The capture section's heading and footnote. The footnote is the one place the
 // two ways of naming a channel are explained, because neither is discoverable:
@@ -1103,7 +1132,7 @@ constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
 constexpr int kCaptureBrowserX = 16;
 constexpr int kCaptureBrowserY = 40;
 constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 608
-constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 848
+constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 1086
 // That height is a CEILING now, not the size: the settings page scrolls, so the
 // window showing it may be shorter than the page, and the card is sized to the
 // viewport instead (RationsEditorView::boundCaptureBrowser). This is the floor

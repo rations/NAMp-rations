@@ -354,13 +354,24 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
     // opens with an unlearned table.
     for (int row = 0; row < kMidiLearnRowCount; ++row)
         mMidiTable[row] = MidiBinding();
-    if (version >= 2) {
-        for (int row = 0; row < kMidiLearnRowCount; ++row) {
-            int32 word = 0;
-            if (!streamer.readInt32(word))
-                return kResultFalse;
+
+    // From version 6 the block carries its own row count, because the pedalboard's five footswitch
+    // rows made this build's table nine and an older blob's is four. This side has to walk the blob
+    // in exactly the same steps the processor's setState does or everything after it is read at the
+    // wrong offset, so the two are deliberately the same shape - see kStateVersion.
+    int32 midiRows = (version >= 2) ? kMidiLearnRowsV2 : 0;
+    if (version >= 6) {
+        if (!streamer.readInt32(midiRows))
+            return kResultFalse;
+        if (midiRows < 0 || midiRows > kMidiRowStateMax)
+            return kResultFalse;
+    }
+    for (int32 row = 0; row < midiRows; ++row) {
+        int32 word = 0;
+        if (!streamer.readInt32(word))
+            return kResultFalse;
+        if (row < kMidiLearnRowCount)
             mMidiTable[row] = unpackBinding(static_cast<std::uint32_t>(word));
-        }
     }
 
     // The per-channel trims, added in state version 3. A version 1 or 2 project has nothing here
@@ -707,6 +718,16 @@ std::string RationsController::channelName(int channel) const
             return base;
     }
     return kChannelDefaultName[channel];
+}
+
+//------------------------------------------------------------------------
+std::string RationsController::midiRowLabel(int row) const
+{
+    if (row < 0 || row >= kMidiLearnRowCount)
+        return std::string();
+    if (row < kMidiLearnChannelRows)
+        return channelName(row);
+    return kMidiLearnRows[row].label;
 }
 
 //------------------------------------------------------------------------

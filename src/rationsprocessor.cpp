@@ -520,15 +520,33 @@ void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
         if (!bindingMatches(bound, msg, channel, data1))
             continue;
 
+        // What the row performs, and the ONE place the two kinds of row differ. A channel row
+        // stores its own step; a pedal row flips its footswitch, which means reading the value
+        // back before writing it - see midilearn.h for why a footswitch has to toggle and a
+        // channel must not.
+        //
+        // The value that is actually stored is what gets echoed, never target.value: for a toggle
+        // the two are not the same thing, and reporting the wrong one would leave the host's lane
+        // and the LED disagreeing with the pedal that is audibly running.
         const MidiLearnTarget &target = kMidiLearnRows[r];
-        if (target.param == kChannelId)
-            mChannelNorm.store(target.value, std::memory_order_relaxed);
+        double performed = target.value;
+        if (target.param == kChannelId) {
+            mChannelNorm.store(performed, std::memory_order_relaxed);
+        } else if (const int pedalIndex = pedalParamIndex(target.param); pedalIndex >= 0) {
+            const double now = mPedalNorm[pedalIndex].load(std::memory_order_relaxed);
+            performed = (target.action == MidiAction::Toggle) ? (now > 0.5 ? 0.0 : 1.0)
+                                                              : target.value;
+            mPedalNorm[pedalIndex].store(performed, std::memory_order_relaxed);
+        } else {
+            continue; // a row whose target this function does not know how to perform
+        }
+
         // Remember to tell the host. A parameter the plug-in changed by itself and did not report
         // leaves the host's automation lane and the editor's copy disagreeing with the audio,
         // until the next thing that writes it snaps the channel back under the player's feet.
         if (mEchoCount < kMidiLearnRowCount) {
             mEcho[mEchoCount].id = target.param;
-            mEcho[mEchoCount].value = target.value;
+            mEcho[mEchoCount].value = performed;
             ++mEchoCount;
         }
     }
@@ -1146,15 +1164,30 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
     // something nobody can name. Learning is disarmed either way: a project cannot open with the
     // plug-in already listening for a pedal the user has not asked it to listen for.
     mMidiLearnRow.store(-1, std::memory_order_release);
-    for (int row = 0; row < kMidiLearnRowCount; ++row) {
-        std::uint32_t word = 0;
-        if (version >= 2) {
-            int32 raw = 0;
-            if (!streamer.readInt32(raw))
-                return kResultFalse;
-            word = packBinding(unpackBinding(static_cast<std::uint32_t>(raw)));
-        }
-        mMidiBinding[row].store(word, std::memory_order_release);
+    for (int row = 0; row < kMidiLearnRowCount; ++row)
+        mMidiBinding[row].store(0, std::memory_order_release);
+
+    // How many rows are in the blob is a property of the BLOB, not of this build. Before version 6
+    // it was not written down and was always four; from version 6 it is, because the pedalboard's
+    // footswitch rows made this build's table nine and a fixed count sitting in the middle of a
+    // blob is what makes everything after it unreadable. See kStateVersion.
+    int32 midiRows = (version >= 2) ? kMidiLearnRowsV2 : 0;
+    if (version >= 6) {
+        if (!streamer.readInt32(midiRows))
+            return kResultFalse;
+        if (midiRows < 0 || midiRows > kMidiRowStateMax)
+            return kResultFalse;
+    }
+    for (int32 row = 0; row < midiRows; ++row) {
+        int32 raw = 0;
+        if (!streamer.readInt32(raw))
+            return kResultFalse;
+        // A row this build does not have is READ and dropped, never skipped by seeking: what has
+        // to happen is that the stream ends up in the right place for the trims, and reading is
+        // the only way to be sure it did.
+        if (row < kMidiLearnRowCount)
+            mMidiBinding[row].store(packBinding(unpackBinding(static_cast<std::uint32_t>(raw))),
+                                    std::memory_order_release);
     }
 
     // The per-channel trims, added in state version 3. A version 1 or 2 project has nothing here
@@ -1294,6 +1327,11 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     // ARMED is deliberately not written - it is a transient state of the editor's, not a property
     // of the session, and a project that reopened still listening for a pedal would learn
     // whatever the player happened to press next.
+    //
+    // Version 6 onwards the block is LENGTH-PREFIXED, and that is the whole of what version 6 is:
+    // this table grew from four rows to nine when the pedalboard's footswitches joined it, and a
+    // count that a reader has to guess is a count two builds can disagree about silently.
+    streamer.writeInt32(kMidiLearnRowCount);
     for (int row = 0; row < kMidiLearnRowCount; ++row)
         streamer.writeInt32(static_cast<int32>(mMidiBinding[row].load(std::memory_order_acquire)));
 
