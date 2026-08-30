@@ -365,6 +365,63 @@ int main(int argc, char **argv)
 
     const uint32 latency = processor->getLatencySamples();
 
+    // REPORTED LATENCY MUST NOT MOVE WHEN A FOOTSWITCH IS STOMPED, and this is the one place that
+    // can be checked, because it is a question about the built bundle rather than about the DSP:
+    // rations_pedalcheck links the pedal sources directly and never sees getLatencySamples at all.
+    //
+    // The Boost's 4x oversampler costs 4.4 base-rate samples whether or not the pedal is engaged,
+    // because its half-band filters run either way, so the figure is reported unconditionally. A
+    // latency that changed under a stomp would make the host recompute its delay compensation
+    // mid-song, and some hosts glitch when it does.
+    //
+    // BOTH DIRECTIONS ARE STOMPED, and that is not thoroughness for its own sake. The first
+    // version of this only switched the pedal ON, and a deliberately broken build - one reporting
+    // the oversampler's latency only while the Boost was engaged - PASSED it, because switching on
+    // is the state in which a conditional report and an unconditional one agree. The bug worth
+    // catching is the latency DROPPING when the pedal is switched off.
+    {
+        std::vector<float> quietIn(static_cast<size_t>(opt.block), 0.0f);
+        std::vector<float> quietOutL(static_cast<size_t>(opt.block), 0.0f);
+        std::vector<float> quietOutR(static_cast<size_t>(opt.block), 0.0f);
+        auto latencyAfterStomp = [&](double on) {
+            Vst::ParameterChanges stomp;
+            int32 qi = 0;
+            if (Vst::IParamValueQueue *q = stomp.addParameterData(Rations::kBoostOnId, qi)) {
+                int32 pi = 0;
+                q->addPoint(0, on, pi);
+            }
+            float *inPtr = quietIn.data();
+            float *outPtrs[2] = {quietOutL.data(), quietOutR.data()};
+            Vst::AudioBusBuffers inBus, outBus;
+            inBus.numChannels = 1;
+            inBus.channelBuffers32 = &inPtr;
+            outBus.numChannels = 2;
+            outBus.channelBuffers32 = outPtrs;
+            Vst::ProcessData pd;
+            pd.processMode = Vst::kRealtime;
+            pd.symbolicSampleSize = Vst::kSample32;
+            pd.numSamples = opt.block;
+            pd.numInputs = 1;
+            pd.numOutputs = 1;
+            pd.inputs = &inBus;
+            pd.outputs = &outBus;
+            pd.inputParameterChanges = &stomp;
+            processor->process(pd);
+            return processor->getLatencySamples();
+        };
+        const uint32 on = latencyAfterStomp(1.0);
+        const uint32 off = latencyAfterStomp(0.0);
+        if (on != latency || off != latency) {
+            fprintf(stderr,
+                    "FAIL: reported latency moved under a footswitch stomp - %u at rest, %u with "
+                    "the Boost engaged, %u with it bypassed. A host would recompute its delay "
+                    "compensation mid-song\n",
+                    latency, on, off);
+            return 1;
+        }
+        printf("pedal latency  %u samples, unchanged by a stomp in either direction\n", latency);
+    }
+
     // --- render ------------------------------------------------------------------------------
     const size_t total = static_cast<size_t>(opt.seconds * opt.rate);
     std::vector<float> input(total), output(total, 0.0f);

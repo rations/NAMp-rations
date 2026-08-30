@@ -242,7 +242,10 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     allocateBuffers();
 
     mResampler.configure(mSampleRate, mMaxBlockSize);
-    mLatency.store(static_cast<uint32>(mResampler.latency()), std::memory_order_relaxed);
+    // The pedalboard's contribution is UNCONDITIONAL - see PedalChain::latencySamples. It is added
+    // here, once, and never changes again for the life of this setup.
+    mLatency.store(static_cast<uint32>(mResampler.latency() + pedals::PedalChain::latencySamples()),
+                   std::memory_order_relaxed);
     mRack.prepare(mResampler.maxNativeBlock(mMaxBlockSize), kNativeSampleRate);
     // prepare() resets the rack's published level state along with everything else, so the output
     // section has to be said again here rather than assumed to have survived.

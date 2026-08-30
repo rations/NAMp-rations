@@ -816,6 +816,18 @@ target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
 target_compile_options(rations_rtcheck PRIVATE -Wall -O0 -UNDEBUG)
 endif()
 
+# ---------------------------------------------------------------------------
+# rations_pedalcheck — measures the pedalboard's DSP against the circuit it
+# claims to model. Links the pedal sources directly rather than driving the
+# bundle: the PRE chain is upstream of the amp models, so anything measured at
+# the plug-in's output has four neural captures and a cabinet in front of it.
+# ---------------------------------------------------------------------------
+add_executable(rations_pedalcheck ${RATIONS_ROOT}/tools/rations_pedalcheck.cpp)
+target_include_directories(rations_pedalcheck
+    PRIVATE ${RATIONS_ROOT}/src ${RATIONS_ROOT}/deps ${AUDIO_DSP_TOOLS_DIR} ${VST3_SDK_DIR})
+target_compile_features(rations_pedalcheck PRIVATE cxx_std_17)
+target_compile_options(rations_pedalcheck PRIVATE -Wall -Wextra -O2)
+
 # midilearn.cpp comes along because the settings page's text is not decoration:
 # what a binding reads as is what the audit has to measure, so the tool formats
 # it with the same function the panel does rather than with a mock string.

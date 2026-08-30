@@ -2,6 +2,8 @@
 // Copyright (c) 2026 rations. MIT licence (see LICENSE).
 #include "pedalchain.h"
 
+#include <cmath>
+
 namespace Rations
 {
 namespace pedals
@@ -17,6 +19,11 @@ void PedalChain::reset()
 {
     for (int i = 0; i < kPedalCount; ++i)
         mAll[i]->reset();
+}
+
+int PedalChain::latencySamples()
+{
+    return static_cast<int>(std::lround(Boost::kLatencySamples));
 }
 
 void PedalChain::setParams(const double *plain)
