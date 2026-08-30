@@ -594,6 +594,9 @@ endif()
 add_executable(rations_offline
     ${RATIONS_ROOT}/tools/rations_offline.cpp
     ${RATIONS_MODULE_LOADER}
+    # For MemoryStream, which --save-state / --load-state need and which sdk_hosting
+    # does not carry. Same reason rations_ircheck names it.
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
 )

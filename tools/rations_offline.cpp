@@ -19,7 +19,7 @@
 // Usage:
 //   rations_offline <Rations.vst3> --captures <dir> [--rate 48000] [--block 256]
 //                   [--seconds 2.0] [--gain 0.0] [--sweep] [--overrun N] [--settle-ms N]
-//                   [--dump <file>]
+//                   [--dump <file>] [--save-state <file>] [--load-state <file>]
 //
 // --dump writes the rendered output as raw little-endian float32, which is how one build is
 // compared against another BIT FOR BIT rather than by eye over six printed digits. A change that
@@ -32,6 +32,8 @@
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/hosting/processdata.h"
+
+#include "public.sdk/source/common/memorystream.h"
 
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -83,6 +85,9 @@ struct Options {
     // Where to write the raw float32 render, if anywhere. This is how one build is compared
     // against another bit for bit; see the usage note at the top.
     std::string dump;
+    // A state blob to write after the render, and one to push at the plug-in before it.
+    std::string saveState;
+    std::string loadState;
 };
 
 bool parseArgs(int argc, char **argv, Options &o)
@@ -129,6 +134,16 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!v)
                 return false;
             o.captures = v;
+        } else if (a == "--save-state") {
+            const char *v = next("--save-state");
+            if (!v)
+                return false;
+            o.saveState = v;
+        } else if (a == "--load-state") {
+            const char *v = next("--load-state");
+            if (!v)
+                return false;
+            o.loadState = v;
         } else if (a == "--dump") {
             const char *v = next("--dump");
             if (!v)
@@ -316,6 +331,37 @@ int main(int argc, char **argv)
     }
     component->setActive(true);
     processor->setProcessing(true);
+
+    // A state blob from another build, pushed at an ALREADY ACTIVE plug-in. That ordering is the
+    // point: it is what a host does on a preset change, and it exercises setState's reload paths
+    // rather than letting setupProcessing quietly do the work afterwards.
+    if (!opt.loadState.empty()) {
+        FILE *f = std::fopen(opt.loadState.c_str(), "rb");
+        if (!f) {
+            fprintf(stderr, "FAIL: cannot open --load-state file %s\n", opt.loadState.c_str());
+            return 1;
+        }
+        std::vector<char> blob;
+        char buf[4096];
+        size_t got = 0;
+        while ((got = std::fread(buf, 1, sizeof(buf), f)) > 0)
+            blob.insert(blob.end(), buf, buf + got);
+        std::fclose(f);
+
+        MemoryStream stream(blob.data(), static_cast<TSize>(blob.size()));
+        stream.seek(0, IBStream::kIBSeekSet, nullptr);
+        const tresult put = component->setState(&stream);
+        int32 version = blob.size() >= 4 ? *reinterpret_cast<const int32 *>(blob.data()) : -1;
+        printf("load state     %zu bytes, version %d -> %s\n", blob.size(), version,
+               put == kResultOk ? "accepted" : "REJECTED");
+        if (put != kResultOk) {
+            fprintf(stderr, "FAIL: the plug-in rejected a state blob it must be able to read\n");
+            return 1;
+        }
+        // A bank named by the blob is loaded asynchronously, exactly as it is at startup, so the
+        // settle wait has to happen after this and not only after the capture messages.
+        std::this_thread::sleep_for(std::chrono::milliseconds(opt.settleMs));
+    }
 
     const uint32 latency = processor->getLatencySamples();
 
@@ -567,6 +613,29 @@ int main(int argc, char **argv)
     }
 
     processor->setProcessing(false);
+    if (!opt.saveState.empty()) {
+        MemoryStream saved;
+        if (component->getState(&saved) != kResultOk) {
+            fprintf(stderr, "FAIL: the plug-in would not save its state\n");
+            return 1;
+        }
+        FILE *f = std::fopen(opt.saveState.c_str(), "wb");
+        if (!f) {
+            fprintf(stderr, "FAIL: cannot open --save-state file %s\n", opt.saveState.c_str());
+            return 1;
+        }
+        const size_t bytes = static_cast<size_t>(saved.getSize());
+        const size_t wrote = std::fwrite(saved.getData(), 1, bytes, f);
+        std::fclose(f);
+        if (wrote != bytes) {
+            fprintf(stderr, "FAIL: short write to %s\n", opt.saveState.c_str());
+            return 1;
+        }
+        printf("save state     %zu bytes, version %d -> %s\n", bytes,
+               bytes >= 4 ? *reinterpret_cast<const int32 *>(saved.getData()) : -1,
+               opt.saveState.c_str());
+    }
+
     component->setActive(false);
 
     // --- report ------------------------------------------------------------------------------

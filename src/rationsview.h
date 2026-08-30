@@ -141,7 +141,14 @@ private:
     void drawKnobAt(Canvas &c, float cx, float cy, float r, double norm);
     void drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on);
     static void drawToggleFallback(Canvas &c, const Rect &dest, bool batUp);
-    void drawLed(Canvas &c, float cx, float cy, bool lit);
+    // The LED's radius is a parameter because the pedalboard's are smaller than the head's: a
+    // pedal's status LED is 10 units across against the amp's 18, which is the proportion the two
+    // have on the real objects.
+    void drawLed(Canvas &c, float cx, float cy, bool lit, float r = static_cast<float>(geo::kLedR));
+    // One pedal's face: its knobs, its mini controls, its LED, its footswitch and its name. The
+    // enclosure itself is static and is composited by drawPedalboardStatic.
+    void drawPedal(Canvas &c, int pedal);
+    void drawPedalSwitch(Canvas &c, float cx, float cy);
     void drawMeter(Canvas &c, const geo::MeterRect &m, float level, float peak);
     void drawButton(Canvas &c, const geo::ButtonSpec &b, bool enabled = true);
     void drawIrRow(Canvas &c, int slot);
@@ -151,8 +158,12 @@ private:
     void editParam(Steinberg::Vst::ParamID id, double norm);
     void nudgeParam(Steinberg::Vst::ParamID id, double delta);
     void startDrag(Steinberg::Vst::ParamID id, float x, float y, bool horizontal = false);
+    // Step a list parameter by one, wrapping. The Delay's Sync division is the only one today;
+    // it is a click rather than a drag because twelve values over a 62-unit box is not a drag.
+    void cycleList(const PedalParamSpec &spec, int dir);
     bool handleHeadClick(float x, float y);
     bool handleCabinetClick(float x, float y);
+    bool handlePedalboardClick(float x, float y);
     bool handleSettingsClick(float x, float y);
     bool handleIrRowClick(int slot, float x, float y);
     // Load the previous (-1) or next (+1) IR in slot `slot`'s own folder.

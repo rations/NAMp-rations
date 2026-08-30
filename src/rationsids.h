@@ -377,7 +377,12 @@ inline constexpr PedalParamSpec kPedalParams[] = {
     // keeps its value so unsyncing returns to where the player left it.
     {kDelayOnId, kPedalDelay, "Delay", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
     {kDelayTimeId, kPedalDelay, "Delay Time", "Time", "ms", PedalParamKind::Range, 20, 2000, 400, 0},
-    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Feedback", "%", PedalParamKind::Range, 0, 95, 35, 0},
+    // "Repeats" rather than "Feedback" on the enclosure: the word is the one an outer knob's
+    // legend has room for (68 px against 62 at kPedalLabelSize, caught by panelrender's text
+    // audit), and it is what the object being modelled prints - Boss abbreviates to F.BACK, MXR
+    // prints REGEN, and "Repeats" says the same thing without an abbreviation. The HOST still sees
+    // "Delay Feedback", which is the name that has to be unambiguous in an automation lane.
+    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Repeats", "%", PedalParamKind::Range, 0, 95, 35, 0},
     {kDelayToneId, kPedalDelay, "Delay Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
     {kDelayMixId, kPedalDelay, "Delay Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 30, 0},
     {kDelaySyncId, kPedalDelay, "Delay Sync", "Sync", nullptr, PedalParamKind::List, 0, kDelaySyncCount - 1, 0, 0},
@@ -463,6 +468,63 @@ inline constexpr bool pedalSlicesStartWithSwitch()
         if (kPedalParams[pedalParamFirst(p)].id != kPedalOnId[p])
             return false;
     return true;
+}
+
+// --- how a pedal's slice becomes a face -------------------------------------------------------
+// The enclosure art is BLANK — no knobs, no lettering — so the editor generates each face from
+// the parameter table rather than from a per-pedal layout. The rule is one line long: a Range
+// control is a knob, and anything else that is not the footswitch is a small text control beside
+// the LED. That is what makes adding a knob to a pedal a one-line change to kPedalParams, and it
+// is why the two functions below live here, next to the table they read, rather than in
+// geometry.h — where a control goes is layout, but WHICH controls exist is the parameter list.
+//
+// Both are constexpr and are used at compile time by geometry.h's static_asserts, which is the
+// only thing standing between "a sixth knob was added" and a pedal face that silently draws four.
+
+// The k-th knob (Range control) of a pedal, as an index into kPedalParams, or -1 if there is no
+// such knob. The footswitch is skipped by starting at 1: pedalSlicesStartWithSwitch() is what
+// makes that safe, and it is asserted above.
+inline constexpr int pedalKnobParam(int pedal, int k)
+{
+    const int first = pedalParamFirst(pedal);
+    int n = 0;
+    for (int i = 1; i < pedalParamLen(pedal); ++i) {
+        if (kPedalParams[first + i].kind != PedalParamKind::Range)
+            continue;
+        if (n++ == k)
+            return first + i;
+    }
+    return -1;
+}
+inline constexpr int pedalKnobCount(int pedal)
+{
+    int n = 0;
+    while (pedalKnobParam(pedal, n) >= 0)
+        ++n;
+    return n;
+}
+
+// Everything else in the slice: today that is the Delay's Sync division and its Ping-Pong switch,
+// and nothing on any other pedal. They are drawn as small text controls either side of the LED
+// because a list and a two-state switch are both things a knob reads badly.
+inline constexpr int pedalMiniParam(int pedal, int k)
+{
+    const int first = pedalParamFirst(pedal);
+    int n = 0;
+    for (int i = 1; i < pedalParamLen(pedal); ++i) {
+        if (kPedalParams[first + i].kind == PedalParamKind::Range)
+            continue;
+        if (n++ == k)
+            return first + i;
+    }
+    return -1;
+}
+inline constexpr int pedalMiniCount(int pedal)
+{
+    int n = 0;
+    while (pedalMiniParam(pedal, n) >= 0)
+        ++n;
+    return n;
 }
 
 // Normalized (what the host and the parameter queue carry) to plain (what the DSP wants). One

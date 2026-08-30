@@ -157,6 +157,12 @@ public:
     // x, y is the baseline origin of the first glyph (as BView::DrawString).
     void drawString(const char *text, float x, float y);
     float stringWidth(const char *text) const;
+    // How far the INK of this string falls below its baseline, in logical units. Not the font's
+    // nominal descent, which is a property of the face and is the same whether or not the string
+    // has a descender in it: this is cairo's ink extent for these actual glyphs, so "Tone" reports
+    // 0 and "Depth" reports what its p really costs. The pedalboard's layout audit needs the
+    // difference, because a label row's clearance is set by the strings that are in it.
+    float stringDescent(const char *text) const;
     // Truncate with an ellipsis until it fits maxW at the current font.
     std::string clipToWidth(const std::string &s, float maxW) const;
 
