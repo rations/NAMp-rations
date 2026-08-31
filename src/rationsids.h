@@ -638,15 +638,6 @@ inline constexpr const char *kMidiRowAttr = "row";
 // midilearn.h defines and the state blob stores, so there is one layout and not three.
 inline constexpr const char *kMidiTableAttr = "table";
 inline constexpr const char *kMidiArmedAttr = "armed";
-// What the PROCESSOR has actually heard, so the settings page can say so while a row is listening.
-// A learn UI that cannot tell you whether your pedal is being received leaves "nothing happened"
-// meaning either "the plug-in is deaf" or "the plug-in heard it and did the wrong thing", and those
-// want opposite fixes. "seen" is a packed description of the last message, "seencount" is how many
-// have ever arrived, and "blocks" is how many times process() has run - which is what separates a
-// plug-in that hears no MIDI from one whose audio thread is not running at all.
-inline constexpr const char *kMidiSeenAttr = "seen";
-inline constexpr const char *kMidiSeenCountAttr = "seencount";
-inline constexpr const char *kMidiBlocksAttr = "blocks";
 
 // Capabilities travel processor -> controller after every load or clear, so the editor can name
 // the capture each dial is sitting on and can disable what the current capture set does not

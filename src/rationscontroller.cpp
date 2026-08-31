@@ -912,34 +912,6 @@ const MidiBinding &RationsController::midiBinding(int row) const
     return mMidiTable[row];
 }
 
-// One line saying what the processor has actually heard, for a row that is listening.
-//
-// Three states, and they are three different problems. No blocks at all means the audio thread is
-// not running, so nothing can arrive however the routing is set up. Blocks but no messages means
-// the plug-in is running and receiving no MIDI, which is a host-routing question and not a
-// plug-in one. Messages arriving means the plug-in hears the pedal, and anything still wrong is
-// this plug-in's fault.
-std::string RationsController::midiHeard() const
-{
-    if (mMidiBlocks == 0)
-        return "no audio running";
-    if (mMidiSeenCount == 0)
-        return "no MIDI reaching the plug-in";
-    MidiBinding b;
-    const std::uint32_t msg = mMidiSeenWord & 3u;
-    b.msg = (msg >= 1 && msg <= 3) ? static_cast<MidiMsg>(msg) : MidiMsg::Unlearned;
-    b.data1 = static_cast<int>((mMidiSeenWord >> 2) & 127u);
-    const int value = static_cast<int>((mMidiSeenWord >> 9) & 127u);
-    const std::uint32_t chan = (mMidiSeenWord >> 16) & 31u;
-    b.channel = (chan == 0 || chan > 16) ? kMidiAnyChannel : static_cast<int>(chan) - 1;
-    // The VALUE is printed too, and it is the number that matters most here: a press is anything
-    // at or above 64, so a controller sending 3 looks identical to one sending nothing until you
-    // can see the 3.
-    return "heard " + std::to_string(mMidiSeenCount) + ": " + describeBinding(b) + " = " +
-           std::to_string(value);
-}
-
-//------------------------------------------------------------------------
 // The processor's answer. Parsed defensively for the same reason the capability blob is: it is
 // our own processor, but a short or absent attribute must leave a readable table rather than an
 // out-of-range read, because the editor indexes into it every repaint.
@@ -958,14 +930,6 @@ tresult RationsController::receiveMidiTable(Vst::IMessage *message)
         for (int row = 0; row < kMidiLearnRowCount; ++row)
             mMidiTable[row] = unpackBinding(words[row]);
     }
-
-    int64 seen = 0, seenCount = 0, blocks = 0;
-    if (attrs->getInt(kMidiSeenAttr, seen) == kResultOk)
-        mMidiSeenWord = static_cast<std::uint32_t>(seen);
-    if (attrs->getInt(kMidiSeenCountAttr, seenCount) == kResultOk)
-        mMidiSeenCount = static_cast<std::uint32_t>(seenCount);
-    if (attrs->getInt(kMidiBlocksAttr, blocks) == kResultOk)
-        mMidiBlocks = static_cast<std::uint32_t>(blocks);
 
     int64 armed = -1;
     if (attrs->getInt(kMidiArmedAttr, armed) != kResultOk)
