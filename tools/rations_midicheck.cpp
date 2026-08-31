@@ -48,6 +48,7 @@
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstmessage.h"
+#include "pluginterfaces/vst/ivstunits.h"
 
 #include "public.sdk/source/common/memorystream.h"
 
@@ -620,6 +621,39 @@ int main(int argc, char **argv)
                 pcFound = (info.flags & Vst::ParameterInfo::kIsProgramChange) != 0;
         }
         check(pcFound, "the Program Change parameter is declared and flagged as one");
+
+        // --- and the MIDI unit is the FIRST unit ---------------------------------------------
+        //
+        // This one is here because it shipped broken and cost a bisect of five builds to find. The
+        // pedalboard added a second Vst::Unit and added it BEFORE the MIDI unit, which moved the
+        // MIDI unit from index 0 to index 1. Nothing in this file noticed, the SDK validator passed
+        // all 47 of its tests, and a real host stopped delivering the footswitch's messages
+        // ENTIRELY - no CC, no Program Change, nothing, with no error on any interface.
+        //
+        // Two claims, because they fail differently. That getUnitByBus resolves the event bus to a
+        // unit that actually carries the program list is the correctness statement, and it holds
+        // whatever the order is. That the unit is at INDEX 0 is the compatibility statement, and it
+        // is the one that broke: a host resolving by position rather than by id gets the wrong unit
+        // and gives up. Nothing is gained by declaring any other unit first, so this asserts the
+        // order that works rather than the order the SDK would tolerate.
+        FUnknownPtr<Vst::IUnitInfo> unitInfo(controller);
+        if (check(unitInfo != nullptr, "the controller offers IUnitInfo")) {
+            Vst::UnitID busUnit = Vst::kRootUnitId;
+            check(unitInfo->getUnitByBus(Vst::kEvent, Vst::kInput, 0, 0, busUnit) == kResultTrue &&
+                      busUnit == kMidiUnitId,
+                  "the event input bus resolves to the MIDI unit");
+
+            Vst::UnitInfo first = {};
+            const bool gotFirst = unitInfo->getUnitInfo(0, first) == kResultOk;
+            char detail[96];
+            snprintf(detail, sizeof(detail), "unit index 0 is id %d, %d units in total",
+                     gotFirst ? static_cast<int>(first.id) : -1,
+                     static_cast<int>(unitInfo->getUnitCount()));
+            check(gotFirst && first.id == kMidiUnitId, "the MIDI unit is the first unit declared",
+                  detail);
+            check(gotFirst && first.programListId == kMidiProgramListId,
+                  "that first unit is the one carrying the program list");
+        }
     }
 
     Vst::SpeakerArrangement in = Vst::SpeakerArr::kMono, out = Vst::SpeakerArr::kStereo;

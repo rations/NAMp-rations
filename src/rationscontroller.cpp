@@ -154,6 +154,33 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
                             Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
                             kActiveChannelId);
 
+    // --- the units, and their ORDER is load-bearing --------------------------------------
+    //
+    // Both units are declared here, together, before either block's parameters, because the MIDI
+    // unit has to be the FIRST one this controller adds and that is a MEASURED requirement rather
+    // than a tidiness one.
+    //
+    // It was found by bisecting five builds against a real host after a footswitch that had worked
+    // for months stopped being seen at all. The pedalboard added a second unit and added it FIRST,
+    // which pushed the MIDI unit from index 0 to index 1; moving that one addUnit call back behind
+    // this one - changing nothing else, not a parameter, not a flag, not an id - restored the
+    // footswitch completely. Every other candidate was eliminated by its own build: the twenty-five
+    // new parameters, their position in the declaration order, and the Boost's four samples of
+    // reported latency were each removed on their own and each one still failed.
+    //
+    // What that means INSIDE the host is not verifiable from here and is not claimed. The SDK's own
+    // MIDI-to-parameter converter resolves the event bus's unit by ID - it walks getUnitInfo and
+    // compares against what getUnitByBus returned (public.sdk/source/vst/basewrapper/
+    // basewrapper.cpp, getProgramListAndUnit) - and a host doing that is indifferent to the order.
+    // A host that instead takes the first unit, or indexes by position, is not, and the measurement
+    // says at least one real host is in the second group. Since nothing whatever is gained by
+    // declaring the pedals first, the order that works everywhere is the order to use.
+    //
+    // The MIDI unit carries the program list, which is the only route a Program Change travels;
+    // the Pedals unit exists so a host groups twenty-five knobs away from Bass and Treble.
+    addUnit(new Vst::Unit(STR16("MIDI"), kMidiUnitId, Vst::kRootUnitId, kMidiProgramListId));
+    addUnit(new Vst::Unit(STR16("Pedals"), kPedalUnitId, Vst::kRootUnitId));
+
     // --- the pedalboard ------------------------------------------------------------------
     //
     // Declared by walking kPedalParams rather than written out twenty-five times, because that
@@ -161,9 +188,9 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     // editor draws. Five hand-written blocks would be five chances for one of them to disagree
     // with the other four about a range or a default.
     //
-    // Their own Unit, for the same reason the MIDI block has one.
-    addUnit(new Vst::Unit(STR16("Pedals"), kPedalUnitId, Vst::kRootUnitId));
-
+    // kPedalUnitId is declared above rather than here - see the units block for why the order is
+    // not ours to choose. A parameter may name a unit that was added earlier in the same
+    // initialize(); the SDK stores the id and never dereferences it.
     for (int i = 0; i < kPedalParamCount; ++i) {
         const PedalParamSpec &spec = kPedalParams[i];
         Vst::String128 title = {};
@@ -217,9 +244,8 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     // IUnitInfo. Both need a real parameter to land on or they do not arrive at all. midilearn.h
     // carries the SDK sites this was verified against.
     //
-    // Their own Unit, so a host lists them under "MIDI" rather than beside Bass and Treble.
-    addUnit(new Vst::Unit(STR16("MIDI"), kMidiUnitId, Vst::kRootUnitId, kMidiProgramListId));
-
+    // Their Unit, and its program list, are declared in the units block above, first of all - the
+    // order is a measured requirement and is explained there.
     // FLAGS 0, and this is not an oversight. kIsHidden would be the obvious choice for a
     // parameter with no UI, and the SDK documents it as implying kIsReadOnly - which would make
     // these unwritable and silently discard every CC the host routed to them. Flags 0 is the
