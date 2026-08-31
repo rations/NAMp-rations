@@ -842,8 +842,14 @@ void RationsEditorView::composeSettings(Canvas &c)
         // row restating what the Learn button beside it already means - four lines of text on a
         // page whose whole job is to be read at a glance, none of which told anyone anything.
         if (i == armed || binding.learned()) {
-            const std::string text =
-                (i == armed) ? std::string(geo::kMidiListeningText) : describeBinding(binding);
+            // A listening row says what the PROCESSOR has heard, not just that it is waiting. "I
+            // pressed it and nothing happened" is otherwise two completely different faults
+            // wearing the same face - the plug-in never received the message, or it received it
+            // and did the wrong thing with it - and the user is the only one who can see which.
+            const std::string text = (i == armed)
+                                         ? std::string(geo::kMidiListeningText) + "  " +
+                                               mController->midiHeard()
+                                         : describeBinding(binding);
             c.setFont(Font::Body);
             c.setColor(i == armed ? geo::kDimColor : geo::kTextColor);
             c.drawString(text.c_str(), r.x + static_cast<float>(geo::kMidiTextX), base);

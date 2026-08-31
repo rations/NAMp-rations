@@ -174,6 +174,18 @@ private:
     // Counts process() calls, so "the block before this one" is a comparison rather than a time.
     // Wraps after 132 years at a 128-frame period, and a wrap costs one missed suppression.
     std::uint32_t mBlockIndex = 0;
+
+    // --- what the processor has heard, for the settings page to report ------------------
+    //
+    // Published by the audio thread as three relaxed atomic stores and read on the message thread
+    // by sendMidiTable. Not a debug facility: while a row is listening the page says what is
+    // arriving, because "I pressed it and nothing happened" is otherwise unsplittable into "the
+    // plug-in never received it" and "the plug-in received it and the row is wrong", and the two
+    // want completely different fixes. The block count is there so a silent MIDI count can be told
+    // apart from an audio thread that is not running.
+    std::atomic<std::uint32_t> mSeenWord{0};   // packBinding of the last message, plus its value
+    std::atomic<std::uint32_t> mSeenCount{0};  // every message the table was offered, ever
+    std::atomic<std::uint32_t> mBlockCount{0}; // process() calls
     // Parameter changes this plug-in made to itself this block, to be echoed to the host so its
     // automation lane and the editor agree with the audio. Fixed capacity, filled and drained
     // inside one process() call, so it never grows on the audio thread.

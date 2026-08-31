@@ -523,6 +523,14 @@ void RationsProcessor::handleInputEvents(IEventList *events)
 // parameter queue like every other RT-to-outside message in this file.
 void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
 {
+    // Report it before deciding anything, so the settings page shows what ARRIVED rather than what
+    // was acted on - a message that matched nothing is exactly the case someone needs to see.
+    mSeenWord.store((static_cast<std::uint32_t>(msg) & 3u) |
+                        (static_cast<std::uint32_t>(std::clamp(data1, 0, 127)) << 2) |
+                        (static_cast<std::uint32_t>(std::clamp(channel + 1, 0, 16)) << 9),
+                    std::memory_order_relaxed);
+    mSeenCount.fetch_add(1, std::memory_order_relaxed);
+
     MidiBinding incoming;
     incoming.msg = msg;
     incoming.channel = channel;
@@ -593,6 +601,7 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     // Counted before anything reads it, so "the block before this one" is a comparison of two
     // indices rather than a duration. See the press rule in handleParameterChanges.
     ++mBlockIndex;
+    mBlockCount.store(mBlockIndex, std::memory_order_relaxed);
 
     mEchoCount = 0;
     handleParameterChanges(data.inputParameterChanges);
@@ -1008,6 +1017,9 @@ void RationsProcessor::sendMidiTable()
         words[row] = mMidiBinding[row].load(std::memory_order_acquire);
     attrs->setBinary(kMidiTableAttr, words, static_cast<uint32>(sizeof(words)));
     attrs->setInt(kMidiArmedAttr, mMidiLearnRow.load(std::memory_order_acquire));
+    attrs->setInt(kMidiSeenAttr, mSeenWord.load(std::memory_order_relaxed));
+    attrs->setInt(kMidiSeenCountAttr, mSeenCount.load(std::memory_order_relaxed));
+    attrs->setInt(kMidiBlocksAttr, mBlockCount.load(std::memory_order_relaxed));
     sendMessage(message);
 }
 

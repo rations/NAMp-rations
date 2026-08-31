@@ -129,6 +129,10 @@ public:
     // Ask the processor for the table. Answered with kMsgMidiTable, which lands in notify().
     void requestMidiTable();
     const MidiBinding &midiBinding(int row) const;
+
+    // What the processor has heard, for the settings page to report while a row is listening. See
+    // kMidiSeenAttr for why a learn UI needs to be able to say this.
+    std::string midiHeard() const;
     int armedMidiRow() const
     {
         return mArmedRow;
@@ -171,6 +175,10 @@ private:
     // is the one a closed editor still needs - so this is only ever written from the processor's
     // reply and from component state, never edited in place and pushed.
     MidiBinding mMidiTable[kMidiLearnRowCount];
+    // The processor's own report of what has arrived. Message thread only.
+    std::uint32_t mMidiSeenWord = 0;
+    std::uint32_t mMidiSeenCount = 0;
+    std::uint32_t mMidiBlocks = 0;
     int mArmedRow = -1;
 };
 
