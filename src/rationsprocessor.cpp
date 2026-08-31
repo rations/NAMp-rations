@@ -242,7 +242,10 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     allocateBuffers();
 
     mResampler.configure(mSampleRate, mMaxBlockSize);
-    mLatency.store(static_cast<uint32>(mResampler.latency()), std::memory_order_relaxed);
+    // The pedalboard's contribution is UNCONDITIONAL - see PedalChain::latencySamples. It is added
+    // here, once, and never changes again for the life of this setup.
+    mLatency.store(static_cast<uint32>(mResampler.latency() + pedals::PedalChain::latencySamples()),
+                   std::memory_order_relaxed);
     mRack.prepare(mResampler.maxNativeBlock(mMaxBlockSize), kNativeSampleRate);
     // prepare() resets the rack's published level state along with everything else, so the output
     // section has to be said again here rather than assumed to have survived.
@@ -351,11 +354,34 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             const int cc = static_cast<int>(id - kMidiCcBaseId);
             const int ccValue = std::clamp(static_cast<int>(std::lround(value * 127.0)), 0, 127);
             const int last = mCcLast[cc];
+            const std::uint32_t lastBlock = mCcLastBlock[cc];
             mCcLast[cc] = static_cast<std::uint8_t>(ccValue);
+            mCcLastBlock[cc] = mBlockIndex;
 
-            // Matching fires on the PRESS: not on the release, and not once per block while a
-            // foot rests on a latching pedal. 64 is the MIDI switch threshold, and the rising
-            // edge is what makes a momentary pedal and a latching one behave the same way.
+            // Matching fires on the PRESS. 64 is the MIDI switch threshold, so anything at or
+            // above it is a press and anything below it is a release, which does nothing.
+            //
+            // WHAT A PRESS LOOKS LIKE DEPENDS ON THE CONTROLLER, and this used to assume one kind
+            // of them. The rule was a RISING edge - at or above 64 having previously been below -
+            // which is exactly right for a MOMENTARY switch, 127 down and 0 up. A programmable
+            // footswitch is normally not that: a slot programmed to send CC 4 value 127 sends the
+            // identical message on every press and nothing at all on release, so the second press
+            // was not an edge and did nothing. On a channel row that is invisible, because
+            // selecting Clean twice is selecting Clean; on a pedal row it is a footswitch that
+            // works once and is then dead. Measured against the built bundle, not reasoned about:
+            // three presses of one value gave on, nothing, nothing.
+            //
+            // So a press is any value at or above 64, and what the edge test was really protecting
+            // is done by the BLOCK instead. The thing that must not fire repeatedly is a host
+            // writing the same value into this parameter every block - a drawn automation lane, or
+            // a controller resend - and that is precisely a repeat in the immediately following
+            // block. A human cannot press twice inside one 2.67 ms period, so no real press is
+            // ever suppressed, and no wall clock is consulted.
+            //
+            // The one controller this does not fully serve is an ALTERNATING latching one, which
+            // sends 127, then 0, then 127, one message per press: its releases are indistinguishable
+            // from a momentary switch's, so it takes two stamps per change. That is a mode to avoid
+            // programming rather than a case to guess at; midilearn.h sets out all three kinds.
             //
             // LEARNING asks a different question, and gating it on the same edge is a bug that
             // only shows up in the most ordinary re-mapping there is: moving a pedal that is
@@ -366,19 +392,26 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             // sending the same value. A host flushing initial zeroes at a parameter that was
             // already zero is neither, and does not teach anything.
             const bool learning = mMidiLearnRow.load(std::memory_order_relaxed) >= 0;
+            const bool resent = ccValue == last && lastBlock + 1 == mBlockIndex && lastBlock != 0;
             const bool fire =
-                learning ? (ccValue != last || ccValue >= 64) : (ccValue >= 64 && last < 64);
+                learning ? (ccValue != last || ccValue >= 64) : (ccValue >= 64 && !resent);
             if (fire)
                 midiTrigger(MidiMsg::ControlChange, kMidiAnyChannel, cc);
             continue;
         }
         if (id == kMidiProgramChangeId) {
             // The parameter is the program list's own, so its value is the program number over
-            // the list's step count - 127 steps for 128 programs. A Program Change has no
-            // release, so there is no edge to look for.
+            // the list's step count - 127 steps for 128 programs. A Program Change has no release,
+            // so every message is a press; the only thing to suppress is the same program arriving
+            // again in the very next block, which is a host resending rather than a second stamp.
+            // Same rule as the CC branch above and for the same reason.
             const int program =
                 std::clamp(static_cast<int>(std::lround(value * (kMidiProgramCount - 1))), 0, 127);
-            midiTrigger(MidiMsg::ProgramChange, kMidiAnyChannel, program);
+            const bool resent = program == mPcLast && mPcLastBlock + 1 == mBlockIndex;
+            mPcLast = program;
+            mPcLastBlock = mBlockIndex;
+            if (!resent)
+                midiTrigger(MidiMsg::ProgramChange, kMidiAnyChannel, program);
             continue;
         }
 
@@ -517,15 +550,33 @@ void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
         if (!bindingMatches(bound, msg, channel, data1))
             continue;
 
+        // What the row performs, and the ONE place the two kinds of row differ. A channel row
+        // stores its own step; a pedal row flips its footswitch, which means reading the value
+        // back before writing it - see midilearn.h for why a footswitch has to toggle and a
+        // channel must not.
+        //
+        // The value that is actually stored is what gets echoed, never target.value: for a toggle
+        // the two are not the same thing, and reporting the wrong one would leave the host's lane
+        // and the LED disagreeing with the pedal that is audibly running.
         const MidiLearnTarget &target = kMidiLearnRows[r];
-        if (target.param == kChannelId)
-            mChannelNorm.store(target.value, std::memory_order_relaxed);
+        double performed = target.value;
+        if (target.param == kChannelId) {
+            mChannelNorm.store(performed, std::memory_order_relaxed);
+        } else if (const int pedalIndex = pedalParamIndex(target.param); pedalIndex >= 0) {
+            const double now = mPedalNorm[pedalIndex].load(std::memory_order_relaxed);
+            performed = (target.action == MidiAction::Toggle) ? (now > 0.5 ? 0.0 : 1.0)
+                                                              : target.value;
+            mPedalNorm[pedalIndex].store(performed, std::memory_order_relaxed);
+        } else {
+            continue; // a row whose target this function does not know how to perform
+        }
+
         // Remember to tell the host. A parameter the plug-in changed by itself and did not report
         // leaves the host's automation lane and the editor's copy disagreeing with the audio,
         // until the next thing that writes it snaps the channel back under the player's feet.
         if (mEchoCount < kMidiLearnRowCount) {
             mEcho[mEchoCount].id = target.param;
-            mEcho[mEchoCount].value = target.value;
+            mEcho[mEchoCount].value = performed;
             ++mEchoCount;
         }
     }
@@ -535,6 +586,11 @@ void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
 tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
 {
     rations_set_denormal_mode();
+
+    // The block counter is bumped before anything reads it, so "the block before this one" is a
+    // comparison of two indices rather than a duration. See the press rule in
+    // handleParameterChanges.
+    ++mBlockIndex;
 
     // Anything the MIDI table makes this plug-in do to itself is collected here and reported
     // before the first early return below, so a message that lands on a block with no audio in it
@@ -1143,15 +1199,30 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
     // something nobody can name. Learning is disarmed either way: a project cannot open with the
     // plug-in already listening for a pedal the user has not asked it to listen for.
     mMidiLearnRow.store(-1, std::memory_order_release);
-    for (int row = 0; row < kMidiLearnRowCount; ++row) {
-        std::uint32_t word = 0;
-        if (version >= 2) {
-            int32 raw = 0;
-            if (!streamer.readInt32(raw))
-                return kResultFalse;
-            word = packBinding(unpackBinding(static_cast<std::uint32_t>(raw)));
-        }
-        mMidiBinding[row].store(word, std::memory_order_release);
+    for (int row = 0; row < kMidiLearnRowCount; ++row)
+        mMidiBinding[row].store(0, std::memory_order_release);
+
+    // How many rows are in the blob is a property of the BLOB, not of this build. Before version 6
+    // it was not written down and was always four; from version 6 it is, because the pedalboard's
+    // footswitch rows made this build's table nine and a fixed count sitting in the middle of a
+    // blob is what makes everything after it unreadable. See kStateVersion.
+    int32 midiRows = (version >= 2) ? kMidiLearnRowsV2 : 0;
+    if (version >= 6) {
+        if (!streamer.readInt32(midiRows))
+            return kResultFalse;
+        if (midiRows < 0 || midiRows > kMidiRowStateMax)
+            return kResultFalse;
+    }
+    for (int32 row = 0; row < midiRows; ++row) {
+        int32 raw = 0;
+        if (!streamer.readInt32(raw))
+            return kResultFalse;
+        // A row this build does not have is READ and dropped, never skipped by seeking: what has
+        // to happen is that the stream ends up in the right place for the trims, and reading is
+        // the only way to be sure it did.
+        if (row < kMidiLearnRowCount)
+            mMidiBinding[row].store(packBinding(unpackBinding(static_cast<std::uint32_t>(raw))),
+                                    std::memory_order_release);
     }
 
     // The per-channel trims, added in state version 3. A version 1 or 2 project has nothing here
@@ -1291,6 +1362,11 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     // ARMED is deliberately not written - it is a transient state of the editor's, not a property
     // of the session, and a project that reopened still listening for a pedal would learn
     // whatever the player happened to press next.
+    //
+    // Version 6 onwards the block is LENGTH-PREFIXED, and that is the whole of what version 6 is:
+    // this table grew from four rows to nine when the pedalboard's footswitches joined it, and a
+    // count that a reader has to guess is a count two builds can disagree about silently.
+    streamer.writeInt32(kMidiLearnRowCount);
     for (int row = 0; row < kMidiLearnRowCount; ++row)
         streamer.writeInt32(static_cast<int32>(mMidiBinding[row].load(std::memory_order_acquire)));
 

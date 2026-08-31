@@ -86,13 +86,15 @@ constexpr int kPedalPageH = 681;
 // before MIDI, because every user has four channels to balance and only some own
 // a footswitch.
 //
-// 928 units tall, which is taller than any other page here by a long way, and
+// 1146 units tall, which is taller than any other page here by a long way, and
 // the only page whose window may be shorter than the page itself: it is
 // width-locked, free in height, and scrolls. See pageScrolls() below for why
 // the smaller scale kSettingsScaleMin gives it did not turn out to be enough on
-// its own.
+// its own. It grew by 238 when the pedalboard's five footswitches joined the
+// MIDI list, and that cost nothing but scrolling, which is exactly what a page
+// that already scrolls is for.
 constexpr int kSettingsPageW = 640;
-constexpr int kSettingsPageH = 928;
+constexpr int kSettingsPageH = 1166;
 
 // The shortest that page's viewport may be dragged to, in logical units: the
 // fixed header band that carries the back button (kPageContentTop, 50) plus
@@ -593,27 +595,82 @@ static_assert(kPedalPostCX[2] + kPedalW / 2 == kPedalPageW - 24, "and so does th
 // share them, which is why make_pedals.sh insists all five enclosures trim to
 // the same size.
 constexpr int kPedalKnobR = 20;
-constexpr int kPedalKnobDX = 45;  // from the pedal's own centre line
-constexpr int kPedalKnobRow1Y = 44;
-constexpr int kPedalKnobRow2Y = 96;  // the four-knob faces only
-constexpr int kPedalKnobMidY = 77;   // the three-knob faces' lower, centred dial
+// Column offset from the pedal's own centre line. TWO of them, and the second is forced by the
+// legends rather than chosen: a label is centred on its knob, so an outer column at +-45 leaves
+// 168 - 140 = 28 units to the face's edge and can therefore carry 46 units of lettering. The
+// three-knob faces are inside that - their widest is "Depth" at 45 - and they keep the mock's
+// measured spacing. The four-knob faces are not: "Repeats" is 61 and "Manual" is 52, both
+// measured, and at +-45 they printed over the border trim. At +-37 an outer column has 64 units,
+// which clears the widest of them by 3.
+//
+// This is the same split as the rows above and rests on the same fact: the mock is a THREE-knob
+// pedal whose three legends are Drive, Tone and Level, none of them wider than 37. It never had
+// to hold a word like "Repeats", so it never measured a spacing that could.
+constexpr int kPedalKnobDX = 45;  // three-knob faces: measured off the mock
+constexpr int kPedalKnob4DX = 37; // four-knob faces: set by the widest legend they carry
+
+// THE MOCK IS A THREE-KNOB FACE, so it measures a three-knob face and nothing else. Its two rows
+// below are the measured ones; the four-knob pair after them is CHOSEN, because there was never a
+// four-knob mock to measure and the enclosure is the same box either way.
+//
+// The four-knob rows are 60 apart rather than the 52 they were first given, and the eight units
+// are a defect being fixed rather than taste. A legend's baseline sits at knob edge +
+// kPedalLabelDY, so 44 + 20 + 12 was exactly 96 - 20: the upper row's lettering landed flush on
+// the tops of the lower row's dials, and "Depth", "Repeats" and "Decay" then hung 2.1 units of
+// descender into them. It was seen on the rendered page before any check caught it, which is why
+// panelrender now measures every legend's real glyph ink against whatever sits under it.
+constexpr int kPedalKnobRow1Y = 44; // three-knob: measured, the upper pair
+constexpr int kPedalKnobMidY = 77;  // three-knob: measured, the centred lower dial
+constexpr int kPedalKnob4Row1Y = 40;
+constexpr int kPedalKnob4Row2Y = 100;
 constexpr int kPedalLabelDY = 12;    // baseline below the knob's lower edge
-constexpr int kPedalLedR = 5;
-constexpr int kPedalLedY = 141;
+// Bare board between a legend's INK and whatever is under it. Measured against the real glyph
+// extents by panelrender, not assumed: several of these legends carry descenders.
+constexpr int kPedalLabelClearance = 4;
+// The mock measures the LED at 26 art pixels, which is 5.3 logical units, and this is 7 - the one
+// number on the face that deliberately departs from it. The mock is a DESIGN reference, not a
+// photograph of an object, and this indicator carries more than the object's does: the silkscreen
+// here never dims (see drawPedal), so the lamp is the only thing on the enclosure that says
+// whether the pedal is in circuit. At the 0.66 scale floor the measured radius is 3.3 physical
+// pixels, which is not enough for the page's only state indicator; 7 is 9.2, which is.
+constexpr int kPedalLedR = 7;
+// 148, not the 141 the mock measures. The lamp had to move with the rows above it: a four-knob
+// face's lower legends now end at 134, and a lamp at 141 leaves them 7 units on a face where the
+// Delay also needs its two mini slots on that same line. Seven units lower is still well inside
+// the plain band between the dials and the footswitch, and it is one height for all five.
+constexpr int kPedalLedY = 148;
 constexpr int kPedalSwitchR = 22;
 constexpr int kPedalSwitchY = 188;
 constexpr int kPedalNameY = 250;      // baseline of the pedal's own name
 constexpr int kPedalNameSize = 20;
 constexpr int kPedalLabelSize = 11;
-constexpr int kPedalJackY = 125;      // where a patch cable meets the enclosure
-constexpr int kPedalBodyLeft = 14;    // the body without its jack lugs, so a
-constexpr int kPedalBodyRight = 175;  // cable starts at the lug and not in space
+constexpr int kPedalJackY = 125;     // where a patch cable meets the enclosure
+constexpr int kPedalBodyLeft = 14;   // the body without its jack lugs, so a
+constexpr int kPedalBodyRight = 175; // cable starts at the lug and not in space
+
+// THE PRINTABLE FACE, which is NOT the body, and confusing the two is what put a legend on the
+// enclosure's edge. kPedalBodyRight above is the outermost opaque PIXEL - the outside of the
+// black border trim - and it is the right number for deciding where a patch cable meets the box.
+// It is the wrong number for deciding where lettering may go, because between the coloured face
+// and that pixel there is a border. Sampled across a scanline of the Delay:
+//
+//   ..168.5  the blue face          168.5..170.1  black inner border
+//   170.5..172.9  a narrow rim      173.4..175.4  black outer border
+//
+// All five enclosures give exactly 21.1 .. 168.5, symmetric about the centre line, measured at
+// five different heights - so this is one number for the whole page and panelrender re-derives it
+// from the art rather than trusting the two below.
+constexpr int kPedalFaceLeft = 22;
+constexpr int kPedalFaceRight = 168;
+constexpr int kPedalFaceW = kPedalFaceRight - kPedalFaceLeft;
 
 // A four-knob face must not put its lower label row into the LED. This is the
 // tightest vertical relationship on the page, so it is asserted rather than
 // eyeballed; panelrender re-checks it against the real text metrics.
-static_assert(kPedalKnobRow2Y + kPedalKnobR + kPedalLabelDY < kPedalLedY - kPedalLedR,
-              "four-knob lower labels collide with the LED");
+static_assert(kPedalKnob4Row1Y + kPedalKnobR < kPedalKnob4Row2Y - kPedalKnobR,
+              "the four-knob rows are too close for their dials, never mind their labels");
+static_assert(kPedalKnob4Row2Y + kPedalKnobR < kPedalLedY - kPedalLedR,
+              "four-knob lower dials collide with the LED");
 static_assert(kPedalLedY + kPedalLedR < kPedalSwitchY - kPedalSwitchR,
               "LED collides with the footswitch");
 static_assert(kPedalSwitchY + kPedalSwitchR < kPedalNameY - kPedalNameSize,
@@ -628,6 +685,39 @@ constexpr int kPedalRowLegendDY = 8; // above the row's top edge
 // the order the audio actually runs in, and the row a pedal is on is a fact about
 // the DSP graph rather than a layout choice, so the table carries both and the
 // editor never decides either.
+// SILKSCREEN - PLAIN WHITE, and nothing behind it.
+//
+// The head panel's kTextColor and kDimColor are chosen against a dark faceplate and are unreadable
+// on a saturated enclosure: dim grey on the Chorus's yellow is very nearly invisible. So the
+// pedals letter themselves in their own ink, and that ink is white.
+//
+// WHAT THE ART MEASURES, recorded because it disagrees and the disagreement should stay visible.
+// WCAG contrast of white against each enclosure's own mean face pixels -
+//   Boost   green  3.10     Chorus  yellow 1.86     Flanger red  4.57
+//   Delay   blue   4.07     Reverb  lime   1.95
+// Three of the five are under the 4.5 : 1 the guideline asks of text this size and two are far
+// under it. That is a property of bright enclosures, not of the choice: nothing in the palette
+// reads well on a mid-luminance yellow. panelrender prints all five on every run, so a re-export
+// that makes one worse is visible in the build output rather than silent.
+//
+// TWO WAYS OF PROPPING THE WHITE UP WERE BUILT, RENDERED AND REJECTED, and they are recorded here
+// so nobody builds them again. An offset drop shadow GREYS SMALL TEXT OUT: at kPedalLabelSize
+// Michroma's stems are about one pixel, so nearly every pixel of a legend is an antialiased blend
+// and the offset copy lands underneath it rather than beside it. Replacing it with a true outward
+// edge - stroking the glyph path, then filling it, so the white core keeps its full width - fixed
+// the greying (peak ink coverage became identical at every edge alpha) but not the look: 0.8 of a
+// unit of dark around a one-unit stem reads as a black outline, which is what it is. Rendered side
+// by side at 2x, plain white is crisper than either, on all five enclosures including the yellow.
+//
+// Black lettering with a white outline was rendered too, and is worse: it goes muddy on the
+// Flanger's red, where black measures 4.57 : 1 against white's own 4.57 and looks far weaker.
+constexpr uint32_t kPedalInk = 0xFFFFFF;
+// The lettering ON A FILLED PLATE, which is the one place this page is not white on colour: a mini
+// control that is LIVE inverts - white plate, dark text - and so does a knob's readout while it is
+// being dragged. Outlined is idle, filled is live. That is used rather than the accent colour
+// because kAccent is a green that disappears on the Boost and shouts on the Chorus.
+constexpr uint32_t kPedalInkPlate = 0x101214;
+
 struct PedalSpec {
     const char *name; // drawn on the enclosure, Michroma
     const char *art;  // ImageCache key; resources/img/<art>.png
@@ -656,10 +746,135 @@ constexpr int kPedalLeft(int i)
 constexpr float kPedalCableSag = 7.0f;
 constexpr float kPedalCablePen = 2.0f;
 
+// --- the face, generated from the parameter slice ---------------------------
+// The enclosures are blank, so a face is a blit plus controls drawn over it, and
+// which controls those are comes out of kPedalParams (see pedalKnobCount and
+// pedalMiniCount in rationsids.h) rather than out of a per-pedal layout here.
+// Five faces, one piece of arithmetic: two knobs across the top, then either a
+// third centred below them or a second pair, and the LED, the footswitch and the
+// name down the middle.
+//
+// The grid is 2-up because the enclosure is 190 units wide and a legible knob is
+// 40 across with a legend under it; three across would put "Feedback" into its
+// neighbour's column at the label size the rest of the panel uses.
+constexpr int kPedalKnobCX = kPedalW / 2; // 95 - the pedal's own centre line
+constexpr int kPedalMaxKnobs = 4;
+
+struct PedalPoint {
+    int x, y; // relative to the pedal's own top-left corner
+};
+constexpr PedalPoint pedalKnobPos(int nKnobs, int k)
+{
+    if (nKnobs <= 1)
+        return {kPedalKnobCX, kPedalKnobRow1Y};
+    if (nKnobs <= 3) {
+        // An ODD count puts its last knob on the centre line rather than leaving a hole: three
+        // knobs is a triangle, which is the Tube Screamer's own layout and the layout of most
+        // three-knob pedals, and it is what kPedalKnobMidY exists for. It is also why the
+        // clearance audit works by COLUMN and not by row - here the upper legends sit BESIDE the
+        // lower dial, not above it, so nothing they could collide with is in their column.
+        if (k == 2)
+            return {kPedalKnobCX, kPedalKnobMidY};
+        return {kPedalKnobCX + (k == 0 ? -kPedalKnobDX : kPedalKnobDX), kPedalKnobRow1Y};
+    }
+    return {kPedalKnobCX + ((k % 2 == 0) ? -kPedalKnob4DX : kPedalKnob4DX),
+            (k < 2) ? kPedalKnob4Row1Y : kPedalKnob4Row2Y};
+}
+
+// The two mini slots, either side of the LED: a text control, not a knob, because
+// what goes here is a list (the Delay's Sync) and a two-state switch (its
+// Ping-Pong) and neither reads as a rotation. They sit ON the LED's row, which is
+// the only band on the enclosure with full width and nothing else in it - the
+// knob labels end below kPedalKnob4Row2Y + kPedalKnobR + kPedalLabelDY and the
+// footswitch begins at kPedalSwitchY - kPedalSwitchR, and both are asserted below.
+constexpr int kPedalMiniCount = 2;
+// Sized and placed against the FACE, not the body: at 62 wide and centred on 141 the right-hand
+// box ran to 172, which is out on the border trim. The face leaves 66 units either side of the
+// lamp, so a 58-unit box with 4 of margin at each end sits inside both.
+constexpr int kPedalMiniW = 58;
+constexpr int kPedalMiniH = 16;
+constexpr int kPedalMiniSize = 10;
+constexpr int kPedalMiniRadius = 3;
+constexpr int kPedalMiniCX[kPedalMiniCount] = {55, 135};
+constexpr int kPedalMiniY = kPedalLedY; // centred on the LED's own row
+
+// A footswitch is stomped, not clicked, so its hit box is the enclosure's full
+// width and deliberately larger than the cap - the same reasoning that made the
+// head's bat switches kToggleHitW = 60 against art 24 wide. Nothing else lives
+// in that band, so there is nothing for a generous box to steal from.
+constexpr int kPedalSwitchHitH = 56;
+constexpr int kPedalKnobHitR = kPedalKnobR + 4;
+
+static_assert(kPedalMiniCX[0] - kPedalMiniW / 2 >= kPedalFaceLeft,
+              "the left mini slot runs on to the enclosure's border trim");
+static_assert(kPedalMiniCX[1] + kPedalMiniW / 2 <= kPedalFaceRight,
+              "the right mini slot runs on to the enclosure's border trim");
+static_assert(kPedalMiniCX[0] + kPedalMiniW / 2 < kPedalKnobCX - kPedalLedR,
+              "the left mini slot runs into the LED");
+static_assert(kPedalMiniCX[1] - kPedalMiniW / 2 > kPedalKnobCX + kPedalLedR,
+              "the right mini slot runs into the LED");
+static_assert(kPedalMiniY - kPedalMiniH / 2 > kPedalKnob4Row2Y + kPedalKnobR,
+              "the mini slots run into a four-knob face's lower dials");
+static_assert(kPedalMiniY + kPedalMiniH / 2 < kPedalSwitchY - kPedalSwitchR,
+              "the mini slots run into the footswitch");
+
+// The one thing this whole scheme rests on: that no pedal asks for more controls
+// than the enclosure has places to put them. It is checked at COMPILE TIME against
+// kPedalParams, so adding a fifth knob to a pedal is a build error rather than a
+// face that silently draws four of them and drops the rest.
+constexpr bool pedalFacesFit()
+{
+    for (int p = 0; p < kPedalCount; ++p)
+        if (pedalKnobCount(p) > kPedalMaxKnobs || pedalMiniCount(p) > kPedalMiniCount)
+            return false;
+    return true;
+}
+static_assert(pedalFacesFit(), "a pedal has more controls than its enclosure has places");
+
+// The same points in PAGE coordinates. Every draw call and every hit test goes through these four,
+// so a pedal's corner offset is applied in exactly one place and the click can never land where
+// the paint did not.
+constexpr PedalPoint pedalKnobCenter(int pedal, int k)
+{
+    const PedalPoint p = pedalKnobPos(pedalKnobCount(pedal), k);
+    return {kPedalLeft(pedal) + p.x, kPedals[pedal].y + p.y};
+}
+constexpr PedalPoint pedalMiniCenter(int pedal, int slot)
+{
+    return {kPedalLeft(pedal) + kPedalMiniCX[slot], kPedals[pedal].y + kPedalMiniY};
+}
+constexpr PedalPoint pedalLedCenter(int pedal)
+{
+    return {kPedalLeft(pedal) + kPedalKnobCX, kPedals[pedal].y + kPedalLedY};
+}
+constexpr PedalPoint pedalSwitchCenter(int pedal)
+{
+    return {kPedalLeft(pedal) + kPedalKnobCX, kPedals[pedal].y + kPedalSwitchY};
+}
+
+// A knob legend's allowance is set by the ENCLOSURE, not by the knob pitch. The outer columns sit
+// 45 units off the centre line and the body's edge is only 80 units from it, so a legend centred
+// on an outer knob has 35 units of room on its outside and runs over the edge - on to the jack lug
+// and the patch cable - long before it reaches its neighbour. Symmetric, because the text is
+// centred on the knob, so the tighter side governs both.
+//
+// The first version of this measured against the pitch and passed "Feedback", which then drew five
+// units past the Delay's right-hand edge. It was the rendered page that showed it, and this is the
+// arithmetic that makes the audit catch the next one.
+constexpr int kPedalLabelMargin = 3; // bare FACE between a legend and the border trim
+constexpr int pedalKnobLabelAllowance(int pedal, int k)
+{
+    const int cx = pedalKnobPos(pedalKnobCount(pedal), k).x;
+    const int l = cx - kPedalFaceLeft;
+    const int r = kPedalFaceRight - cx;
+    return 2 * (l < r ? l : r) - 2 * kPedalLabelMargin;
+}
+
 // --- Settings page ----------------------------------------------------------
 // Four sections down one column: the capture loaders, the channel trims, MIDI
-// learn, and the output section. The first three are four rows each and share
-// one grid; the fourth is a different shape and is laid out below them.
+// learn, and the output section. The first two are four rows each, MIDI learn is
+// nine (four channels and five pedals), and all three share one grid; the fourth
+// is a different shape and is laid out below them.
 //
 // All of them share kMidiRowX / kMidiRowW / kMidiRowH / kMidiRowPitch and the
 // same kMidiTextX for their second column, so the channel names and the controls
@@ -704,7 +919,16 @@ static_assert(kMidiRowX + kMidiRowW <= kScrollBarX,
               "the settings rows must not reach into the scrollbar's margin");
 static_assert(kScrollBarX + kScrollBarW + kScrollBarInset == kSettingsPageW,
               "the scrollbar must sit kScrollBarInset in from the page's right edge");
-constexpr int kMidiRowCount = kChannelToggleCount;
+// Nine rows: the four channels, then the pedalboard's five footswitches. Spelled here in the
+// editor's own vocabulary and checked against kMidiLearnRowCount, which is the processor's, at the
+// one site that includes both.
+constexpr int kMidiRowCount = kChannelToggleCount + kPedalCount;
+// Half a row of air between the two halves, because they are two halves: a channel row selects
+// and a pedal row toggles, and a footnote saying so under nine identical rows is a footnote
+// nobody connects to anything. Drawn as a gap rather than as a second heading because the
+// section already has one and the rows are self-labelling.
+constexpr int kMidiPedalGap = 20;
+constexpr int kMidiPedalFirstRow = kChannelToggleCount;
 constexpr int kMidiRowTextSize = 15;
 
 // Section 1: the capture loaders. One row per channel, each carrying the
@@ -775,6 +999,15 @@ constexpr int kLevelFootnoteY = 486;
 // on the MIDI path at all.
 constexpr int kSettingsHeadingY = 514;
 constexpr int kMidiRowY0 = 532;
+
+// The top edge of one MIDI row. One function rather than the arithmetic written at each site,
+// for the same reason contentY() is one function: the painter, the hit test and the art audit
+// have to agree about where a row is, and a gap in the middle of the list is exactly the kind of
+// detail two of the three would keep and the third would forget.
+constexpr int midiRowY(int row)
+{
+    return kMidiRowY0 + row * kMidiRowPitch + (row >= kMidiPedalFirstRow ? kMidiPedalGap : 0);
+}
 // Where the learned binding is written, as an offset from the row's left edge.
 // Far enough right to clear the widest channel name at kMidiRowTextSize, which
 // the art audit measures rather than assumes.
@@ -791,9 +1024,11 @@ constexpr int kMidiButtonGap = 6;
 // Clear is the one that appears once there is a binding to describe.
 constexpr int kMidiTextW =
     kMidiRowW - kMidiLearnInset - kMidiLearnW - kMidiButtonGap - kMidiClearW - kMidiTextX - 8;
-constexpr int kSettingsFootnoteY = 704;
-constexpr int kSettingsFootnote2Y = 722;
+constexpr int kSettingsFootnoteY = 924;
+constexpr int kSettingsFootnote2Y = 942;
+constexpr int kSettingsFootnote3Y = 960;
 constexpr int kSettingsFootnoteSize = 12;
+constexpr int kSettingsFootnoteCount = 3;
 
 // Section 4: the output section. Three radio rows for the mode, then the input
 // calibration pair beside each other on one row.
@@ -802,8 +1037,8 @@ constexpr int kSettingsFootnoteSize = 12;
 // all because it was previously nowhere: the plug-in was hard-wired to
 // Normalized with no way to see or change it, while both plug-ins it descends
 // from expose exactly these three controls.
-constexpr int kOutputHeadingY = 750;
-constexpr int kOutputRowY0 = 768;
+constexpr int kOutputHeadingY = 988;
+constexpr int kOutputRowY0 = 1006;
 constexpr int kOutputRowPitch = 26;
 constexpr int kOutputRowH = 22;
 constexpr int kOutputRowW = 300;
@@ -814,7 +1049,7 @@ constexpr float kOutputDotFillR = 3.0f;
 constexpr int kOutputTextX = 26;
 // The calibration row: a bat toggle on the left and the dBu value box to its
 // right, both drawn only as far as the loaded captures can honour them.
-constexpr int kCalRowY = 860;
+constexpr int kCalRowY = 1098;
 constexpr int kCalToggleCX = kMidiRowX + 40;
 constexpr int kCalToggleCY = kCalRowY + 20;
 constexpr int kCalLabelX = kMidiRowX + 70;
@@ -825,7 +1060,7 @@ constexpr int kCalValueY = kCalRowY + 7;
 // One wheel click on the calibration level, in dB. Whole decibels: an interface's
 // stated level is a round number and this is how a user lands on theirs.
 constexpr double kCalWheelDb = 1.0;
-constexpr int kOutputFootnoteY = 906;
+constexpr int kOutputFootnoteY = 1144;
 
 // The Learn button's two states, named here so the panel and the art audit
 // cannot disagree about which strings have to fit inside it.
@@ -852,6 +1087,12 @@ constexpr const char *kMidiHeading = "MIDI Learn";
 constexpr const char *kLevelFootnote = "Right-click a slider to return it to 0.0 dB.";
 constexpr const char *kSettingsFootnote2 =
     "CC and Program Change answer on any MIDI channel; a note answers on its own.";
+// The third footnote is the one the pedal rows made necessary, and it says the
+// thing a player would otherwise have to work out by stamping: the two halves of
+// this list do different things with a press. See midilearn.h for why a pedal has
+// to toggle and a channel must not.
+constexpr const char *kSettingsFootnote3 =
+    "A channel row selects that channel; a pedal row toggles that pedal on and off.";
 
 // The capture section's heading and footnote. The footnote is the one place the
 // two ways of naming a channel are explained, because neither is discoverable:
@@ -891,7 +1132,7 @@ constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
 constexpr int kCaptureBrowserX = 16;
 constexpr int kCaptureBrowserY = 40;
 constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 608
-constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 848
+constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 1086
 // That height is a CEILING now, not the size: the settings page scrolls, so the
 // window showing it may be shorter than the page, and the card is sized to the
 // viewport instead (RationsEditorView::boundCaptureBrowser). This is the floor

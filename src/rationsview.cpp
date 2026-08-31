@@ -32,6 +32,13 @@ using namespace Steinberg;
 namespace Rations
 {
 
+// The settings page's MIDI section is laid out in geometry.h and populated from midilearn.h, and
+// this is the only file that includes both, so it is where the two spellings of "how many rows"
+// are made to agree. A pedal added to kPedalParams grows both; a mismatch would draw eight rows
+// over nine bindings and silently lose one.
+static_assert(geo::kMidiRowCount == kMidiLearnRowCount,
+              "the settings page must draw exactly the rows the learn table has");
+
 namespace
 {
 
@@ -609,10 +616,153 @@ void RationsEditorView::drawPedalboardStatic(Canvas &c)
 void RationsEditorView::composePedalboard(Canvas &c)
 {
     // The enclosures, the cables and the row legends are static and live in
-    // drawPedalboardStatic, composited once per resize. Nothing is drawn per
-    // frame yet: the knobs, LEDs and footswitches arrive with the parameters
-    // they read, and until then this page is the board with nothing on it.
-    (void)c;
+    // drawPedalboardStatic, composited once per resize. Everything below reads a
+    // parameter, so it is drawn every frame.
+    for (int i = 0; i < geo::kPedalCount; ++i)
+        drawPedal(c, i);
+}
+
+//------------------------------------------------------------------------
+// The pedalboard's lettering: plain white, and that is the whole of it. Two ways of backing it up
+// on the bright enclosures were built, rendered and rejected - see the SILKSCREEN note in
+// geometry.h, which records what each one did and why plain white beat both.
+static void drawPedalString(Canvas &c, const char *text, float x, float y)
+{
+    c.setColor(geo::kPedalInk);
+    c.drawString(text, x, y);
+}
+
+// One pedal's face. NOTHING here is per-pedal: the knobs, their legends and the mini controls all
+// come out of kPedalParams, which is what lets five different pedals share one function and what
+// makes adding a control to one of them a one-line change to the table rather than a new block of
+// drawing code.
+//
+// TWO RULES, and both are stated here because everything below is an application of them.
+//
+// THE SILKSCREEN DOES NOT DIM. A pedal that is switched off is drawn exactly as one that is on,
+// and the LED is the only thing that reports state - which is what the object does, and which
+// follows the reasoning already written at drawToggle: a legend that dims reads as "disabled", and
+// nothing on this page ever is. Every control here stays live whether the pedal is in circuit or
+// not, because a player dials a delay in and then stomps it, and a face that refused clicks until
+// the LED was lit would mean the only way to set a pedal up is to hear it first.
+//
+// FILLED IS LIVE, OUTLINED IS IDLE, in white. That replaces the accent colour, which cannot be
+// used on this page: kAccent is a green that vanishes on the Boost, shouts on the Chorus, and says
+// nothing on any of them that a filled white plate does not say better.
+void RationsEditorView::drawPedal(Canvas &c, int pedal)
+{
+    const geo::PedalSpec &p = geo::kPedals[pedal];
+    const bool on = paramValue(kPedalOnId[pedal]) > 0.5;
+
+    for (int k = 0, nk = pedalKnobCount(pedal); k < nk; ++k) {
+        const PedalParamSpec &spec = kPedalParams[pedalKnobParam(pedal, k)];
+        const geo::PedalPoint pt = geo::pedalKnobCenter(pedal, k);
+        const float cx = static_cast<float>(pt.x);
+        const float cy = static_cast<float>(pt.y);
+        drawKnobAt(c, cx, cy, static_cast<float>(geo::kPedalKnobR), paramValue(spec.id));
+
+        // ONE text row per knob, and the value takes it while the knob is held - the same rule the
+        // head panel's dials follow, and for the same reason: there is one row of space under a
+        // knob and a second one would land on the next row of knobs or on the LED.
+        const bool showValue = (mDragParam == spec.id);
+        const std::string text =
+            showValue ? paramText(spec.id) : std::string(spec.legend ? spec.legend : "");
+        c.setFont(showValue ? Font::Body : Font::Title);
+        c.setFontSize(static_cast<float>(geo::kPedalLabelSize));
+        const std::string fit =
+            c.clipToWidth(text, static_cast<float>(geo::pedalKnobLabelAllowance(pedal, k)));
+        const float w = c.stringWidth(fit.c_str());
+        const float baseline = cy + geo::kPedalKnobR + geo::kPedalLabelDY;
+        if (showValue) {
+            // The readout is the one thing on the face that has to be seen at a glance while the
+            // pointer is moving, so it inverts rather than changing colour.
+            c.setColor(geo::kPedalInk);
+            c.fillRoundRect(Rect(cx - w * 0.5f - 4.0f, baseline - geo::kPedalLabelSize, w + 8.0f,
+                                 geo::kPedalLabelSize + 4.0f),
+                            static_cast<float>(geo::kPedalMiniRadius));
+            c.setColor(geo::kPedalInkPlate);
+            c.drawString(fit.c_str(), cx - w * 0.5f, baseline);
+        } else {
+            drawPedalString(c, fit.c_str(), cx - w * 0.5f, baseline);
+        }
+    }
+
+    // The mini slots. A list draws its VALUE, a toggle draws its own name, and both fill when they
+    // are doing something: a sync division other than Free, or a ping-pong that is on.
+    for (int m = 0, nm = pedalMiniCount(pedal); m < nm; ++m) {
+        const PedalParamSpec &spec = kPedalParams[pedalMiniParam(pedal, m)];
+        const geo::PedalPoint pt = geo::pedalMiniCenter(pedal, m);
+        const Rect box(static_cast<float>(pt.x - geo::kPedalMiniW / 2),
+                       static_cast<float>(pt.y - geo::kPedalMiniH / 2),
+                       static_cast<float>(geo::kPedalMiniW), static_cast<float>(geo::kPedalMiniH));
+        // A toggle is live when it is on; a list is live when it is off entry 0, which for the one
+        // list that exists means the Delay is following the host's tempo rather than its own knob.
+        const bool live = paramValue(spec.id) > (spec.kind == PedalParamKind::Toggle ? 0.5 : 0.0);
+        c.setColor(geo::kPedalInk);
+        if (live) {
+            c.fillRoundRect(box, static_cast<float>(geo::kPedalMiniRadius));
+        } else {
+            c.setPenSize(1.0f);
+            c.strokeRoundRect(box, static_cast<float>(geo::kPedalMiniRadius));
+        }
+
+        std::string text = spec.kind == PedalParamKind::Toggle ? std::string(spec.legend)
+                                                              : paramText(spec.id);
+        if (text.empty())
+            text = spec.legend; // the controller had no text for it; name it rather than draw a gap
+        c.setFont(Font::Title);
+        c.setFontSize(static_cast<float>(geo::kPedalMiniSize));
+        const std::string fit = c.clipToWidth(text, static_cast<float>(geo::kPedalMiniW - 6));
+        const float tx = box.centerX() - c.stringWidth(fit.c_str()) * 0.5f;
+        const float ty = box.centerY() + geo::kPedalMiniSize * 0.36f;
+        if (live) {
+            c.setColor(geo::kPedalInkPlate);
+            c.drawString(fit.c_str(), tx, ty); // dark ON the white plate
+        } else {
+            drawPedalString(c, fit.c_str(), tx, ty);
+        }
+    }
+
+    const geo::PedalPoint led = geo::pedalLedCenter(pedal);
+    drawLed(c, static_cast<float>(led.x), static_cast<float>(led.y), on,
+            static_cast<float>(geo::kPedalLedR));
+
+    const geo::PedalPoint sw = geo::pedalSwitchCenter(pedal);
+    drawPedalSwitch(c, static_cast<float>(sw.x), static_cast<float>(sw.y));
+
+    // The name, in Michroma like every other legend, clipped to the body so a longer one could
+    // never reach the enclosure's edge. panelrender measures all five against exactly this
+    // allowance.
+    c.setFont(Font::Title);
+    c.setFontSize(static_cast<float>(geo::kPedalNameSize));
+    const std::string name =
+        c.clipToWidth(p.name, static_cast<float>(geo::kPedalFaceW));
+    drawPedalString(c, name.c_str(),
+                     geo::kPedalLeft(pedal) + geo::kPedalKnobCX -
+                         c.stringWidth(name.c_str()) * 0.5f,
+                     static_cast<float>(p.y + geo::kPedalNameY));
+}
+
+//------------------------------------------------------------------------
+// The chrome footswitch cap. ONE image for both states, exactly as on the pedals
+// being modelled: a stomp switch does not change appearance when it latches, and
+// the LED two rows above it is what reports the state. Drawing an "on" and an
+// "off" cap would be inventing a thing the object does not do.
+void RationsEditorView::drawPedalSwitch(Canvas &c, float cx, float cy)
+{
+    const float r = static_cast<float>(geo::kPedalSwitchR);
+    const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
+    const int px = static_cast<int>(std::lround(2.0 * r * mScale));
+    if (cairo_surface_t *s = mImages.getScaled("pedal_switch", px, px)) {
+        c.drawImage(s, dest);
+        return;
+    }
+    // Degradation path: a ring and a cap, which is what the art is a photograph
+    // of. Flat, but it never contradicts the thing it stands in for.
+    c.setColor(0x6E7276);
+    c.fillEllipse(dest);
+    c.setColor(0xB6BABE);
+    c.fillEllipse(cx, cy, r * 0.62f, r * 0.62f);
 }
 
 //------------------------------------------------------------------------
@@ -681,7 +831,7 @@ void RationsEditorView::composeSettings(Canvas &c)
         c.setFont(Font::Title);
         c.setFontSize(geo::kMidiRowTextSize);
         c.setColor(geo::kTextColor);
-        c.drawString(c.clipToWidth(mController->channelName(i), geo::kMidiTextX - 20.0f).c_str(),
+        c.drawString(c.clipToWidth(mController->midiRowLabel(i), geo::kMidiTextX - 20.0f).c_str(),
                      r.x + 12.0f, base);
 
         const MidiBinding binding = mController ? mController->midiBinding(i) : MidiBinding();
@@ -711,9 +861,16 @@ void RationsEditorView::composeSettings(Canvas &c)
     // every MIDI channel, because VST3 hands those over as parameter changes with the channel
     // already discarded (see midilearn.h) - so a player whose pedal sends on channel 2 and whose
     // keyboard sends the same CC on channel 1 needs to know that before they find out by playing.
-    const char *notes[2] = {geo::kSettingsFootnote, geo::kSettingsFootnote2};
-    const int noteY[2] = {geo::kSettingsFootnoteY, geo::kSettingsFootnote2Y};
-    for (int i = 0; i < 2; ++i)
+    //
+    // The third is the one the pedal rows made necessary: the two halves of this list do different
+    // things with a press, and nothing about a row says which half it is in.
+    const char *notes[geo::kSettingsFootnoteCount] = {geo::kSettingsFootnote,
+                                                      geo::kSettingsFootnote2,
+                                                      geo::kSettingsFootnote3};
+    const int noteY[geo::kSettingsFootnoteCount] = {geo::kSettingsFootnoteY,
+                                                    geo::kSettingsFootnote2Y,
+                                                    geo::kSettingsFootnote3Y};
+    for (int i = 0; i < geo::kSettingsFootnoteCount; ++i)
         c.drawString(notes[i], cx - c.stringWidth(notes[i]) * 0.5f, static_cast<float>(noteY[i]));
 
     // Section 4: the output section. Last because it is set once when a rig is assembled.
@@ -1077,8 +1234,7 @@ void RationsEditorView::drawOutputSection(Canvas &c)
 // theoretical risk.
 Rect RationsEditorView::midiRowRect(int row)
 {
-    return Rect(static_cast<float>(geo::kMidiRowX),
-                static_cast<float>(geo::kMidiRowY0 + row * geo::kMidiRowPitch),
+    return Rect(static_cast<float>(geo::kMidiRowX), static_cast<float>(geo::midiRowY(row)),
                 static_cast<float>(geo::kMidiRowW), static_cast<float>(geo::kMidiRowH));
 }
 
@@ -1340,10 +1496,10 @@ void RationsEditorView::drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on)
 }
 
 //------------------------------------------------------------------------
-void RationsEditorView::drawLed(Canvas &c, float cx, float cy, bool lit)
+void RationsEditorView::drawLed(Canvas &c, float cx, float cy, bool lit, float r)
 {
-    const Rect dest(cx - geo::kLedR, cy - geo::kLedR, 2.0f * geo::kLedR, 2.0f * geo::kLedR);
-    const int px = static_cast<int>(std::lround(2.0 * geo::kLedR * mScale));
+    const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
+    const int px = static_cast<int>(std::lround(2.0 * r * mScale));
     if (cairo_surface_t *led = mImages.getScaled(lit ? "led_on" : "led_off", px, px)) {
         c.drawImage(led, dest);
     } else {
@@ -1625,6 +1781,32 @@ double RationsEditorView::wheelStep(Vst::ParamID id) const
 }
 
 //------------------------------------------------------------------------
+// The two boxes a pedal's non-knob controls live in, in page coordinates. File-static and shared
+// by the click handler and the wheel handler so that a control's paint and its hit box cannot
+// drift apart: geo::pedalMiniCenter is what drawPedal uses too.
+static Rect pedalMiniRect(int pedal, int slot)
+{
+    const geo::PedalPoint pt = geo::pedalMiniCenter(pedal, slot);
+    return Rect(static_cast<float>(pt.x - geo::kPedalMiniW / 2),
+                static_cast<float>(pt.y - geo::kPedalMiniH / 2),
+                static_cast<float>(geo::kPedalMiniW), static_cast<float>(geo::kPedalMiniH));
+}
+
+// A footswitch is STOMPED. The box is the enclosure's full body width and 60 units tall against a
+// 44-unit cap, which is the same generosity the head's bat switches get (kToggleHitW = 60 against
+// art 24 wide) and for the same reason: the thing being aimed at on the real object is a foot. It
+// costs nothing here because the band it grows into holds nothing else - the mini slots stop at
+// kPedalMiniY + kPedalMiniH / 2 and the name starts below the switch, both asserted in geometry.h.
+static Rect pedalSwitchRect(int pedal)
+{
+    const geo::PedalPoint pt = geo::pedalSwitchCenter(pedal);
+    return Rect(static_cast<float>(geo::kPedalLeft(pedal) + geo::kPedalBodyLeft),
+                static_cast<float>(pt.y - geo::kPedalSwitchHitH / 2),
+                static_cast<float>(geo::kPedalBodyRight - geo::kPedalBodyLeft),
+                static_cast<float>(geo::kPedalSwitchHitH));
+}
+
+//------------------------------------------------------------------------
 void RationsEditorView::onMouseDown(int x, int y, int button)
 {
     // Physical pixels in, logical units out: this is the only place the page transform is undone,
@@ -1649,6 +1831,21 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
                 mController->endEdit(id);
                 invalidate();
                 return;
+            }
+        }
+        // On the pedalboard the second button steps a list BACKWARDS. Twelve sync divisions
+        // reached by left-clicking forwards is eleven clicks to undo an overshoot; this is the
+        // one gesture that makes a wrapping list usable with a mouse, and it costs nothing on the
+        // controls that are not lists because nothing else answers here.
+        if (mPage == geo::Page::Pedalboard && !mBrowser.isOpen() && mController) {
+            for (int i = 0; i < geo::kPedalCount; ++i) {
+                for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m) {
+                    const PedalParamSpec &spec = kPedalParams[pedalMiniParam(i, m)];
+                    if (spec.kind != PedalParamKind::List || !pedalMiniRect(i, m).contains(fx, fy))
+                        continue;
+                    cycleList(spec, -1);
+                    return;
+                }
             }
         }
         return;
@@ -1701,7 +1898,7 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
             handleSettingsClick(fx, contentY(fy));
             return;
         case geo::Page::Pedalboard:
-            // A placeholder page, and the back button above is the only thing on it.
+            handlePedalboardClick(fx, fy);
             return;
     }
 }
@@ -1779,6 +1976,64 @@ bool RationsEditorView::handleCabinetClick(float x, float y)
         return true;
     }
     return handleIrRowClick(0, x, y) || handleIrRowClick(1, x, y);
+}
+
+//------------------------------------------------------------------------
+// Step a list parameter by one, wrapping at both ends. Wrapping rather than clamping because
+// twelve sync divisions in a 62-unit box are reached by repeated clicking, and a list that stops
+// dead at "1/16T" makes the player click eleven times to get back to Free.
+void RationsEditorView::cycleList(const PedalParamSpec &spec, int dir)
+{
+    const int n = static_cast<int>(spec.max - spec.min + 0.5) + 1;
+    if (n <= 1)
+        return;
+    const int cur = static_cast<int>(pedalPlain(spec, paramValue(spec.id)) - spec.min + 0.5);
+    const int next = ((cur + dir) % n + n) % n;
+    editParam(spec.id, static_cast<double>(next) / static_cast<double>(n - 1));
+    invalidate();
+}
+
+//------------------------------------------------------------------------
+// Every control on this page, in one loop over kPedalParams. There is no per-pedal case and there
+// is deliberately no room for one: what a pedal owns is its slice of the table, and the face was
+// generated from that slice, so the hit test walks the same slice in the same order.
+//
+// A pedal that is switched OFF is still fully editable. That is not an oversight: a player dials
+// a delay in and then stomps it, and the alternative - refusing clicks until the LED is lit -
+// would mean the only way to set a pedal up is to hear it first.
+bool RationsEditorView::handlePedalboardClick(float x, float y)
+{
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
+            const geo::PedalPoint pt = geo::pedalKnobCenter(i, k);
+            if (!hitCircle(x, y, static_cast<float>(pt.x), static_cast<float>(pt.y),
+                           static_cast<float>(geo::kPedalKnobHitR)))
+                continue;
+            startDrag(kPedalParams[pedalKnobParam(i, k)].id, x, y);
+            invalidate();
+            return true;
+        }
+        for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m) {
+            if (!pedalMiniRect(i, m).contains(x, y))
+                continue;
+            const PedalParamSpec &spec = kPedalParams[pedalMiniParam(i, m)];
+            if (spec.kind == PedalParamKind::Toggle) {
+                editParam(spec.id, paramValue(spec.id) > 0.5 ? 0.0 : 1.0);
+                invalidate();
+            } else {
+                cycleList(spec, +1);
+            }
+            return true;
+        }
+        // Last, because its box is the generous one and would otherwise swallow a neighbour.
+        if (pedalSwitchRect(i).contains(x, y)) {
+            const Vst::ParamID id = kPedalOnId[i];
+            editParam(id, paramValue(id) > 0.5 ? 0.0 : 1.0);
+            invalidate();
+            return true;
+        }
+    }
+    return false;
 }
 
 //------------------------------------------------------------------------
@@ -1932,6 +2187,33 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
             nudgeParam(kInputCalLevelId,
                        delta * geo::kCalWheelDb / (ranges::kCalMax - ranges::kCalMin));
             return;
+        }
+        return;
+    }
+    if (mPage == geo::Page::Pedalboard) {
+        // This page fits its window at every legal scale, so it has no scrollbar and the wheel
+        // nudges whatever is under the pointer - which is exactly what the settings page's rule
+        // prescribes for a page that does not scroll.
+        for (int i = 0; i < geo::kPedalCount; ++i) {
+            for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
+                const geo::PedalPoint pt = geo::pedalKnobCenter(i, k);
+                if (!hitCircle(fx, fy, static_cast<float>(pt.x), static_cast<float>(pt.y),
+                               static_cast<float>(geo::kPedalKnobHitR)))
+                    continue;
+                nudgeParam(kPedalParams[pedalKnobParam(i, k)].id, delta * 0.05);
+                return;
+            }
+            for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m) {
+                if (!pedalMiniRect(i, m).contains(fx, fy))
+                    continue;
+                const PedalParamSpec &spec = kPedalParams[pedalMiniParam(i, m)];
+                // A list steps by whole entries: landing between two sync divisions is not a
+                // state the parameter has, and a 0.05 nudge on a twelve-entry list would skip
+                // some of them and repeat others.
+                if (spec.kind == PedalParamKind::List)
+                    cycleList(spec, delta > 0 ? 1 : -1);
+                return;
+            }
         }
         return;
     }

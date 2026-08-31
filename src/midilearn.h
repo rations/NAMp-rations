@@ -30,10 +30,45 @@
 //     learned note is the one binding of the three that can be pinned to one MIDI channel, and
 //     it is stored that way rather than being flattened to match the other two.
 //
-// The table is GENERIC OVER ParamID and value rather than hard-wired to the four channels: a
-// pedal on/off row later is a row of data, not a rework. This build fills in four rows, one per
-// channel. The gate toggle is deliberately absent - it is not on the MIDI path at all and stays
-// on for as long as the user has it on.
+// The table is GENERIC OVER ParamID and value rather than hard-wired to the four channels, and
+// the pedalboard is what that generality was for: the five footswitch rows are five rows of data
+// and no new mechanism. The gate toggle is deliberately absent - it is not on the MIDI path at
+// all and stays on for as long as the user has it on.
+//
+// WHAT A ROW PERFORMS, AND WHY THE TWO HALVES OF THE TABLE DIFFER. A channel row SETS: the four
+// of them are four positions of one switch, and "go to OD2" is the whole of what a player means
+// by stamping on that button. A pedal row TOGGLES, and it has to, because a footswitch that could
+// only ever turn a pedal ON would need a second button to turn it off - five pedals would eat ten
+// of the four buttons a footswitch has.
+//
+// WHAT COUNTS AS A PRESS depends on the controller, and there are three kinds. This mattered more
+// than it looks, because the rule here was originally written for one of them and quietly broke
+// the other:
+//
+//   * PROGRAMMED - each slot sends one fixed number on every press and nothing on release
+//     (CC 4 value 127, say, or Program Change 4). This is what a programmable MIDI footswitch
+//     normally is, and the identical message arrives every time.
+//   * MOMENTARY - 127 when the foot goes down, 0 when it comes up. A spring-return switch.
+//   * ALTERNATING - 127, then 0, then 127, one message per press, the value tracking a latch
+//     inside the controller.
+//
+// A press is therefore any value at or above 64 - the MIDI switch threshold - and a value below it
+// is a release and does nothing. The rule used to require a RISING edge, at or above 64 having
+// previously been below, which serves a momentary switch exactly and makes a PROGRAMMED one work
+// once and then go dead: its second press is not an edge. That was invisible on a channel row,
+// because selecting Clean twice is selecting Clean, and it would have been fatal on a pedal row.
+// Measured against the built bundle rather than reasoned about: three presses of one value gave
+// on, nothing, nothing.
+//
+// What the edge test was really protecting is done by the BLOCK instead, in the processor: the
+// thing that must not fire repeatedly is a host writing the same value into the parameter every
+// block, and that is exactly a repeat in the immediately following block. A foot cannot arrive
+// twice inside one 2.67 ms period, so no real press is suppressed and no clock is consulted.
+//
+// ALTERNATING is the one kind not fully served: its releases are indistinguishable from a
+// momentary switch's, so it takes two stamps per change. Serving it instead would mean following
+// the value, which would make a momentary switch useless - on only while a foot was held down -
+// so it is a mode to avoid programming rather than a case to guess at.
 
 #pragma once
 
@@ -89,25 +124,81 @@ struct MidiBinding {
 std::uint32_t packBinding(const MidiBinding &b);
 MidiBinding unpackBinding(std::uint32_t word);
 
-// What a row performs when its binding matches: a parameter and the value to set it to. Fixed at
-// compile time in this build - the four rows are the four channels - so the audio thread never
-// has to publish a target, only a binding.
+// What a row does with its parameter. See the file header for why a channel sets and a pedal
+// toggles, and for what a latching footswitch costs.
+enum class MidiAction {
+    Set = 0,    // store the row's value
+    Toggle = 1, // flip between 0 and 1 - only legal on a parameter whose step count is 1
+};
+
+// What a row performs when its binding matches: a parameter, an action, and the value the action
+// uses. Fixed at compile time, so the audio thread never has to publish a target, only a binding.
 struct MidiLearnTarget {
     const char *label;             // what the settings page calls this row
     Steinberg::Vst::ParamID param; // what it performs
-    double value;                  // ... and to what, normalized
+    MidiAction action;             // ... and how
+    double value;                  // what Set stores, normalized. Toggle does not read it.
 };
 
-// Four rows: one per channel. kChannelId is a list parameter, so the value is that channel's
-// step - see normFromChannel in rationsprocessor.h, which this must agree with. Written out
-// rather than computed so the table reads as a table.
-inline constexpr int kMidiLearnRowCount = kChannelCount;
+// Nine rows: four channels, then five pedal footswitches in the order the board is wired.
+//
+// kChannelId is a list parameter, so a channel row's value is that channel's step - see
+// normFromChannel in rationsids.h, which this must agree with. Written out rather than computed so
+// the table reads as a table; the static_asserts below are what keep it honest about the half of
+// it that is computed elsewhere.
+inline constexpr int kMidiLearnChannelRows = kChannelCount;
+inline constexpr int kMidiLearnRowCount = kChannelCount + kPedalCount;
 inline constexpr MidiLearnTarget kMidiLearnRows[kMidiLearnRowCount] = {
-    {"Clean", kChannelId, 0.0},
-    {"Crunch", kChannelId, 1.0 / 3.0},
-    {"OD1", kChannelId, 2.0 / 3.0},
-    {"OD2", kChannelId, 1.0},
+    {"Clean", kChannelId, MidiAction::Set, 0.0},
+    {"Crunch", kChannelId, MidiAction::Set, 1.0 / 3.0},
+    {"OD1", kChannelId, MidiAction::Set, 2.0 / 3.0},
+    {"OD2", kChannelId, MidiAction::Set, 1.0},
+    {"Boost", kBoostOnId, MidiAction::Toggle, 0.0},
+    {"Chorus", kChorusOnId, MidiAction::Toggle, 0.0},
+    {"Flanger", kFlangerOnId, MidiAction::Toggle, 0.0},
+    {"Delay", kDelayOnId, MidiAction::Toggle, 0.0},
+    {"Reverb", kReverbOnId, MidiAction::Toggle, 0.0},
 };
+
+// The pedal half of that table is written out by hand and derived in kPedalParams, so it is
+// checked rather than trusted: a pedal reordered there, or a sixth one added, is a compile error
+// here instead of a footswitch that turns on somebody else's pedal.
+constexpr bool midiPedalRowsMatchPedals()
+{
+    for (int p = 0; p < kPedalCount; ++p) {
+        const MidiLearnTarget &row = kMidiLearnRows[kMidiLearnChannelRows + p];
+        if (row.param != kPedalOnId[p] || row.action != MidiAction::Toggle)
+            return false;
+        // Toggle flips between 0 and 1, which is only a value that parameter can take if its step
+        // count is 1. Every pedal's first entry is its footswitch, and that is asserted in
+        // rationsids.h; this is the other half of the claim - that it is a Toggle.
+        if (kPedalParams[pedalParamFirst(p)].kind != PedalParamKind::Toggle)
+            return false;
+    }
+    return true;
+}
+static_assert(midiPedalRowsMatchPedals(),
+              "the pedal rows must stay in kPedalParams' order and stay toggles");
+
+// A channel row does not toggle, and its value has to be a step kChannelId can actually take.
+constexpr bool midiChannelRowsAreChannels()
+{
+    for (int c = 0; c < kMidiLearnChannelRows; ++c)
+        if (kMidiLearnRows[c].param != kChannelId ||
+            kMidiLearnRows[c].action != MidiAction::Set ||
+            kMidiLearnRows[c].value != normFromChannel(static_cast<Channel>(c)))
+            return false;
+    return true;
+}
+static_assert(midiChannelRowsAreChannels(), "a channel row must set kChannelId to its own step");
+
+// How many rows a state blob written before the pedalboard holds. FROZEN: it is a fact about
+// versions 2 to 5 of that format, not about this build's table, so it stays 4 whatever
+// kMidiLearnRowCount becomes. From version 6 the block carries its own count and this is not
+// consulted - see kStateVersion.
+inline constexpr int kMidiLearnRowsV2 = 4;
+static_assert(kMidiLearnRowsV2 <= kMidiLearnRowCount,
+              "an old blob's rows must all still have somewhere to land");
 
 // Does an incoming message match this binding? `channel` is the channel the message arrived on,
 // or kMidiAnyChannel when the route did not carry one (CC and Program Change - see the header).

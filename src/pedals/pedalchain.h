@@ -43,6 +43,17 @@ public:
     // and the Delay falls back to its free-running time.
     void setTempo(double bpm) { mTempoBpm = bpm; }
 
+    // What the board adds to the plug-in's reported latency, in HOST-rate samples. Reported
+    // WHETHER OR NOT the pedal that causes it is engaged, and that is the whole point: the only
+    // contributor today is the Boost's 4x oversampler, whose half-band filters run either way, and
+    // a latency that moved when a footswitch was stomped would make the host recompute delay
+    // compensation mid-song. Some hosts glitch when it moves; none mind a constant.
+    //
+    // Rounded, because getLatencySamples is an integer count and a polyphase IIR's delay is
+    // fractional (4.433) and frequency-dependent anyway - the figure is its DC delay, so the 0.43
+    // of a sample left over is 9 microseconds at 48 kHz and is not a thing that can be reported.
+    static int latencySamples();
+
     void processPre(DSP_SAMPLE *mono, int numSamples);
     void processPost(DSP_SAMPLE *l, DSP_SAMPLE *r, int numSamples);
 

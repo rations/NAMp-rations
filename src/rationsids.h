@@ -377,7 +377,12 @@ inline constexpr PedalParamSpec kPedalParams[] = {
     // keeps its value so unsyncing returns to where the player left it.
     {kDelayOnId, kPedalDelay, "Delay", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
     {kDelayTimeId, kPedalDelay, "Delay Time", "Time", "ms", PedalParamKind::Range, 20, 2000, 400, 0},
-    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Feedback", "%", PedalParamKind::Range, 0, 95, 35, 0},
+    // "Repeats" rather than "Feedback" on the enclosure: the word is the one an outer knob's
+    // legend has room for (68 px against 62 at kPedalLabelSize, caught by panelrender's text
+    // audit), and it is what the object being modelled prints - Boss abbreviates to F.BACK, MXR
+    // prints REGEN, and "Repeats" says the same thing without an abbreviation. The HOST still sees
+    // "Delay Feedback", which is the name that has to be unambiguous in an automation lane.
+    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Repeats", "%", PedalParamKind::Range, 0, 95, 35, 0},
     {kDelayToneId, kPedalDelay, "Delay Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
     {kDelayMixId, kPedalDelay, "Delay Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 30, 0},
     {kDelaySyncId, kPedalDelay, "Delay Sync", "Sync", nullptr, PedalParamKind::List, 0, kDelaySyncCount - 1, 0, 0},
@@ -395,6 +400,13 @@ inline constexpr PedalParamSpec kPedalParams[] = {
 // that a future build with far more controls still loads what this one understands, and small
 // enough that a corrupt length cannot make the reader spin.
 inline constexpr Steinberg::int32 kPedalStateMax = 1024;
+
+// The same bound for the MIDI learn table's own length prefix, which state version 6 gave it for
+// the same reason: the table stopped being four rows the moment the pedalboard wanted five more,
+// and a fixed count in the middle of a blob makes every later row of it unreadable when the count
+// changes. 256 rather than 1024 only because a learn table is a list of footswitch buttons and
+// nobody has 1024 of those.
+inline constexpr Steinberg::int32 kMidiRowStateMax = 256;
 
 // Derived, never hand-counted. The first version of this line carried a literal, got it wrong by
 // one, and the compiler caught it — but the same literal is also what the state blob writes as its
@@ -465,6 +477,63 @@ inline constexpr bool pedalSlicesStartWithSwitch()
     return true;
 }
 
+// --- how a pedal's slice becomes a face -------------------------------------------------------
+// The enclosure art is BLANK — no knobs, no lettering — so the editor generates each face from
+// the parameter table rather than from a per-pedal layout. The rule is one line long: a Range
+// control is a knob, and anything else that is not the footswitch is a small text control beside
+// the LED. That is what makes adding a knob to a pedal a one-line change to kPedalParams, and it
+// is why the two functions below live here, next to the table they read, rather than in
+// geometry.h — where a control goes is layout, but WHICH controls exist is the parameter list.
+//
+// Both are constexpr and are used at compile time by geometry.h's static_asserts, which is the
+// only thing standing between "a sixth knob was added" and a pedal face that silently draws four.
+
+// The k-th knob (Range control) of a pedal, as an index into kPedalParams, or -1 if there is no
+// such knob. The footswitch is skipped by starting at 1: pedalSlicesStartWithSwitch() is what
+// makes that safe, and it is asserted above.
+inline constexpr int pedalKnobParam(int pedal, int k)
+{
+    const int first = pedalParamFirst(pedal);
+    int n = 0;
+    for (int i = 1; i < pedalParamLen(pedal); ++i) {
+        if (kPedalParams[first + i].kind != PedalParamKind::Range)
+            continue;
+        if (n++ == k)
+            return first + i;
+    }
+    return -1;
+}
+inline constexpr int pedalKnobCount(int pedal)
+{
+    int n = 0;
+    while (pedalKnobParam(pedal, n) >= 0)
+        ++n;
+    return n;
+}
+
+// Everything else in the slice: today that is the Delay's Sync division and its Ping-Pong switch,
+// and nothing on any other pedal. They are drawn as small text controls either side of the LED
+// because a list and a two-state switch are both things a knob reads badly.
+inline constexpr int pedalMiniParam(int pedal, int k)
+{
+    const int first = pedalParamFirst(pedal);
+    int n = 0;
+    for (int i = 1; i < pedalParamLen(pedal); ++i) {
+        if (kPedalParams[first + i].kind == PedalParamKind::Range)
+            continue;
+        if (n++ == k)
+            return first + i;
+    }
+    return -1;
+}
+inline constexpr int pedalMiniCount(int pedal)
+{
+    int n = 0;
+    while (pedalMiniParam(pedal, n) >= 0)
+        ++n;
+    return n;
+}
+
 // Normalized (what the host and the parameter queue carry) to plain (what the DSP wants). One
 // function, so the controller's RangeParameter and this can never disagree about a range.
 inline double pedalPlain(const PedalParamSpec &spec, double norm)
@@ -486,7 +555,7 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // Version of the state blob written by getState and accepted by setState / setComponentState.
 // Version 1 ended after the two IR paths; version 2 appends the MIDI learn table; version 3
 // appends the four channel trims; version 4 appends the output section and the four capture
-// sources. An older blob is still loaded - it is a project saved before the pedal, the trims or
+// sources; version 5 appends the pedalboard, length-prefixed. An older blob is still loaded - it is a project saved before the pedal, the trims or
 // the loader could do anything - so this is a minimum-compatible marker rather than a gate, and
 // the readers check the version before reading anything an older writer would not have written.
 //
@@ -496,7 +565,17 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // version 3 build resolved those from inside the bundle and never wrote down where they came
 // from. There is no honest way to recover that, so such a project opens with four empty channels
 // and the settings page asking for them - silence a user can fix, rather than a guess at a path.
-inline constexpr Steinberg::int32 kStateVersion = 5;
+//
+// Version 6 does not APPEND anything, which is why it is a version at all. It gives the MIDI
+// learn table a length prefix, in the middle of the blob where that table has always sat, because
+// the pedalboard's five footswitch rows made kMidiLearnRowCount grow from four to nine - and a
+// fixed count in the middle of a blob is unreadable by a build that disagrees about it. A version
+// 2-5 reader would take the first four words and then read five of them as channel trims; a
+// version 6 reader given an old blob would eat five of the trims as bindings. So the count is
+// written down, an old blob is read as exactly kMidiLearnRowsV2 rows (frozen at 4 in midilearn.h),
+// and rows beyond what this build has are skipped rather than refused - which is what lets a blob
+// from a build with MORE rows still open here.
+inline constexpr Steinberg::int32 kStateVersion = 6;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.

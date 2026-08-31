@@ -594,6 +594,9 @@ endif()
 add_executable(rations_offline
     ${RATIONS_ROOT}/tools/rations_offline.cpp
     ${RATIONS_MODULE_LOADER}
+    # For MemoryStream, which --save-state / --load-state need and which sdk_hosting
+    # does not carry. Same reason rations_ircheck names it.
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
 )
@@ -812,6 +815,18 @@ target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
 # must not be allowed to elide them, and NDEBUG must not disable the checks.
 target_compile_options(rations_rtcheck PRIVATE -Wall -O0 -UNDEBUG)
 endif()
+
+# ---------------------------------------------------------------------------
+# rations_pedalcheck — measures the pedalboard's DSP against the circuit it
+# claims to model. Links the pedal sources directly rather than driving the
+# bundle: the PRE chain is upstream of the amp models, so anything measured at
+# the plug-in's output has four neural captures and a cabinet in front of it.
+# ---------------------------------------------------------------------------
+add_executable(rations_pedalcheck ${RATIONS_ROOT}/tools/rations_pedalcheck.cpp)
+target_include_directories(rations_pedalcheck
+    PRIVATE ${RATIONS_ROOT}/src ${RATIONS_ROOT}/deps ${AUDIO_DSP_TOOLS_DIR} ${VST3_SDK_DIR})
+target_compile_features(rations_pedalcheck PRIVATE cxx_std_17)
+target_compile_options(rations_pedalcheck PRIVATE -Wall -Wextra -O2)
 
 # midilearn.cpp comes along because the settings page's text is not decoration:
 # what a binding reads as is what the audit has to measure, so the tool formats

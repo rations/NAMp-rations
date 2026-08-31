@@ -86,6 +86,12 @@ public:
     const std::string &channelNameOverride(int channel) const;
     std::string channelName(int channel) const;
 
+    // What one MIDI learn row is called. The first four are channels, so they follow whatever the
+    // user renamed that channel to; the rest are the pedalboard's footswitches, whose names are
+    // the pedals' own and are not the user's to change. One function so the settings page can draw
+    // nine rows without knowing which half it is on.
+    std::string midiRowLabel(int row) const;
+
     // How many captures that channel holds, and whether they came from a folder. Both from the
     // processor's capability report, so both are zero/false until the workers have caught up.
     int entryCount(int channel) const;

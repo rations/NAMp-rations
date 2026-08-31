@@ -74,6 +74,18 @@ struct Options {
     // cost while a knob is turning — so measuring it is how you tell "this buffer size cannot
     // afford a switch" from "this buffer size cannot afford this plug-in".
     bool sweepGain = false;
+    // Which pedals to engage before the run, as a bit per pedal in kPedalOnId's order. NONE by
+    // default, because the number this gate is built to protect is what a CHANNEL SWITCH costs and
+    // a disengaged pedal is skipped outright by the base class - so the default run measures the
+    // switch and nothing else, and stays comparable with every figure recorded for it before the
+    // pedalboard existed.
+    //
+    // A SET rather than a flag, because "the board does not fit" is not an actionable finding and
+    // "this pedal does not fit" is. The five are not alike: the Boost solves a stiff ODE by Newton
+    // iteration at 4x oversampling and the other four are delay lines and biquads, so a run with
+    // everything but the Boost is the control that says which of those two facts the xruns are
+    // about.
+    unsigned pedals = 0;
 };
 
 // Everything the RT callback touches, all of it built before the callback can run. Nothing here
@@ -99,6 +111,10 @@ struct Rig {
     int stompFrames = 0;
     int restompFrames = 0;
     bool sweepGain = false;
+    // Pushed once, on the first block, and never again: a footswitch is stomped, not held down,
+    // and re-sending it every block would be measuring a parameter queue rather than a pedalboard.
+    unsigned engagePedals = 0;
+    bool pedalsPushed = false;
     int channel = 0;     // the channel most recently asked for
     int lastChannel = 0; // where a re-stomp goes back to
     long long stomps = 0;
@@ -192,6 +208,20 @@ int processCallback(jack_nframes_t nframes, void *)
         ++r.stomps;
     }
 
+    if (r.engagePedals != 0 && !r.pedalsPushed) {
+        r.pedalsPushed = true;
+        for (int p = 0; p < Rations::kPedalCount; ++p) {
+            if ((r.engagePedals & (1u << p)) == 0)
+                continue;
+            int32 queueIndex = 0;
+            if (Vst::IParamValueQueue *q =
+                    r.paramChanges.addParameterData(Rations::kPedalOnId[p], queueIndex)) {
+                int32 pointIndex = 0;
+                q->addPoint(0, 1.0, pointIndex);
+            }
+        }
+    }
+
     if (r.sweepGain) {
         // A dial that never stops moving, so the auto-detent never collapses the second branch.
         const double phase = static_cast<double>(r.framePos % 96000) / 96000.0;
@@ -251,6 +281,41 @@ int xrunCallback(void *)
     return 0;
 }
 
+// "all", "none", or a comma-separated list of pedal names. Names rather than indices, because a
+// gate's command line ends up in a commit message and "--pedals chorus,flanger,delay,reverb" says
+// what was measured where "--pedals 30" does not.
+bool parsePedals(const std::string &spec, unsigned &mask)
+{
+    static const char *kNames[Rations::kPedalCount] = {"boost", "chorus", "flanger", "delay",
+                                                       "reverb"};
+    if (spec == "all") {
+        mask = (1u << Rations::kPedalCount) - 1u;
+        return true;
+    }
+    if (spec == "none") {
+        mask = 0;
+        return true;
+    }
+    mask = 0;
+    size_t at = 0;
+    while (at <= spec.size()) {
+        const size_t comma = spec.find(',', at);
+        const std::string one = spec.substr(at, comma == std::string::npos ? comma : comma - at);
+        bool known = false;
+        for (int p = 0; p < Rations::kPedalCount; ++p)
+            if (one == kNames[p]) {
+                mask |= 1u << p;
+                known = true;
+            }
+        if (!known)
+            return false;
+        if (comma == std::string::npos)
+            break;
+        at = comma + 1;
+    }
+    return true;
+}
+
 bool parseArgs(int argc, char **argv, Options &o)
 {
     for (int i = 1; i < argc; ++i) {
@@ -281,6 +346,15 @@ bool parseArgs(int argc, char **argv, Options &o)
             o.connect = true;
         } else if (a == "--sweep-gain") {
             o.sweepGain = true;
+        } else if (a == "--pedals") {
+            if (!(v = next()))
+                return false;
+            if (!parsePedals(v, o.pedals)) {
+                fprintf(stderr, "rations_jackcheck: '%s' is not a pedal; try all, none, or a\n"
+                                "  comma-separated list of boost, chorus, flanger, delay, reverb\n",
+                        v);
+                return false;
+            }
         } else if (o.bundle.empty()) {
             o.bundle = a;
         } else {
@@ -291,7 +365,8 @@ bool parseArgs(int argc, char **argv, Options &o)
     if (o.bundle.empty()) {
         fprintf(stderr, "usage: rations_jackcheck <Rations.vst3> [--captures <dir>]\n"
                         "       [--seconds S] [--stomp-ms N] [--restomp-ms N] [--settle-ms N]\n"
-                        "       [--connect] [--sweep-gain]\n");
+                        "       [--connect] [--sweep-gain]\n"
+                        "       [--pedals all|none|boost,chorus,flanger,delay,reverb]\n");
         return false;
     }
     return true;
@@ -377,11 +452,12 @@ int main(int argc, char **argv)
     // Pre-sized here, on the message thread. addParameterData()/addPoint() on the RT thread then
     // reuse what is already reserved and never grow a vector — the same property the plug-in's
     // own meter feedback relies on.
-    r.paramChanges.setMaxParameters(8);
+    r.paramChanges.setMaxParameters(8 + Rations::kPedalCount);
     r.outParamChanges.setMaxParameters(8);
     r.data.inputParameterChanges = &r.paramChanges;
     r.data.outputParameterChanges = &r.outParamChanges;
     r.sweepGain = opt.sweepGain;
+    r.engagePedals = opt.pedals;
     r.stompFrames = static_cast<int>(opt.stompMs * 0.001 * rate);
     r.restompFrames = opt.restompMs > 0 ? static_cast<int>(opt.restompMs * 0.001 * rate) : 0;
     r.nextStomp = r.stompFrames;
@@ -401,6 +477,15 @@ int main(int argc, char **argv)
            Rations::engine::kSwitchModelBudget);
     printf("stomps         every %d ms, with a second stomp %d ms later%s\n", opt.stompMs,
            opt.restompMs, opt.sweepGain ? ", gain dial sweeping" : "");
+    if (opt.pedals != 0) {
+        printf("  pedals engaged:");
+        static const char *kNames[Rations::kPedalCount] = {"Boost", "Chorus", "Flanger", "Delay",
+                                                           "Reverb"};
+        for (int p = 0; p < Rations::kPedalCount; ++p)
+            if (opt.pedals & (1u << p))
+                printf(" %s", kNames[p]);
+        printf("\n");
+    }
 
     // The four banks, handed over before the transport starts. This is the tool that measures the
     // switch, so all four channels must actually hold captures: a switch to an empty channel is

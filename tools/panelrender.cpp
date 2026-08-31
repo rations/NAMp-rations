@@ -136,9 +136,10 @@ void drawToggle(Canvas &c, ImageCache &images, const geo::ToggleSpec &t, bool on
 }
 
 //------------------------------------------------------------------------
-void drawLed(Canvas &c, ImageCache &images, float cx, float cy, bool lit)
+void drawLed(Canvas &c, ImageCache &images, float cx, float cy, bool lit,
+             float r = static_cast<float>(geo::kLedR))
 {
-    const Rect dest(cx - geo::kLedR, cy - geo::kLedR, 2.0f * geo::kLedR, 2.0f * geo::kLedR);
+    const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
     if (cairo_surface_t *led = images.get(lit ? "led_on" : "led_off")) {
         c.drawImage(led, dest);
     } else {
@@ -318,6 +319,94 @@ void renderCabinet(Canvas &c, ImageCache &images, SvgCache &icons)
 }
 
 //------------------------------------------------------------------------
+// The pedalboard's lettering - plain white, mirroring RationsEditorView::drawPedalString.
+void drawPedalString(Canvas &c, const char *text, float x, float y)
+{
+    c.setColor(geo::kPedalInk);
+    c.drawString(text, x, y);
+}
+
+// One pedal's face, generated from its slice of kPedalParams exactly as the
+// editor generates it. Nothing here is per-pedal. The silkscreen is white on a
+// plain white, it does not dim - the LED carries the state - and a live control
+// inverts into a filled white plate rather than changing colour; all three rules
+// are stated at RationsEditorView::drawPedal.
+void drawPedalFace(Canvas &c, ImageCache &images, int pedal, bool on, unsigned liveMini)
+{
+    const geo::PedalSpec &p = geo::kPedals[pedal];
+
+    for (int k = 0, nk = pedalKnobCount(pedal); k < nk; ++k) {
+        const PedalParamSpec &spec = kPedalParams[pedalKnobParam(pedal, k)];
+        const geo::PedalPoint pt = geo::pedalKnobCenter(pedal, k);
+        const float cx = static_cast<float>(pt.x);
+        const float cy = static_cast<float>(pt.y);
+        drawKnob(c, images, cx, cy, static_cast<float>(geo::kPedalKnobR),
+                 pedalNorm(spec, spec.def));
+        c.setFont(Font::Title);
+        c.setFontSize(static_cast<float>(geo::kPedalLabelSize));
+        const std::string fit =
+            c.clipToWidth(spec.legend, static_cast<float>(geo::pedalKnobLabelAllowance(pedal, k)));
+        drawPedalString(c, fit.c_str(), cx - c.stringWidth(fit.c_str()) * 0.5f,
+                         cy + geo::kPedalKnobR + geo::kPedalLabelDY);
+    }
+
+    for (int m = 0, nm = pedalMiniCount(pedal); m < nm; ++m) {
+        const PedalParamSpec &spec = kPedalParams[pedalMiniParam(pedal, m)];
+        const geo::PedalPoint pt = geo::pedalMiniCenter(pedal, m);
+        const Rect box(static_cast<float>(pt.x - geo::kPedalMiniW / 2),
+                       static_cast<float>(pt.y - geo::kPedalMiniH / 2),
+                       static_cast<float>(geo::kPedalMiniW), static_cast<float>(geo::kPedalMiniH));
+        // The editor asks the controller for a list's text; there is no controller
+        // here, so the one list that exists is read straight out of the table its
+        // StringListParameter is populated from. If a second list is ever added this
+        // needs a real lookup, and the text audit below is what will say so.
+        const bool isList = spec.kind == PedalParamKind::List;
+        const char *text = isList ? kDelaySyncNames[kDelaySyncCount - 1] : spec.legend;
+        const bool live = ((liveMini >> m) & 1u) != 0u;
+        c.setColor(geo::kPedalInk);
+        if (live) {
+            c.fillRoundRect(box, static_cast<float>(geo::kPedalMiniRadius));
+        } else {
+            c.setPenSize(1.0f);
+            c.strokeRoundRect(box, static_cast<float>(geo::kPedalMiniRadius));
+        }
+        c.setFont(Font::Title);
+        c.setFontSize(static_cast<float>(geo::kPedalMiniSize));
+        const std::string fit = c.clipToWidth(text, static_cast<float>(geo::kPedalMiniW - 6));
+        const float tx = box.centerX() - c.stringWidth(fit.c_str()) * 0.5f;
+        const float ty = box.centerY() + geo::kPedalMiniSize * 0.36f;
+        if (live) {
+            c.setColor(geo::kPedalInkPlate);
+            c.drawString(fit.c_str(), tx, ty);
+        } else {
+            drawPedalString(c, fit.c_str(), tx, ty);
+        }
+    }
+
+    const geo::PedalPoint led = geo::pedalLedCenter(pedal);
+    drawLed(c, images, static_cast<float>(led.x), static_cast<float>(led.y), on,
+            static_cast<float>(geo::kPedalLedR));
+
+    const geo::PedalPoint sw = geo::pedalSwitchCenter(pedal);
+    const float r = static_cast<float>(geo::kPedalSwitchR);
+    if (cairo_surface_t *cap = images.get("pedal_switch")) {
+        c.drawImage(cap, Rect(sw.x - r, sw.y - r, 2.0f * r, 2.0f * r));
+    } else {
+        c.setColor(0x6E7276);
+        c.fillEllipse(static_cast<float>(sw.x), static_cast<float>(sw.y), r, r);
+    }
+
+    c.setFont(Font::Title);
+    c.setFontSize(static_cast<float>(geo::kPedalNameSize));
+    const std::string name =
+        c.clipToWidth(p.name, static_cast<float>(geo::kPedalFaceW));
+    drawPedalString(c, name.c_str(),
+                     geo::kPedalLeft(pedal) + geo::kPedalKnobCX -
+                         c.stringWidth(name.c_str()) * 0.5f,
+                     static_cast<float>(p.y + geo::kPedalNameY));
+}
+
+//------------------------------------------------------------------------
 void renderPedalboard(Canvas &c, ImageCache &images, SvgCache &)
 {
     c.setColor(geo::kBgColor);
@@ -354,6 +443,24 @@ void renderPedalboard(Canvas &c, ImageCache &images, SvgCache &)
                  static_cast<float>(geo::kPedalRow1Y - geo::kPedalRowLegendDY));
     c.drawString("POST", static_cast<float>(geo::kPedalRowLegendX),
                  static_cast<float>(geo::kPedalRow2Y - geo::kPedalRowLegendDY));
+
+    // The faces. Deliberately a copy of RationsEditorView::drawPedal for the same
+    // reason the enclosures above are: this tool links the graphics stack, not
+    // the plug-in. The two are kept in step by the text audit below, which
+    // measures the very strings this draws against the very allowances it clips
+    // to, and fails when either moves.
+    //
+    // Fixture values are the awkward ones rather than the tidy ones: the on/off
+    // states alternate so both are on screen at once, the Delay's Sync sits on
+    // the WIDEST of its twelve divisions rather than on "Free", and its
+    // Ping-Pong is lit — so the page shows the widest thing each control can
+    // ever be asked to draw, which is the only state worth auditing.
+    static const bool kOn[geo::kPedalCount] = {true, false, true, false, true};
+    for (int i = 0; i < geo::kPedalCount; ++i)
+        // Bit 0 of the mask is the first mini slot: the Delay's Sync draws FILLED and its
+        // Ping-Pong OUTLINED, so both halves of "filled is live, outlined is idle" are on
+        // screen in the one place either of them is ever drawn.
+        drawPedalFace(c, images, i, kOn[i], 0x1u);
 
     drawButton(c, geo::kBackButton);
 }
@@ -507,12 +614,18 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
         {MidiMsg::NoteOn, 15, 1}, // "Note C#-2 ch 16"
         {MidiMsg::ProgramChange, kMidiAnyChannel, 127},
         {MidiMsg::Unlearned, kMidiAnyChannel, 0},
+        // The five pedal rows, which are the same row drawn against the widest pedal names. Two
+        // are left unlearned, because a half-mapped board is the ordinary state of one.
+        {MidiMsg::ControlChange, kMidiAnyChannel, 80},
+        {MidiMsg::NoteOn, 0, 127}, // "Note G8 ch 1"
+        {MidiMsg::ProgramChange, kMidiAnyChannel, 5},
+        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
+        {MidiMsg::Unlearned, kMidiAnyChannel, 0},
     };
     const int kArmed = 2; // one row shown listening, so that state is on screen too
 
     for (int i = 0; i < geo::kMidiRowCount; ++i) {
-        const Rect r(geo::kMidiRowX, geo::kMidiRowY0 + i * geo::kMidiRowPitch, geo::kMidiRowW,
-                     geo::kMidiRowH);
+        const Rect r(geo::kMidiRowX, geo::midiRowY(i), geo::kMidiRowW, geo::kMidiRowH);
         c.setColor(0x0C0B0A);
         c.fillRoundRect(r, 4.0f);
         c.setColor(geo::kGold, 190);
@@ -560,6 +673,8 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
                      geo::kSettingsFootnote, cx, static_cast<float>(geo::kSettingsFootnoteY));
     drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
                      geo::kSettingsFootnote2, cx, static_cast<float>(geo::kSettingsFootnote2Y));
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     geo::kSettingsFootnote3, cx, static_cast<float>(geo::kSettingsFootnote3Y));
 
     // --- the output section ------------------------------------------------------------------
     // Drawn with Calibrated GATED and the calibration block live, which is the mixed state: a
@@ -775,6 +890,302 @@ bool auditHitBoxes()
 }
 
 //------------------------------------------------------------------------
+// VERTICAL CLEARANCE on a pedal face, measured with the real glyph ink.
+//
+// This is the audit that was missing, and the defect it exists for was found by a human looking at
+// the page rather than by anything in this file: on the four-knob faces the upper row's legends
+// touched the tops of the lower row's knobs. The arithmetic was exactly flush - a label baseline
+// sits at knob edge + kPedalLabelDY, and 44 + 20 + 12 is precisely 96 - 20 - and then "Depth",
+// "Repeats" and "Decay" hang a descender into the knob below.
+//
+// So the check is done with cairo's INK extents for the strings that are actually drawn, not with
+// the font's nominal descent and not with a constant in geometry.h. "Tone" has nothing under its
+// baseline and "Depth" does, and a row's clearance is set by whichever of its labels is worst.
+//
+// It is also done by COLUMN rather than by row: the three-knob faces are a triangle, so their
+// upper labels sit beside the lower dial and not above it, and a check that compared rows would
+// fail a layout that is correct. Two things collide only if their horizontal spans overlap.
+bool auditPedalClearance(FontStack &fonts)
+{
+    cairo_surface_t *scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t *cr = cairo_create(scratch);
+    Canvas c(cr, &fonts, 8, 8);
+
+    struct Span {
+        std::string what;
+        float l, r, top;
+    };
+    int bad = 0;
+    float worst = 1e9f;
+    std::string worstWhat;
+
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        // Everything on the face that a label could fall on to, as a horizontal span and the y its
+        // ink begins at. In pedal-local coordinates.
+        std::vector<Span> below;
+        for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
+            const geo::PedalPoint pt = geo::pedalKnobPos(nk, k);
+            below.push_back({std::string(kPedalParams[pedalKnobParam(i, k)].legend) + " knob",
+                             static_cast<float>(pt.x - geo::kPedalKnobR),
+                             static_cast<float>(pt.x + geo::kPedalKnobR),
+                             static_cast<float>(pt.y - geo::kPedalKnobR)});
+        }
+        for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m)
+            below.push_back({std::string(kPedalParams[pedalMiniParam(i, m)].legend) + " box",
+                             static_cast<float>(geo::kPedalMiniCX[m] - geo::kPedalMiniW / 2),
+                             static_cast<float>(geo::kPedalMiniCX[m] + geo::kPedalMiniW / 2),
+                             static_cast<float>(geo::kPedalMiniY - geo::kPedalMiniH / 2)});
+        below.push_back({"LED", static_cast<float>(geo::kPedalKnobCX - geo::kPedalLedR),
+                         static_cast<float>(geo::kPedalKnobCX + geo::kPedalLedR),
+                         static_cast<float>(geo::kPedalLedY - geo::kPedalLedR)});
+        below.push_back({"footswitch", static_cast<float>(geo::kPedalKnobCX - geo::kPedalSwitchR),
+                         static_cast<float>(geo::kPedalKnobCX + geo::kPedalSwitchR),
+                         static_cast<float>(geo::kPedalSwitchY - geo::kPedalSwitchR)});
+
+        for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
+            const PedalParamSpec &spec = kPedalParams[pedalKnobParam(i, k)];
+            const geo::PedalPoint pt = geo::pedalKnobPos(nk, k);
+            c.setFont(Font::Title);
+            c.setFontSize(static_cast<float>(geo::kPedalLabelSize));
+            const float w = c.stringWidth(spec.legend);
+            const float l = pt.x - w * 0.5f;
+            const float r = pt.x + w * 0.5f;
+            const float inkBottom = pt.y + geo::kPedalKnobR + geo::kPedalLabelDY +
+                                    c.stringDescent(spec.legend);
+            for (const Span &o : below) {
+                // "Below" is judged against the KNOB'S CENTRE, not against the label's ink.
+                // The first version of this compared with the ink bottom, which meant an
+                // obstacle the label had ALREADY run into counted as being above it and was
+                // skipped - so the audit silently passed the exact defect it was written for.
+                // Clearance is allowed to come out negative; that is the interesting case.
+                if (o.top <= static_cast<float>(pt.y) || r <= o.l || o.r <= l)
+                    continue; // above this knob, or in a different column
+                const float clear = o.top - inkBottom;
+                if (clear < geo::kPedalLabelClearance) {
+                    fprintf(stderr,
+                            "panelrender: on the %s, the \"%s\" legend's ink ends at y %.1f and "
+                            "the %s begins at %.1f — %.1f units of clearance, %d wanted. Move the "
+                            "row in geometry.h\n",
+                            geo::kPedals[i].name, spec.legend, inkBottom, o.what.c_str(), o.top,
+                            clear, geo::kPedalLabelClearance);
+                    ++bad;
+                }
+                if (clear < worst) {
+                    worst = clear;
+                    worstWhat = std::string(geo::kPedals[i].name) + " " + spec.legend + " over " +
+                                o.what;
+                }
+            }
+        }
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(scratch);
+    if (bad == 0)
+        printf("pedal rows tightest legend clearance %.1f units (%s), %d wanted\n", worst,
+               worstWhat.c_str(), geo::kPedalLabelClearance);
+    return bad == 0;
+}
+
+//------------------------------------------------------------------------
+// The silkscreen ink, RE-MEASURED FROM THE ART. geometry.h names one of two inks per pedal and
+// records the contrast ratios it was chosen by; this recomputes them from the enclosure's own
+// pixels and fails if the named ink is not the higher-contrast of the two. That is what stops a
+// re-export - a slightly lighter green, a different yellow - from leaving a face lettered in
+// something nobody can read, which is a defect no other audit here would notice.
+//
+// WCAG 2.x relative luminance and contrast ratio, over the mean of the enclosure's fully-opaque
+// pixels inside the body box the lettering actually occupies. The mean is the right statistic
+// because the art is a flat colour under a concentric ring texture: there is no second colour
+// region for an average to hide.
+double srgbToLinear(double v)
+{
+    return v <= 0.03928 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+}
+double luminanceOf(uint32_t rgb)
+{
+    return 0.2126 * srgbToLinear(((rgb >> 16) & 0xFF) / 255.0) +
+           0.7152 * srgbToLinear(((rgb >> 8) & 0xFF) / 255.0) +
+           0.0722 * srgbToLinear((rgb & 0xFF) / 255.0);
+}
+double contrastRatio(double a, double b)
+{
+    return (std::max(a, b) + 0.05) / (std::min(a, b) + 0.05);
+}
+
+bool auditPedalInk(ImageCache &images)
+{
+    // The body box in the ART's own pixels: the enclosure without its jack lugs, from the top of
+    // the first knob row to the name's baseline. Everything lettered lands inside it.
+    const int x0 = geo::kPedalFaceLeft * geo::kPedalArtW / geo::kPedalW;
+    const int x1 = geo::kPedalFaceRight * geo::kPedalArtW / geo::kPedalW;
+    const int y0 = (geo::kPedalKnob4Row1Y - geo::kPedalKnobR) * geo::kPedalArtH / geo::kPedalH;
+    const int y1 = geo::kPedalNameY * geo::kPedalArtH / geo::kPedalH;
+
+    int bad = 0;
+    std::string line;
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        cairo_surface_t *art = images.get(geo::kPedals[i].art);
+        if (!art)
+            continue; // already counted as a missing asset
+        cairo_surface_flush(art);
+        const unsigned char *data = cairo_image_surface_get_data(art);
+        const int stride = cairo_image_surface_get_stride(art);
+        const int w = cairo_image_surface_get_width(art);
+        const int h = cairo_image_surface_get_height(art);
+        if (!data)
+            continue;
+        double sr = 0, sg = 0, sb = 0;
+        long n = 0;
+        for (int y = std::max(0, y0); y < std::min(h, y1); ++y)
+            for (int x = std::max(0, x0); x < std::min(w, x1); ++x) {
+                const uint32_t px = *reinterpret_cast<const uint32_t *>(data + y * stride + x * 4);
+                if ((px >> 24) != 0xFFu)
+                    continue; // premultiplied: only fully-opaque pixels are read directly
+                sr += (px >> 16) & 0xFF;
+                sg += (px >> 8) & 0xFF;
+                sb += px & 0xFF;
+                ++n;
+            }
+        if (n == 0) {
+            fprintf(stderr, "panelrender: %s.png has no opaque body pixels to measure\n",
+                    geo::kPedals[i].art);
+            ++bad;
+            continue;
+        }
+        const uint32_t mean = (static_cast<uint32_t>(sr / n + 0.5) << 16) |
+                              (static_cast<uint32_t>(sg / n + 0.5) << 8) |
+                              static_cast<uint32_t>(sb / n + 0.5);
+        // While the art is open, re-derive the printable FACE from it. geometry.h names 22..168
+        // and every legend's allowance is measured against those two numbers; they were wrong
+        // once (they were the outermost opaque pixel, which is the outside of the border trim,
+        // not the edge of the coloured face) and a legend printed on the border as a result. Walk
+        // out from the centre line until the face colour gives way to the trim.
+        {
+            const int yMid = (y0 + y1) / 2;
+            const uint32_t *row = reinterpret_cast<const uint32_t *>(data + yMid * stride);
+            auto lumAt = [&](int x) {
+                const uint32_t q = row[x];
+                return luminanceOf(q & 0x00FFFFFFu);
+            };
+            const int mid = w / 2;
+            const double ref = lumAt(mid);
+            int fr = mid, fl = mid;
+            while (fr + 1 < w && (row[fr + 1] >> 24) > 200u && lumAt(fr + 1) > ref * 0.35)
+                ++fr;
+            while (fl - 1 >= 0 && (row[fl - 1] >> 24) > 200u && lumAt(fl - 1) > ref * 0.35)
+                --fl;
+            const int faceL = fl * geo::kPedalW / geo::kPedalArtW;
+            const int faceR = (fr + 1) * geo::kPedalW / geo::kPedalArtW;
+            if (faceL > geo::kPedalFaceLeft || faceR < geo::kPedalFaceRight) {
+                fprintf(stderr,
+                        "panelrender: %s's printable face measures %d..%d but geometry.h letters "
+                        "it to %d..%d — lettering would print on the border trim. Update "
+                        "kPedalFaceLeft/kPedalFaceRight and re-check every legend's allowance\n",
+                        geo::kPedals[i].name, faceL, faceR, geo::kPedalFaceLeft,
+                        geo::kPedalFaceRight);
+                ++bad;
+            }
+        }
+
+        const double ratio =
+            contrastRatio(luminanceOf(mean), luminanceOf(geo::kPedalInk));
+        char buf[64];
+        snprintf(buf, sizeof buf, "%s %.2f  ", geo::kPedals[i].name, ratio);
+        line += buf;
+    }
+    if (bad == 0)
+        printf("pedal ink  white on: %s(WCAG contrast against each enclosure's own mean face "
+               "pixels; the two under 2.0 are what bright yellow costs, and no ink in the palette "
+               "does better on them)\n",
+               line.c_str());
+    return bad == 0;
+}
+
+//------------------------------------------------------------------------
+// The pedalboard's hit boxes, ONE PEDAL AT A TIME. Per pedal rather than across
+// the page because the enclosures do not touch — kPedalGap is 22 units of bare
+// board between them — so the only way two targets can fight is inside one face,
+// and checking the whole page at once would drown that in 120 trivially-disjoint
+// pairs.
+//
+// The footswitch is the one that can go wrong: its box is deliberately wider and
+// taller than its cap (a foot, not a pointer), and every unit it grows is a unit
+// nearer the mini slots above it.
+bool auditPedalHitBoxes()
+{
+    // A target is a CIRCLE or a RECTANGLE, and the check has to know which. The
+    // first version of this treated everything as its bounding box and reported
+    // four overlaps on the three-knob faces that do not exist: a knob is tested
+    // with hitCircle, and the centre knob of a triangle is 55.8 units from the
+    // one above it against two 24-unit radii, so the circles clear each other by
+    // 3.7 units while their boxes share a corner. An audit that fails on a shape
+    // the editor never uses would have moved a layout that was correct.
+    struct Target {
+        std::string what;
+        bool circle;
+        float cx, cy, r;    // circle
+        float l, t, rt, b;  // rect
+    };
+    auto overlap = [](const Target &a, const Target &b) {
+        if (a.circle && b.circle) {
+            const float dx = a.cx - b.cx, dy = a.cy - b.cy;
+            return dx * dx + dy * dy < (a.r + b.r) * (a.r + b.r);
+        }
+        if (!a.circle && !b.circle)
+            return a.l < b.rt && b.l < a.rt && a.t < b.b && b.t < a.b;
+        const Target &c = a.circle ? a : b;
+        const Target &q = a.circle ? b : a;
+        // Closest point on the rectangle to the circle's centre.
+        const float px = std::max(q.l, std::min(c.cx, q.rt));
+        const float py = std::max(q.t, std::min(c.cy, q.b));
+        const float dx = c.cx - px, dy = c.cy - py;
+        return dx * dx + dy * dy < c.r * c.r;
+    };
+
+    int hits = 0;
+    int targets = 0;
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        std::vector<Target> t;
+        for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
+            const PedalParamSpec &spec = kPedalParams[pedalKnobParam(i, k)];
+            const geo::PedalPoint pt = geo::pedalKnobCenter(i, k);
+            t.push_back({spec.title, true, static_cast<float>(pt.x), static_cast<float>(pt.y),
+                         static_cast<float>(geo::kPedalKnobHitR), 0, 0, 0, 0});
+        }
+        for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m) {
+            const PedalParamSpec &spec = kPedalParams[pedalMiniParam(i, m)];
+            const geo::PedalPoint pt = geo::pedalMiniCenter(i, m);
+            t.push_back({spec.title, false, 0, 0, 0,
+                         static_cast<float>(pt.x - geo::kPedalMiniW / 2),
+                         static_cast<float>(pt.y - geo::kPedalMiniH / 2),
+                         static_cast<float>(pt.x + geo::kPedalMiniW / 2),
+                         static_cast<float>(pt.y + geo::kPedalMiniH / 2)});
+        }
+        const geo::PedalPoint sw = geo::pedalSwitchCenter(i);
+        t.push_back({std::string(geo::kPedals[i].name) + " footswitch", false, 0, 0, 0,
+                     static_cast<float>(geo::kPedalLeft(i) + geo::kPedalBodyLeft),
+                     static_cast<float>(sw.y - geo::kPedalSwitchHitH / 2),
+                     static_cast<float>(geo::kPedalLeft(i) + geo::kPedalBodyRight),
+                     static_cast<float>(sw.y + geo::kPedalSwitchHitH / 2)});
+        targets += static_cast<int>(t.size());
+
+        for (size_t a = 0; a < t.size(); ++a)
+            for (size_t b = a + 1; b < t.size(); ++b)
+                if (overlap(t[a], t[b])) {
+                    fprintf(stderr,
+                            "panelrender: on the %s, the \"%s\" and \"%s\" hit targets overlap "
+                            "— one of them will swallow the other's clicks\n",
+                            geo::kPedals[i].name, t[a].what.c_str(), t[b].what.c_str());
+                    ++hits;
+                }
+    }
+    if (hits == 0)
+        printf("pedal hits %d targets across %d faces, none overlapping within a face\n", targets,
+               geo::kPedalCount);
+    return hits == 0;
+}
+
+//------------------------------------------------------------------------
 bool auditText(FontStack &fonts)
 {
     cairo_surface_t *scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
@@ -823,7 +1234,7 @@ bool auditText(FontStack &fonts)
     for (int i = 0; i < geo::kPedalCount; ++i)
         fits.push_back({geo::kPedals[i].name, Font::Title, geo::kPedalNameSize,
                         geo::kPedals[i].name,
-                        static_cast<float>(geo::kPedalBodyRight - geo::kPedalBodyLeft)});
+                        static_cast<float>(geo::kPedalFaceW)});
     // The row legend sits in the band ABOVE its row, not beside it, so its
     // allowance is the page's own width less the margin it starts at. (The first
     // version of this measured the space to the LEFT of the leftmost pedal, which
@@ -831,6 +1242,32 @@ bool auditText(FontStack &fonts)
     // legend does. The audit caught it, which is what the audit is for.)
     fits.push_back({"pedal row legend", Font::Title, geo::kPedalRowLegendSize, "POST",
                     static_cast<float>(geo::kPedalPageW - 2 * geo::kPedalRowLegendX)});
+    // Every knob legend on every face, measured against the space one knob's
+    // column actually has. The allowance is the knob PITCH less a margin, not the
+    // enclosure width: two knobs sit side by side on most of these faces, and a
+    // legend wider than its own column runs into its neighbour's rather than off
+    // the box, which is the failure that would not be visible at the edge.
+    for (int i = 0; i < geo::kPedalCount; ++i)
+        for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
+            const PedalParamSpec &spec = kPedalParams[pedalKnobParam(i, k)];
+            fits.push_back({spec.title, Font::Title, geo::kPedalLabelSize, spec.legend,
+                            static_cast<float>(geo::pedalKnobLabelAllowance(i, k))});
+        }
+    // The mini slots: their own legends, and — because a list draws its VALUE and
+    // not its name — every one of the twelve sync divisions. Any of them can be
+    // the string on screen, so all of them are measured.
+    for (int i = 0; i < geo::kPedalCount; ++i)
+        for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m) {
+            const PedalParamSpec &spec = kPedalParams[pedalMiniParam(i, m)];
+            if (spec.kind != PedalParamKind::List) {
+                fits.push_back({spec.title, Font::Title, geo::kPedalMiniSize, spec.legend,
+                                static_cast<float>(geo::kPedalMiniW - 6)});
+                continue;
+            }
+            for (int v = 0; v < kDelaySyncCount; ++v)
+                fits.push_back({spec.title, Font::Title, geo::kPedalMiniSize, kDelaySyncNames[v],
+                                static_cast<float>(geo::kPedalMiniW - 6)});
+        }
 
     // Settings page.
     fits.push_back({"settings heading", Font::Title, geo::kSettingsHeadingSize, "MIDI Learn",
@@ -843,7 +1280,9 @@ bool auditText(FontStack &fonts)
     // which is the negative extreme, since the minus sign is wider than the plus.
     fits.push_back({"level heading", Font::Title, geo::kSettingsHeadingSize, geo::kLevelHeading,
                     static_cast<float>(geo::kMidiRowW)});
-    for (int i = 0; i < kMidiLearnRowCount; ++i)
+    // Four, not kMidiLearnRowCount: the MIDI list has the pedals in it too and the levels do not,
+    // and the two counts stopped being the same number when the footswitch rows landed.
+    for (int i = 0; i < geo::kLevelRowCount; ++i)
         fits.push_back({"level row", Font::Title, geo::kMidiRowTextSize, kMidiLearnRows[i].label,
                         static_cast<float>(geo::kLevelSliderX) - 20.0f});
     static char levelReadout[2][24];
@@ -886,6 +1325,8 @@ bool auditText(FontStack &fonts)
                     geo::kSettingsFootnote, static_cast<float>(geo::kMidiRowW)});
     fits.push_back({"settings footnote 2", Font::Body, geo::kSettingsFootnoteSize,
                     geo::kSettingsFootnote2, static_cast<float>(geo::kMidiRowW)});
+    fits.push_back({"settings footnote 3", Font::Body, geo::kSettingsFootnoteSize,
+                    geo::kSettingsFootnote3, static_cast<float>(geo::kMidiRowW)});
 
     int bad = 0;
     for (const TextFit &f : fits) {
@@ -1059,11 +1500,38 @@ int main(int argc, char **argv)
         }
     }
 
+    // Every enclosure is drawn at ONE size and every control on it is placed by
+    // scaling the mock's own pixels down from the trimmed export, so a re-export
+    // whose trim moves by a pixel moves all five faces at once. The five must
+    // also agree with each other: one layout serves all of them, which is only
+    // legitimate while they really are the same shape.
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        cairo_surface_t *art = images.get(geo::kPedals[i].art);
+        if (!art)
+            continue; // already counted as a missing asset above
+        const int aw = cairo_image_surface_get_width(art);
+        const int ah = cairo_image_surface_get_height(art);
+        if (aw != geo::kPedalArtW || ah != geo::kPedalArtH) {
+            fprintf(stderr,
+                    "panelrender: %s.png is %dx%d but geometry.h says the enclosures trim to "
+                    "%dx%d — re-run gui/make_pedals.sh, or update kPedalArtW/kPedalArtH and "
+                    "re-derive every control coordinate from the mock\n",
+                    geo::kPedals[i].art, aw, ah, geo::kPedalArtW, geo::kPedalArtH);
+            ++missing;
+        }
+    }
+
     // Text is audited even when a font fell back to a system face — a legend
     // that overflows in the fallback still overflows on screen.
     if (!auditText(fonts))
         ++missing;
     if (!auditHitBoxes())
+        ++missing;
+    if (!auditPedalHitBoxes())
+        ++missing;
+    if (!auditPedalInk(images))
+        ++missing;
+    if (!auditPedalClearance(fonts))
         ++missing;
 
     if (missing) {

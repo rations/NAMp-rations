@@ -19,7 +19,7 @@
 // Usage:
 //   rations_offline <Rations.vst3> --captures <dir> [--rate 48000] [--block 256]
 //                   [--seconds 2.0] [--gain 0.0] [--sweep] [--overrun N] [--settle-ms N]
-//                   [--dump <file>]
+//                   [--dump <file>] [--save-state <file>] [--load-state <file>]
 //
 // --dump writes the rendered output as raw little-endian float32, which is how one build is
 // compared against another BIT FOR BIT rather than by eye over six printed digits. A change that
@@ -32,6 +32,8 @@
 #include "public.sdk/source/vst/hosting/pluginterfacesupport.h"
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/hosting/processdata.h"
+
+#include "public.sdk/source/common/memorystream.h"
 
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -83,6 +85,9 @@ struct Options {
     // Where to write the raw float32 render, if anywhere. This is how one build is compared
     // against another bit for bit; see the usage note at the top.
     std::string dump;
+    // A state blob to write after the render, and one to push at the plug-in before it.
+    std::string saveState;
+    std::string loadState;
 };
 
 bool parseArgs(int argc, char **argv, Options &o)
@@ -129,6 +134,16 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!v)
                 return false;
             o.captures = v;
+        } else if (a == "--save-state") {
+            const char *v = next("--save-state");
+            if (!v)
+                return false;
+            o.saveState = v;
+        } else if (a == "--load-state") {
+            const char *v = next("--load-state");
+            if (!v)
+                return false;
+            o.loadState = v;
         } else if (a == "--dump") {
             const char *v = next("--dump");
             if (!v)
@@ -317,7 +332,95 @@ int main(int argc, char **argv)
     component->setActive(true);
     processor->setProcessing(true);
 
+    // A state blob from another build, pushed at an ALREADY ACTIVE plug-in. That ordering is the
+    // point: it is what a host does on a preset change, and it exercises setState's reload paths
+    // rather than letting setupProcessing quietly do the work afterwards.
+    if (!opt.loadState.empty()) {
+        FILE *f = std::fopen(opt.loadState.c_str(), "rb");
+        if (!f) {
+            fprintf(stderr, "FAIL: cannot open --load-state file %s\n", opt.loadState.c_str());
+            return 1;
+        }
+        std::vector<char> blob;
+        char buf[4096];
+        size_t got = 0;
+        while ((got = std::fread(buf, 1, sizeof(buf), f)) > 0)
+            blob.insert(blob.end(), buf, buf + got);
+        std::fclose(f);
+
+        MemoryStream stream(blob.data(), static_cast<TSize>(blob.size()));
+        stream.seek(0, IBStream::kIBSeekSet, nullptr);
+        const tresult put = component->setState(&stream);
+        int32 version = blob.size() >= 4 ? *reinterpret_cast<const int32 *>(blob.data()) : -1;
+        printf("load state     %zu bytes, version %d -> %s\n", blob.size(), version,
+               put == kResultOk ? "accepted" : "REJECTED");
+        if (put != kResultOk) {
+            fprintf(stderr, "FAIL: the plug-in rejected a state blob it must be able to read\n");
+            return 1;
+        }
+        // A bank named by the blob is loaded asynchronously, exactly as it is at startup, so the
+        // settle wait has to happen after this and not only after the capture messages.
+        std::this_thread::sleep_for(std::chrono::milliseconds(opt.settleMs));
+    }
+
     const uint32 latency = processor->getLatencySamples();
+
+    // REPORTED LATENCY MUST NOT MOVE WHEN A FOOTSWITCH IS STOMPED, and this is the one place that
+    // can be checked, because it is a question about the built bundle rather than about the DSP:
+    // rations_pedalcheck links the pedal sources directly and never sees getLatencySamples at all.
+    //
+    // The Boost's 4x oversampler costs 4.4 base-rate samples whether or not the pedal is engaged,
+    // because its half-band filters run either way, so the figure is reported unconditionally. A
+    // latency that changed under a stomp would make the host recompute its delay compensation
+    // mid-song, and some hosts glitch when it does.
+    //
+    // BOTH DIRECTIONS ARE STOMPED, and that is not thoroughness for its own sake. The first
+    // version of this only switched the pedal ON, and a deliberately broken build - one reporting
+    // the oversampler's latency only while the Boost was engaged - PASSED it, because switching on
+    // is the state in which a conditional report and an unconditional one agree. The bug worth
+    // catching is the latency DROPPING when the pedal is switched off.
+    {
+        std::vector<float> quietIn(static_cast<size_t>(opt.block), 0.0f);
+        std::vector<float> quietOutL(static_cast<size_t>(opt.block), 0.0f);
+        std::vector<float> quietOutR(static_cast<size_t>(opt.block), 0.0f);
+        auto latencyAfterStomp = [&](double on) {
+            Vst::ParameterChanges stomp;
+            int32 qi = 0;
+            if (Vst::IParamValueQueue *q = stomp.addParameterData(Rations::kBoostOnId, qi)) {
+                int32 pi = 0;
+                q->addPoint(0, on, pi);
+            }
+            float *inPtr = quietIn.data();
+            float *outPtrs[2] = {quietOutL.data(), quietOutR.data()};
+            Vst::AudioBusBuffers inBus, outBus;
+            inBus.numChannels = 1;
+            inBus.channelBuffers32 = &inPtr;
+            outBus.numChannels = 2;
+            outBus.channelBuffers32 = outPtrs;
+            Vst::ProcessData pd;
+            pd.processMode = Vst::kRealtime;
+            pd.symbolicSampleSize = Vst::kSample32;
+            pd.numSamples = opt.block;
+            pd.numInputs = 1;
+            pd.numOutputs = 1;
+            pd.inputs = &inBus;
+            pd.outputs = &outBus;
+            pd.inputParameterChanges = &stomp;
+            processor->process(pd);
+            return processor->getLatencySamples();
+        };
+        const uint32 on = latencyAfterStomp(1.0);
+        const uint32 off = latencyAfterStomp(0.0);
+        if (on != latency || off != latency) {
+            fprintf(stderr,
+                    "FAIL: reported latency moved under a footswitch stomp - %u at rest, %u with "
+                    "the Boost engaged, %u with it bypassed. A host would recompute its delay "
+                    "compensation mid-song\n",
+                    latency, on, off);
+            return 1;
+        }
+        printf("pedal latency  %u samples, unchanged by a stomp in either direction\n", latency);
+    }
 
     // --- render ------------------------------------------------------------------------------
     const size_t total = static_cast<size_t>(opt.seconds * opt.rate);
@@ -567,6 +670,29 @@ int main(int argc, char **argv)
     }
 
     processor->setProcessing(false);
+    if (!opt.saveState.empty()) {
+        MemoryStream saved;
+        if (component->getState(&saved) != kResultOk) {
+            fprintf(stderr, "FAIL: the plug-in would not save its state\n");
+            return 1;
+        }
+        FILE *f = std::fopen(opt.saveState.c_str(), "wb");
+        if (!f) {
+            fprintf(stderr, "FAIL: cannot open --save-state file %s\n", opt.saveState.c_str());
+            return 1;
+        }
+        const size_t bytes = static_cast<size_t>(saved.getSize());
+        const size_t wrote = std::fwrite(saved.getData(), 1, bytes, f);
+        std::fclose(f);
+        if (wrote != bytes) {
+            fprintf(stderr, "FAIL: short write to %s\n", opt.saveState.c_str());
+            return 1;
+        }
+        printf("save state     %zu bytes, version %d -> %s\n", bytes,
+               bytes >= 4 ? *reinterpret_cast<const int32 *>(saved.getData()) : -1,
+               opt.saveState.c_str());
+    }
+
     component->setActive(false);
 
     // --- report ------------------------------------------------------------------------------
