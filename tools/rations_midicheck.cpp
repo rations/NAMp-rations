@@ -46,6 +46,7 @@
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstevents.h"
+#include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstmessage.h"
 
 #include "public.sdk/source/common/memorystream.h"
@@ -567,6 +568,59 @@ int main(int argc, char **argv)
     // and by asking the plug-in rather than by reading the source.
     printf("buses\n");
     check(component->getBusCount(Vst::kEvent, Vst::kInput) == 1, "one event input bus is declared");
+
+    // --- 0b. the route a host uses to deliver a CC, end to end -------------------------------
+    //
+    // Everything below drives the CC parameters directly, which is what a host does AFTER it has
+    // asked where to send a controller. What nothing tested is the asking: IMidiMapping hands back
+    // a ParamID, and if no parameter with that ID was ever declared, the host has nowhere to write
+    // and the plug-in receives nothing at all - with no error anywhere, because a host is entitled
+    // to be told about a parameter it cannot find and simply drop the message.
+    //
+    // That is a real hazard here rather than a theoretical one: the 128 CC parameters are declared
+    // near the END of the controller's initialize(), after the amp, the trims, the output section
+    // and now twenty-five pedalboard parameters, so anything that returns early or throws part-way
+    // through that function takes the whole MIDI block with it and leaves everything above it
+    // looking perfectly healthy.
+    printf("midi mapping\n");
+    {
+        FUnknownPtr<Vst::IMidiMapping> mapping(controller);
+        if (check(mapping != nullptr, "the controller offers IMidiMapping")) {
+            bool everyCc = true;
+            for (int cc = 0; cc < kMidiCcCount && everyCc; ++cc) {
+                Vst::ParamID id = Vst::kNoParamId;
+                everyCc = mapping->getMidiControllerAssignment(
+                              0, 0, static_cast<Vst::CtrlNumber>(cc), id) == kResultTrue &&
+                          id == static_cast<Vst::ParamID>(kMidiCcBaseId + cc);
+            }
+            check(everyCc, "every controller number maps to its own parameter");
+        }
+
+        // ... and those parameters EXIST. This is the half that a mapping table cannot tell you.
+        int declared = 0;
+        const int32 total = controller->getParameterCount();
+        for (int32 i = 0; i < total; ++i) {
+            Vst::ParameterInfo info = {};
+            if (controller->getParameterInfo(i, info) != kResultOk)
+                continue;
+            if (info.id >= static_cast<Vst::ParamID>(kMidiCcBaseId) &&
+                info.id <= static_cast<Vst::ParamID>(kMidiCcLastId))
+                ++declared;
+        }
+        char detail[96];
+        snprintf(detail, sizeof(detail), "%d of %d declared, %d parameters in total", declared,
+                 kMidiCcCount, static_cast<int>(total));
+        check(declared == kMidiCcCount, "all 128 CC parameters are actually declared", detail);
+
+        bool pcFound = false;
+        for (int32 i = 0; i < total && !pcFound; ++i) {
+            Vst::ParameterInfo info = {};
+            if (controller->getParameterInfo(i, info) == kResultOk &&
+                info.id == static_cast<Vst::ParamID>(kMidiProgramChangeId))
+                pcFound = (info.flags & Vst::ParameterInfo::kIsProgramChange) != 0;
+        }
+        check(pcFound, "the Program Change parameter is declared and flagged as one");
+    }
 
     Vst::SpeakerArrangement in = Vst::SpeakerArr::kMono, out = Vst::SpeakerArr::kStereo;
     processor->setBusArrangements(&in, 1, &out, 1);

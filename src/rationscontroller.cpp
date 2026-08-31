@@ -898,14 +898,19 @@ std::string RationsController::midiHeard() const
     if (mMidiBlocks == 0)
         return "no audio running";
     if (mMidiSeenCount == 0)
-        return "no MIDI received";
+        return "no MIDI reaching the plug-in";
     MidiBinding b;
     const std::uint32_t msg = mMidiSeenWord & 3u;
     b.msg = (msg >= 1 && msg <= 3) ? static_cast<MidiMsg>(msg) : MidiMsg::Unlearned;
     b.data1 = static_cast<int>((mMidiSeenWord >> 2) & 127u);
-    const std::uint32_t chan = (mMidiSeenWord >> 9) & 31u;
+    const int value = static_cast<int>((mMidiSeenWord >> 9) & 127u);
+    const std::uint32_t chan = (mMidiSeenWord >> 16) & 31u;
     b.channel = (chan == 0 || chan > 16) ? kMidiAnyChannel : static_cast<int>(chan) - 1;
-    return "heard " + std::to_string(mMidiSeenCount) + ": " + describeBinding(b);
+    // The VALUE is printed too, and it is the number that matters most here: a press is anything
+    // at or above 64, so a controller sending 3 looks identical to one sending nothing until you
+    // can see the 3.
+    return "heard " + std::to_string(mMidiSeenCount) + ": " + describeBinding(b) + " = " +
+           std::to_string(value);
 }
 
 //------------------------------------------------------------------------

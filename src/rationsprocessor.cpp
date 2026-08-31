@@ -391,6 +391,8 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             // which way it moved - and so is a press, which is what covers a pedal that keeps
             // sending the same value. A host flushing initial zeroes at a parameter that was
             // already zero is neither, and does not teach anything.
+            noteMidiSeen(MidiMsg::ControlChange, kMidiAnyChannel, cc, ccValue);
+
             const bool learning = mMidiLearnRow.load(std::memory_order_relaxed) >= 0;
             const bool resent = ccValue == last && lastBlock + 1 == mBlockIndex && lastBlock != 0;
             const bool fire =
@@ -407,6 +409,7 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             // Same rule as the CC branch above and for the same reason.
             const int program =
                 std::clamp(static_cast<int>(std::lround(value * (kMidiProgramCount - 1))), 0, 127);
+            noteMidiSeen(MidiMsg::ProgramChange, kMidiAnyChannel, program, program);
             const bool resent = program == mPcLast && mPcLastBlock + 1 == mBlockIndex;
             mPcLast = program;
             mPcLastBlock = mBlockIndex;
@@ -513,6 +516,8 @@ void RationsProcessor::handleInputEvents(IEventList *events)
         // up, which is the same defect the CC edge test exists to prevent.
         if (e.noteOn.velocity <= 0.0f)
             continue;
+        noteMidiSeen(MidiMsg::NoteOn, e.noteOn.channel, e.noteOn.pitch,
+                     static_cast<int>(e.noteOn.velocity * 127.0f));
         midiTrigger(MidiMsg::NoteOn, e.noteOn.channel, e.noteOn.pitch);
     }
 }
@@ -521,16 +526,25 @@ void RationsProcessor::handleInputEvents(IEventList *events)
 // One decoded message. Audio thread: no allocation, no lock, no destructor, and no call into the
 // controller - what the plug-in does to itself here is reported to the host through the output
 // parameter queue like every other RT-to-outside message in this file.
-void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
+// What arrived, published for the settings page. Called at the point a message is DECODED, before
+// any decision about whether to act on it - which is the whole point, and was got wrong first
+// time: counting inside midiTrigger counted only the messages that survived the press rule, so a
+// controller whose messages were all being filtered out reported "no MIDI received" and sent the
+// diagnosis in exactly the wrong direction. What arrives and what acts are two different numbers
+// and the page needs the first one.
+void RationsProcessor::noteMidiSeen(MidiMsg msg, int channel, int data1, int value)
 {
-    // Report it before deciding anything, so the settings page shows what ARRIVED rather than what
-    // was acted on - a message that matched nothing is exactly the case someone needs to see.
     mSeenWord.store((static_cast<std::uint32_t>(msg) & 3u) |
                         (static_cast<std::uint32_t>(std::clamp(data1, 0, 127)) << 2) |
-                        (static_cast<std::uint32_t>(std::clamp(channel + 1, 0, 16)) << 9),
+                        (static_cast<std::uint32_t>(std::clamp(value, 0, 127)) << 9) |
+                        (static_cast<std::uint32_t>(std::clamp(channel + 1, 0, 16)) << 16),
                     std::memory_order_relaxed);
     mSeenCount.fetch_add(1, std::memory_order_relaxed);
+}
 
+//------------------------------------------------------------------------
+void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
+{
     MidiBinding incoming;
     incoming.msg = msg;
     incoming.channel = channel;

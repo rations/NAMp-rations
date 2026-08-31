@@ -93,6 +93,8 @@ private:
     // matches it against the table and performs what that row says. Audio thread; allocates
     // nothing, takes no lock, and never calls the controller.
     void midiTrigger(MidiMsg msg, int channel, int data1);
+    // Records what arrived, before any decision about acting on it.
+    void noteMidiSeen(MidiMsg msg, int channel, int data1, int value);
     // Stereo out, because the POST pedals are where this plug-in stops being mono. `outR` is null
     // when the host gave a mono output bus; everything up to and including the cabinet is mono
     // either way, so only the tail changes.
