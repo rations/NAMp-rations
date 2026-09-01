@@ -208,7 +208,20 @@ if(WIN32)
     # UTF-16 buffer and the plug-in's own path comes out as garbage. In C the
     # compiler catches it -- "passing argument 2 of GetModuleFileNameA from
     # incompatible pointer type" -- but the C++ cast hides it completely.
-    add_compile_definitions(UNICODE _UNICODE)
+    # NOMINMAX and WIN32_LEAN_AND_MEAN are defence and header weight, NOT a fix
+    # for anything that currently bites. deps/wdl/wdltypes.h includes the whole
+    # of <windows.h> under #ifdef _WIN32, and that reaches every translation
+    # unit that includes src/pedals/pedalchain.h -- rationsprocessor.cpp and
+    # tools/rations_pedalcheck.cpp, both of which use std::min/std::max freely.
+    # Under MinGW that is already harmless twice over (windows.h self-defines
+    # NOMINMAX under __cplusplus, and minwindef.h guards the min/max macros with
+    # #ifndef __cplusplus anyway), so nothing here changes today. It would bite
+    # under MSVC, it is exactly what NeuralAmpModelerCore's and AudioDSPTools'
+    # own CMakeLists set, and this project compiles those sources into RationsDsp
+    # and so never picks their flags up. WIN32_LEAN_AND_MEAN additionally keeps
+    # winsock, RPC and OLE out of every pedal-including TU, which they have no
+    # use for.
+    add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
     set(RATIONS_WINDOWS OFF)
 endif()
@@ -766,7 +779,15 @@ target_link_libraries(rations_racecheck
     PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
 target_compile_features(rations_racecheck PRIVATE cxx_std_20)
 target_compile_options(rations_racecheck PRIVATE -Wall)
-if(RATIONS_ENABLE_TSAN)
+# TSan is a Linux gate and always was. MinGW ships no ThreadSanitizer runtime,
+# so asking for it in a cross build fails at link with an unresolved
+# __tsan_init rather than saying what is wrong. Refuse it here instead, and say
+# so, rather than letting the option look as though it did something.
+if(RATIONS_ENABLE_TSAN AND RATIONS_WINDOWS)
+    message(WARNING
+        "[Rations] RATIONS_ENABLE_TSAN is ignored for the Windows cross build: MinGW has no "
+        "ThreadSanitizer runtime. Run the race gate natively on Linux.")
+elseif(RATIONS_ENABLE_TSAN)
     target_compile_options(rations_racecheck PRIVATE -fsanitize=thread -g -O1)
     target_link_options(rations_racecheck PRIVATE -fsanitize=thread)
 endif()
