@@ -77,16 +77,6 @@ inline void writeOutputPoint(IParameterChanges *outChanges, ParamID id, ParamVal
     queue->addPoint(sampleOffset, value, pointIndex);
 }
 
-// Slim is fixed at full size, permanently and by decision — not deferred. These captures are
-// slimmable containers and a smaller variant would genuinely cost less CPU, but this plug-in
-// always plays them whole: an amp head that quietly swaps in a lesser model of itself is not
-// what is being built.
-//
-// Carried as a named constant through the loader's `slim` argument rather than hard-coded 1.0 at
-// each call site, because that keeps the one place the value is decided visible, and keeps the
-// ported loader identical to the parent's instead of forking it to delete a parameter.
-constexpr double kSlimFixed = 1.0;
-
 } // namespace
 
 //------------------------------------------------------------------------
@@ -160,7 +150,10 @@ void RationsProcessor::loadCaptureSource(int channel, const std::string &path, b
     // A cleared channel is not a directory, whatever the message said. Recording it as one would
     // make the next state blob claim a folder that is not there.
     mCaptureIsDir[c] = !path.empty() && isDirectory;
-    mRack.loadChannel(static_cast<Channel>(c), path, mCaptureIsDir[c], kSlimFixed, engine::kChunk);
+    // Built at whatever size Slim is currently asking for. A freshly loaded bank has to agree
+    // with the three already loaded, or one channel would be a different model of itself.
+    mRack.loadChannel(static_cast<Channel>(c), path, mCaptureIsDir[c],
+                      mSlimNorm.load(std::memory_order_relaxed), engine::kChunk);
     // Say the output section again. A load republishes the bank, and a republished bank is exactly
     // the case where an engine's compensation would otherwise be carrying the last bank's metadata.
     publishOutputMode();
@@ -440,6 +433,13 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             case kNoiseGateOnId:
                 mNoiseGateOn.store(value, std::memory_order_relaxed);
                 break;
+            // Slim is RECORDED here and nothing more. What applying it does is rebuild every
+            // model in every bank, which takes a mutex and is not RT work; that arrives on the
+            // message thread as kMsgSetSlim. This store exists so getState has the value.
+            case kSlimId:
+                mSlimNorm.store(std::clamp(value, 0.0, 1.0), std::memory_order_relaxed);
+                break;
+
             case kToneStackOnId:
                 mToneStackOn.store(value, std::memory_order_relaxed);
                 break;
@@ -989,6 +989,7 @@ void RationsProcessor::sendModelCaps()
         setChannelAttr(kCapsHasLoudnessAttr, levels.hasLoudness ? 1 : 0);
         setChannelAttr(kCapsHasInLevelAttr, levels.hasInputLevel ? 1 : 0);
         setChannelAttr(kCapsHasOutLevelAttr, levels.hasOutputLevel ? 1 : 0);
+        setChannelAttr(kCapsSlimmableAttr, levels.slimmable ? 1 : 0);
 
         if (c > 0)
             blob.push_back('\f'); // channel separator
@@ -1037,6 +1038,23 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
     // worker, so the caps sent when the plug-in was created could not know the counts yet.
     if (id && strcmp(id, kMsgRequestCaps) == 0) {
         sendModelCaps();
+        return kResultOk;
+    }
+
+    // Slim. It arrives here and not through the parameter queue because applying it rebuilds every
+    // capture in every loaded bank, and ModelBank::post takes a mutex — see kMsgSetSlim. The
+    // parameter still travels the ordinary way and is still recorded below, but only so getState
+    // has it; nothing on the audio thread ever asks for a rebuild.
+    //
+    // The value is stored BEFORE the rebuild is asked for, so a load that races this one (a host
+    // pushing state while the knob is released) picks up the new size rather than the old.
+    if (id && strcmp(id, kMsgSetSlim) == 0) {
+        double slim = ranges::kSlimDefault;
+        if (message->getAttributes()->getFloat(kSlimAttr, slim) != kResultOk)
+            return kResultFalse;
+        slim = std::clamp(slim, ranges::kSlimMin, ranges::kSlimMax);
+        mSlimNorm.store(slim, std::memory_order_relaxed);
+        mRack.setSlim(slim, engine::kChunk);
         return kResultOk;
     }
 
@@ -1349,6 +1367,15 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
     double toneStackOn = 1.0;
     if (version >= 7 && !streamer.readDouble(toneStackOn))
         return kResultFalse;
+    // Slim. A version 1-7 project opens at 1.0 — the whole model — which is what every build
+    // before this one was hard-wired to, so it opens sounding the way it was mixed. It is applied
+    // by the load below rather than published separately: setState reloads the banks whose paths
+    // changed, and those loads read mSlimNorm.
+    double slim = ranges::kSlimDefault;
+    if (version >= 8 && !streamer.readDouble(slim))
+        return kResultFalse;
+    mSlimNorm.store(std::clamp(slim, ranges::kSlimMin, ranges::kSlimMax),
+                    std::memory_order_relaxed);
     mToneStackOn.store(toneStackOn > 0.5 ? 1.0 : 0.0, std::memory_order_relaxed);
 
     return kResultOk;
@@ -1431,6 +1458,8 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     // thing every reader since version 1 takes, so a ninth inserted among them would move every
     // field after it and make every existing project unreadable.
     streamer.writeDouble(mToneStackOn.load(std::memory_order_relaxed));
+    // Version 8 onwards: Slim. Appended after it, at the end, for exactly the same reason.
+    streamer.writeDouble(mSlimNorm.load(std::memory_order_relaxed));
     return kResultOk;
 }
 

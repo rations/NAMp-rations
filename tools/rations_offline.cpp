@@ -37,6 +37,7 @@
 
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/ivstcomponent.h"
+#include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 
 #include "rationsids.h"
@@ -760,6 +761,113 @@ int main(int argc, char **argv)
         output = reference;
     }
 
+    // --- Slim, end to end ---------------------------------------------------------------------
+    //
+    // The one thing nothing else in this tree measures: that the Slim setting actually reaches the
+    // models. It cannot be checked by reading the code, because the value travels as an IMessage,
+    // is stored, and is then read by a worker rebuilding a bank on another thread - three seams,
+    // any of which can be right in isolation and wrong together.
+    //
+    // Two assertions when the captures support it: the small variant sounds DIFFERENT from the
+    // whole one (so the setting arrives), and coming back to 1.0 reproduces the reference (so it
+    // arrives both ways and a rebuild is repeatable rather than merely different). When they do
+    // not support it the result is REPORTED rather than passed silently - a capture with one
+    // variant is unaffected by construction, so rendering the same audio at both ends of the knob
+    // would be a fact about the file and not about the plug-in.
+    int slimFailures = 0;
+    {
+        const std::vector<float> reference = output;
+        const bool slimmable = RationsTools::rootStatesSlimmable(opt.captures);
+        // A rebuilt bank is republished before any entry is ready, so the channel is at its
+        // ramped-silence gate until the workers catch up. Waiting the same settle the load waits
+        // is what makes the render that follows a measurement rather than a race.
+        auto renderSlim = [&](double slim) {
+            RationsTools::sendSlim(hostContext, component, slim);
+            std::this_thread::sleep_for(std::chrono::milliseconds(opt.settleMs));
+            renderPass(0.5);
+            renderPass(0.5);
+            return output;
+        };
+        auto maxAbsDiff = [&](const std::vector<float> &a, const std::vector<float> &b) {
+            double worst = 0.0;
+            for (size_t i = 0; i < total; ++i)
+                worst = std::max(worst, std::fabs(static_cast<double>(a[i]) - b[i]));
+            return worst;
+        };
+
+        // Three renders and not two, so the baseline is one of THIS block's own: `output` on
+        // entry is the main pass, which is not necessarily the same dial position or gain, and
+        // comparing against it would be measuring the difference between two experiments. The
+        // third render is also the control the second assertion needs - a rebuild at the size it
+        // already had must reproduce itself, or "different at 0.0" would prove only that a rebuild
+        // changes something.
+        // Ask for the capabilities the way the editor does. Without this the controller has never
+        // heard how many captures landed or what they are, so everything below would agree with
+        // the captures by knowing nothing about them.
+        RationsTools::requestCaps(hostContext, component);
+
+        // Whether the CONTROL is offered at all, which is a separate question from whether it
+        // works and is the one a player meets first. The editor draws the Slim icon only when a
+        // loaded channel's captures are slimmable containers - the older single-variant ones can
+        // do nothing with it - and the same fact retitles the parameter for a host's own list.
+        // That is the observable this can reach without an editor, and it exercises the whole
+        // chain: the bank's parsed sources, the capability message, and the controller.
+        {
+            Vst::ParameterInfo info = {};
+            const int32 count = controller->getParameterCount();
+            bool found = false;
+            char title[128] = "";
+            for (int32 i = 0; i < count && !found; ++i) {
+                if (controller->getParameterInfo(i, info) != kResultOk ||
+                    info.id != Rations::kSlimId)
+                    continue;
+                UString(info.title, USTRINGSIZE(info.title)).toAscii(title, sizeof(title));
+                found = true;
+            }
+            const bool offered = found && strcmp(title, "Slim") == 0;
+            printf("slim offered   %s, and the captures %s slimmable containers\n",
+                   found ? title : "(no Slim parameter)", slimmable ? "ARE" : "are NOT");
+            if (!found) {
+                fprintf(stderr, "FAIL: the plug-in declares no Slim parameter\n");
+                ++slimFailures;
+            } else if (offered != slimmable) {
+                fprintf(stderr,
+                        "FAIL: Slim reads \"%s\" but the loaded captures %s slimmable - the icon "
+                        "would be %s\n",
+                        title, slimmable ? "ARE" : "are NOT",
+                        offered ? "offered for captures that cannot use it"
+                                : "hidden from captures that can");
+                ++slimFailures;
+            }
+        }
+
+        const std::vector<float> wholeFirst = renderSlim(1.0);
+        const std::vector<float> small = renderSlim(0.0);
+        const std::vector<float> wholeAgain = renderSlim(1.0);
+        const double changed = maxAbsDiff(wholeFirst, small);
+        const double returned = maxAbsDiff(wholeFirst, wholeAgain);
+
+        printf("slim           0.0 moves the output by %.6f; back at 1.0 it returns to within "
+               "%.9f%s\n",
+               changed, returned, slimmable ? "" : " (captures state ONE variant - inert)");
+
+        if (slimmable && changed <= 1e-6) {
+            fprintf(stderr,
+                    "FAIL: the captures are SlimmableContainers but Slim 0.0 changed the output "
+                    "by only %.9f - the setting is not reaching the models\n",
+                    changed);
+            ++slimFailures;
+        }
+        if (returned > 1e-6) {
+            fprintf(stderr,
+                    "FAIL: returning Slim to 1.0 left the output %.9f from where it started - a "
+                    "rebuild at the same size must reproduce the same model\n",
+                    returned);
+            ++slimFailures;
+        }
+        output = reference;
+    }
+
     processor->setProcessing(false);
     if (!opt.saveState.empty()) {
         MemoryStream saved;
@@ -844,7 +952,7 @@ int main(int argc, char **argv)
     printf("unwritten      %zu\n", stale);
     printf("wall           %.1f ms  (RTF %.4f)\n", wallMs, wallMs / (opt.seconds * 1000.0));
 
-    int failures = trimFailures + modeFailures + eqFailures;
+    int failures = trimFailures + modeFailures + eqFailures + slimFailures;
     if (nonFinite) {
         fprintf(stderr, "FAIL: %zu non-finite output samples\n", nonFinite);
         ++failures;

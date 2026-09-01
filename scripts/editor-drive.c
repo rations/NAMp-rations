@@ -40,9 +40,12 @@ static void moveTo(int x, int y)
     XFlush(display);
 }
 
-static void button(int down)
+// `which` is the X11 button number: 1 is left, 3 is right. Right matters because two gestures in
+// this editor answer on it and nothing here could ask them - resetting a channel trim to 0 dB, and
+// dismissing the Slim overlay.
+static void button(int down, unsigned int which)
 {
-    XTestFakeButtonEvent(display, 1, down ? True : False, CurrentTime);
+    XTestFakeButtonEvent(display, which, down ? True : False, CurrentTime);
     XFlush(display);
 }
 
@@ -183,10 +186,13 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    if (strcmp(argv[1], "click") == 0) {
+    if (strcmp(argv[1], "rclick") == 0) {
+        button(1, 3);
+        button(0, 3);
+    } else if (strcmp(argv[1], "click") == 0) {
         moveTo(x, y);
-        button(1);
-        button(0);
+        button(1, 1);
+        button(0, 1);
     } else if (strcmp(argv[1], "drag") == 0 && argc >= 7) {
         // Twenty steps with a real pause between them, because the editor coalesces motion and
         // repaints on a timer: a drag delivered as one jump exercises the hit test and nothing
@@ -194,12 +200,12 @@ int main(int argc, char **argv)
         const int dx = atoi(argv[5]);
         const int dy = atoi(argv[6]);
         moveTo(x, y);
-        button(1);
+        button(1, 1);
         for (int i = 1; i <= 20; ++i) {
             moveTo(x + dx * i / 20, y + dy * i / 20);
             usleep(60000);
         }
-        button(0);
+        button(0, 1);
     } else {
         fprintf(stderr, "editor-drive: unknown command '%s'\n", argv[1]);
         XCloseDisplay(display);

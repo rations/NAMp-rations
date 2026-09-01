@@ -53,6 +53,17 @@ struct CaptureLevels {
     bool hasLoudness = false;
     bool hasInputLevel = false;
     bool hasOutputLevel = false;
+    // Whether Slim means anything for this bank: whether its captures are slimmable containers
+    // with more than one size variant. The newer A2 captures are; the older ones the trainer now
+    // calls A1 are not, and for those the control can do nothing at all - which is why the editor
+    // does not show its icon rather than showing a knob that is inert. This one is not read off a
+    // built model but off the PARSED source, because it is known as soon as the file is understood
+    // and does not need a model to exist to be true.
+    //
+    // Same "every entry" rule as the three above and for the same reason: a bank where nine
+    // captures out of twelve can be made smaller is one whose model changes size as the dial
+    // crosses the tenth, and offering that would be telling the user the wrong thing.
+    bool slimmable = false;
 };
 
 namespace engine

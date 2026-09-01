@@ -254,6 +254,12 @@ Vector icons (resources/img/*.svg):
   Atkinson) and are covered by the MIT grant reproduced above. Folder.svg is the
   author's own, MIT, drawn in the same 24x24 stroked style so the set matches.
 
+  SlimmableIcon.svg is a MODIFIED copy of the file of the same name from
+  NeuralAmpModelerPlugin (MIT, same grant): the geometry is upstream's and the
+  stroke colours have been changed to this plug-in's palette. It is therefore
+  not refreshed by gui/make_assets.sh's verbatim-copy loop, which would put the
+  upstream colours back.
+
 -------------------------------------------------------------------------------
 
 Bundled fonts (resources/fonts/): Michroma-Regular.ttf (SIL Open Font License

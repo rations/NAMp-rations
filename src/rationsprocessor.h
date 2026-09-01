@@ -220,6 +220,10 @@ private:
     // out, because it is a set of biquads whose state is 3 samples deep and re-entering it with
     // stale state costs less than a click's worth of anything.
     std::atomic<double> mToneStackOn{1.0};
+    // Slim, 0..1, 1 = the whole model. Written by the RT parameter case (for getState) and by
+    // setState and the Slim message, read by every capture load. It is NOT what applies the
+    // setting: applying it is ChannelRack::setSlim, on the message thread, via kMsgSetSlim.
+    std::atomic<double> mSlimNorm{ranges::kSlimDefault};
 
     // Pre-allocated double-precision work buffers, sized in setupProcessing for mMaxBlockSize.
     // mDryBuf keeps the ungained input so the bypass ramp has something to fade back to.

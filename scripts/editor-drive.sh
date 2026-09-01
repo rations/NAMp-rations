@@ -41,6 +41,7 @@
 # Usage:
 #   scripts/editor-drive.sh shot out.png
 #   scripts/editor-drive.sh click 251 226 shot out.png
+#   scripts/editor-drive.sh rclick 320 200 shot out.png         # the second button
 #   scripts/editor-drive.sh drag 251 226 0 -70 shot out.png     # photographed mid-drag
 #   scripts/editor-drive.sh click 140 110 type "JCM800" key Return shot out.png
 #   scripts/editor-drive.sh --size 640x460 click 320 200 shot cab.png
@@ -122,6 +123,13 @@ while [ "$#" -gt 0 ]; do
         click)
             "$poke" click "$window" "$2" "$3"
             echo "  click $2,$3"
+            sleep 1
+            shift 3 ;;
+        rclick)
+            # The second button. Two gestures answer on it: a channel trim right-clicks back to
+            # exactly 0 dB, and a right-click anywhere dismisses the Slim overlay.
+            "$poke" rclick "$window" "$2" "$3"
+            echo "  rclick $2,$3"
             sleep 1
             shift 3 ;;
         drag)

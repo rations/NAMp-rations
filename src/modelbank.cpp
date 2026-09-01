@@ -304,6 +304,13 @@ void ModelBank::buildAndPublish(const Request &request)
         // all fail to build must report that it supports nothing rather than everything vacuously.
         std::lock_guard<std::mutex> lock(mMutex);
         mLevels = CaptureLevels();
+        // Slimmable is the exception, and is settled HERE rather than accumulated below: it is a
+        // fact about the parsed file, not about the model that gets built from it, so it is known
+        // now and needs no entry to have landed. Every source must offer more than one variant -
+        // an older single-variant capture in the bank means Slim cannot act on the whole of it.
+        mLevels.slimmable = count > 0;
+        for (int i = 0; i < count && mLevels.slimmable; ++i)
+            mLevels.slimmable = mSources[static_cast<size_t>(i)].submodels.size() > 1;
     }
 
     // Publish before anything is ready. The audio thread will output ramped silence until the

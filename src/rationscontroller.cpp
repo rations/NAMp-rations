@@ -79,7 +79,11 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
         parameters.addParameter(l);
     }
 
-    auto *ngThresh = new Vst::RangeParameter(STR16("Gate"), kNoiseGateThresholdId, STR16("dB"),
+    // "Threshold" and not "Gate": the parameter is a threshold in dB and the panel silkscreens it
+    // that way, so a host's automation lane says what the dial says. The ID is unchanged, so
+    // automation written against an older build still lands on it — a title is not an identity.
+    // The boolean below keeps its own name; the thing called GATE is that switch.
+    auto *ngThresh = new Vst::RangeParameter(STR16("Threshold"), kNoiseGateThresholdId, STR16("dB"),
                                              ranges::kNgMin, ranges::kNgMax, ranges::kNgDefault);
     ngThresh->setPrecision(1);
     parameters.addParameter(ngThresh);
@@ -106,6 +110,17 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
                             kNoiseGateOnId);
     parameters.addParameter(STR16("EQ On"), nullptr, 1, 1.0, Vst::ParameterInfo::kCanAutomate,
                             kToneStackOnId);
+
+    // Slim, behind the icon left of the gear. Flags 0 — visible to the host, saved with the
+    // project, and NOT automatable, which is the one place this differs from the sibling plug-ins.
+    // Applying a value here rebuilds every model in every loaded bank (ChannelRack::setSlim), so a
+    // host sweeping this lane would ask for a full rebuild per automation point and the amp would
+    // sit at ramped silence for the length of the sweep. Flags 0 and not kIsHidden: the SDK
+    // documents kIsHidden as implying kIsReadOnly, which would make it unwritable.
+    auto *slim = new Vst::RangeParameter(STR16("Slim"), kSlimId, nullptr, ranges::kSlimMin,
+                                         ranges::kSlimMax, ranges::kSlimDefault, 0, 0);
+    slim->setPrecision(2);
+    parameters.addParameter(slim);
 
     // Cabinet blend: 0 = IR A, 1 = IR B. Inert while only one slot is filled, in which case that
     // IR runs at unity and the editor draws this control disabled.
@@ -479,6 +494,16 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
         return kResultFalse;
     setParamNormalized(kToneStackOnId, toneStackOn > 0.5 ? 1.0 : 0.0);
 
+    // Version 8 onwards: Slim, after it. A version 1-7 project opens at 1.0, the whole model.
+    //
+    // The base class's setter, deliberately: our own override tells the view, which is wanted, but
+    // what must NOT happen here is applySlim() — the processor has just read the same value out of
+    // the same blob and any rebuild it needs is the load's, not a second one bounced back at it.
+    double slim = ranges::kSlimDefault;
+    if (version >= 8 && !streamer.readDouble(slim))
+        return kResultFalse;
+    setParamNormalized(kSlimId, std::clamp(slim, 0.0, 1.0));
+
     refreshParamTitles();
     if (mView)
         mView->FilesChanged();
@@ -518,6 +543,7 @@ tresult PLUGIN_API RationsController::notify(Vst::IMessage *message)
         mBankLevels[c].hasLoudness = channelAttr(kCapsHasLoudnessAttr, 0) != 0;
         mBankLevels[c].hasInputLevel = channelAttr(kCapsHasInLevelAttr, 0) != 0;
         mBankLevels[c].hasOutputLevel = channelAttr(kCapsHasOutLevelAttr, 0) != 0;
+        mBankLevels[c].slimmable = channelAttr(kCapsSlimmableAttr, 0) != 0;
         mCaptureNames[c].clear();
     }
 
@@ -650,6 +676,22 @@ tresult RationsController::setIrFile(int slot, const char8 *path)
 // Unlike the parent plug-in there is nothing to clear here. NAMp's single-capture and bank loaders
 // are alternatives and each wipes the other; each channel here owns exactly one source, so a load
 // replaces what that channel had and no other channel is involved.
+// Slim does NOT go out on every setParamNormalized, which is where the sibling plug-in puts it.
+// There, applying a value swaps a size on a model that is already built; here it rebuilds every
+// capture in every bank, so a drag would ask for one rebuild per step. The epoch counter would
+// cancel all but the last and the result would be correct — and every channel would sit at ramped
+// silence for the whole gesture rather than for one build. So the editor calls this on release.
+tresult RationsController::applySlim()
+{
+    IPtr<Vst::IMessage> message = owned(allocateMessage());
+    if (!message)
+        return kResultFalse;
+    message->setMessageID(kMsgSetSlim);
+    message->getAttributes()->setFloat(kSlimAttr, getParamNormalized(kSlimId));
+    return sendMessage(message);
+}
+
+//------------------------------------------------------------------------
 tresult RationsController::setCaptureSource(int channel, const char8 *path, bool isDirectory)
 {
     if (channel < 0 || channel >= kChannelCount)
@@ -792,6 +834,14 @@ bool RationsController::bankHasOutputLevel(int channel) const
     return channel >= 0 && channel < kChannelCount && mBankLevels[channel].hasOutputLevel;
 }
 
+bool RationsController::anyBankSlimmable() const
+{
+    for (int c = 0; c < kChannelCount; ++c)
+        if (mEntryCount[c] > 0 && mBankLevels[c].slimmable)
+            return true;
+    return false;
+}
+
 //------------------------------------------------------------------------
 // Retitle a parameter in place and let the host re-read the titles. This is what a generic
 // (host-drawn) parameter UI shows in place of the editor's greyed-out controls: an option the
@@ -835,6 +885,17 @@ void RationsController::refreshParamTitles()
     changed |=
         retitleParam(kOutputModeId, (hasLoudness || hasOut) ? "Output Mode" : "Output Mode (n/a)");
     changed |= retitleParam(kCalibrateInputId, hasIn ? "Calibrate Input" : "Calibrate Input (n/a)");
+    // Slim is retitled rather than hidden for a host's own parameter list, which has no way to
+    // hide anything - the editor is what drops the icon. Nothing loaded reads as available for the
+    // same reason the three above do: an empty channel has no captures, so it has said nothing
+    // about what its captures support.
+    const bool anyLoaded = [this] {
+        for (int c = 0; c < kChannelCount; ++c)
+            if (mEntryCount[c] > 0)
+                return true;
+        return false;
+    }();
+    changed |= retitleParam(kSlimId, (!anyLoaded || anyBankSlimmable()) ? "Slim" : "Slim (n/a)");
     changed |= retitleParam(kInputCalLevelId,
                             hasIn ? "Input Calibration Level" : "Input Calibration Level (n/a)");
     for (int c = 0; c < kChannelCount; ++c) {

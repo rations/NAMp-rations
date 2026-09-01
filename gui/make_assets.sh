@@ -19,7 +19,10 @@
 # The vector icons are NOT built here — they are small MIT SVGs committed to
 # resources/img and rasterised at run time by NanoSVG. Set NAM_UPSTREAM to a
 # checkout of NeuralAmpModelerPlugin (github.com/sdatkinson/NeuralAmpModelerPlugin,
-# MIT) to refresh the five that come from it; Folder.svg is the author's own.
+# MIT) to refresh the five that come from it. Folder.svg is the author's own, and
+# SlimmableIcon.svg is upstream's shape recoloured to this panel's palette — a
+# derived file, so it is NOT refreshed by the loop below and a copy from upstream
+# would silently put the sibling plug-in's azure back on this faceplate.
 set -euo pipefail
 cd "$(dirname "$0")"
 source ./geometry.sh
@@ -79,6 +82,7 @@ if [ -n "${NAM_UPSTREAM:-}" ]; then
         cp "$src" "$OUT_DIR/$i.svg"
     done
     echo "Refreshed 5 upstream icons from \$NAM_UPSTREAM."
+    echo "SlimmableIcon.svg is deliberately NOT among them: it is recoloured, not copied."
 fi
 
 echo

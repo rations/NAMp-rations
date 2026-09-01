@@ -136,6 +136,30 @@ void ChannelRack::loadChannel(Channel ch, const std::string &path, bool isDirect
 }
 
 //------------------------------------------------------------------------
+// A Slim change rebuilds every entry of every loaded bank, because this plug-in bakes the size
+// choice in at construction: it picks the submodel itself in buildCaptureModel rather than going
+// through the DSP core's container, so there is no size to set on a built model. ModelBank's
+// Rebuild job does it from the parsed sources it already holds, so there is no file I/O and no
+// JSON re-parse — but there is a create_dsp and a Reset per capture, and Reset prewarms.
+//
+// Two costs, and both are visible to the player rather than merely paid. The new bank is published
+// before any entry is ready, so each channel falls to its ramped-silence gate until its priority
+// entry lands. And a republish is one of the things that breaks a channel's unbroken receptive
+// field, so all four go cold and the next switch takes the full on-thread catch-up. That is the
+// right trade for a control set once when a rig is assembled, and it is the reason the editor
+// sends this on the knob's RELEASE rather than on every step of a drag.
+//
+// Channels that were never loaded are skipped rather than asked: a Rebuild on a bank with no
+// sources returns without publishing, so it would be harmless — but "harmless" is not a reason to
+// wake three idle workers.
+void ChannelRack::setSlim(double slim, int maxBufferSize)
+{
+    for (int i = 0; i < kChannelCount; ++i)
+        if (mLoadRequested[i])
+            mLoader[i].setSlim(slim, maxBufferSize);
+}
+
+//------------------------------------------------------------------------
 // PUBLISHED, not applied — see setPositionNorm below, which does the same thing for the same
 // reason. Callable from either thread, because a radio click on the settings page arrives as a host
 // parameter change on the audio thread while a load or a state restore arrives on the message

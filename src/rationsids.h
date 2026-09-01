@@ -43,12 +43,26 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     // retirements that has never meant anything.
     kToneStackOnId = 114, // toggle, default on
 
+    // Slim: which variant of a SlimmableContainer capture gets built, 0 = smallest, 1 = whole.
+    // Reached from the icon left of the gear rather than from a page, because it is a hardware
+    // accommodation set once and then forgotten, not a control anyone plays.
+    //
+    // 115 and NOT NAMp's 110, which stays retired below, for the third time this file has had to
+    // make the same point: retiring an ID is a promise about a NUMBER and the control coming back
+    // does not release it. 115 is the first number after 114 that has never meant anything.
+    //
+    // Default 1.0 — the whole model — which is what every build before this one was hard-wired
+    // to, so an existing project sounds the same. The sibling plug-ins default to 0.0; they are
+    // making a different trade for a different user.
+    kSlimId = 115, // 0 .. 1, default 1
+
     // RETIRED NAMp IDs — never reuse these numbers in this plug-in.
     //   107  Tone Stack on/off   The control DOES exist here now, at 114. See the note on the
     //                            output section below: the same rule, for the same reason.
-    //   110  Slim                fixed at 1.0 (full size), permanently. The captures support a
-    //                            smaller variant and it would cost less CPU; this plug-in always
-    //                            plays them whole, so there is nothing here to expose.
+    //   110  Slim                The control DOES exist here now, at 115. It was fixed at 1.0
+    //                            and this note said permanently; it is user-settable because a
+    //                            player on older hardware had no other way to buy back CPU. The
+    //                            number stays dead: see 109/111/112 below for the rule.
     //   113  Capture             NAMp's single bank position. Rations has four banks, so the
     //                            meaning changed; a new ID per channel is used instead of
     //                            silently redefining this one under existing automation.
@@ -305,6 +319,12 @@ inline constexpr double kLevelMin = -12.0, kLevelMax = 12.0, kLevelDefault = 0.0
 // not arbitrary: +12 dBu at 0 dBFS is the commonest figure among audio interfaces, so a player who
 // enables calibration without knowing their interface's number is already close.
 inline constexpr double kCalMin = -60.0, kCalMax = 60.0, kCalDefault = 12.0;
+// Slim. Normalized and plain are the same thing here, so these exist for the state reader and the
+// default rather than for a denormalization. 1.0 is the whole model and is the default; see
+// kSlimId, and see buildCaptureModel for what a value between the two selects — the threshold
+// test is `slim < maxValue`, exclusive, so 1.0 can never select anything but the largest variant,
+// which is exactly the intent.
+inline constexpr double kSlimMin = 0.0, kSlimMax = 1.0, kSlimDefault = 1.0;
 } // namespace ranges
 
 // --- The pedalboard's parameter table ---------------------------------------------------------
@@ -593,7 +613,14 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // reader since version 1 takes, so inserting a ninth would move every field after it and make
 // every existing project unreadable. A version 1-6 project opens with EQ ON, which is what every
 // build before this one was hard-wired to and so is what that project actually sounded like.
-inline constexpr Steinberg::int32 kStateVersion = 7;
+//
+// Version 8 appends Slim — one double, after the EQ switch, which is again the end of the blob and
+// again not where it belongs by meaning, for the reason version 7 gives. A version 1-7 project
+// opens at 1.0, the whole model, which is what every build before this one was hard-wired to and
+// so is what that project actually sounded like. That is also the rule the upstream plug-in
+// applies to its own older presets, and for the same reason: the safe default for a size setting
+// is the size the audio was made at.
+inline constexpr Steinberg::int32 kStateVersion = 8;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.
@@ -638,6 +665,20 @@ inline constexpr const char *kMsgNameAttr = "name";
 // real counts is the one to this request, made once the workers have caught up.
 inline constexpr const char *kMsgRequestCaps = "RationsRequestCaps";
 
+// Slim, controller -> processor. Attribute "slim" carries the 0..1 value (setFloat).
+//
+// A MESSAGE and not the parameter queue, for the same reason the capture paths are messages: what
+// applying this value does is rebuild every model in every loaded bank, and ModelBank::post takes
+// a mutex. The parameter still travels the ordinary way and the processor still records it, but
+// only so getState has it — the RT thread must never be the one that asks for the rebuild.
+//
+// It is sent when the knob is RELEASED, not while it moves. A drag that published every step
+// would ask for one rebuild per pixel; the epoch counter would cancel all but the last, so it
+// would be correct, but every bank would sit at ramped silence for the whole gesture instead of
+// for one build.
+inline constexpr const char *kMsgSetSlim = "RationsSetSlim";
+inline constexpr const char *kSlimAttr = "slim";
+
 // MIDI learn, editor <-> processor. The table lives in the processor, because a footswitch has to
 // work with the editor closed; these messages are how the editor arms a row, clears one, and finds
 // out what the table now says. The reply is polled rather than pushed for the same reason the
@@ -677,6 +718,11 @@ inline constexpr const char *kCapsIsDirAttr = "isDir";
 inline constexpr const char *kCapsHasLoudnessAttr = "hasLoudness";
 inline constexpr const char *kCapsHasInLevelAttr = "hasInLevel";
 inline constexpr const char *kCapsHasOutLevelAttr = "hasOutLevel";
+// Whether that channel's captures are slimmable containers at all. The editor shows the Slim icon
+// only when at least one loaded channel says yes, exactly as the two plug-ins this one descends
+// from show theirs only for a slimmable model: the older captures the trainer now calls A1 have
+// one variant, so for them the control cannot do anything and an icon offering it would be a lie.
+inline constexpr const char *kCapsSlimmableAttr = "slimmable";
 // The capture filenames of every channel, in the same gain order the dials sweep, joined by '\n'
 // within a channel and by '\f' between channels, carried as UTF-8 through setBinary (setString
 // would need UTF-16 and a fixed buffer). Re-deriving the order in the editor would duplicate the

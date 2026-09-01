@@ -77,6 +77,9 @@ public:
     // decides which of ModelBank's two loaders runs.
     void loadChannel(Channel ch, const std::string &path, bool isDirectory, double slim,
                      int maxBufferSize);
+    // Rebuild every loaded channel at a new Slim size. MESSAGE THREAD ONLY: ModelBank::post takes
+    // a mutex, so this must never be reached from process(). What it costs is in the .cpp.
+    void setSlim(double slim, int maxBufferSize);
     std::vector<std::string> captureNames(Channel ch) const;
     // What that channel's captures state about their own levels, for the editor. Message thread.
     CaptureLevels captureLevels(Channel ch) const;

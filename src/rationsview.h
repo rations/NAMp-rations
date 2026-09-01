@@ -140,6 +140,15 @@ private:
     void drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled);
     void drawKnobAt(Canvas &c, float cx, float cy, float r, double norm);
     void drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on);
+    // Whether the Slim control exists for what is loaded right now. Read by the painter, the hit
+    // test and ModelCapsChanged, so all three agree — see the definition.
+    bool slimAvailable() const;
+    void drawSlimIcon(Canvas &c);
+    void drawSlimOverlay(Canvas &c);
+    // Shut the Slim overlay, publishing the setting first if it moved. Every route out goes
+    // through here — the two dismiss gestures, a page change and detach — so there is exactly one
+    // place that can forget to apply it.
+    void closeSlim();
     static void drawToggleFallback(Canvas &c, const Rect &dest, bool batUp);
     // The LED's radius is a parameter because the pedalboard's are smaller than the head's: a
     // pedal's status LED is 10 units across against the amp's 18, which is the proportion the two
@@ -305,6 +314,11 @@ private:
     size_t mRenameCaret = 0;
 
     Steinberg::Vst::ParamID mDragParam = 0; // 0 = no active drag
+    // The Slim overlay: whether it is up, and whether the knob has moved since the setting was
+    // last published. Slim is applied on RELEASE rather than continuously, because applying it
+    // rebuilds every capture in every bank — see kMsgSetSlim.
+    bool mSlimOpen = false;
+    bool mSlimDirty = false;
     float mDragStartY = 0;
     double mDragStartNorm = 0;
     // A knob is dragged vertically and a level slider horizontally, so the drag carries which

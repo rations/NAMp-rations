@@ -133,6 +133,10 @@ void RationsEditorView::onAttached()
 
 void RationsEditorView::onRemoved()
 {
+    // Shutting the editor with the Slim overlay up must not lose the setting. The parameter is
+    // already saved either way, so what would be lost is only the rebuild — the panel would say
+    // one size while the models were still built at another until the project was reopened.
+    closeSlim();
     releaseBackground();
 }
 
@@ -168,6 +172,10 @@ void RationsEditorView::setPage(geo::Page page)
         mController->endEdit(mDragParam);
         mDragParam = 0;
     }
+    // The Slim overlay lives on the head page, so leaving it up across a page change would draw
+    // it over something else. closeSlim() publishes first if the knob moved, which is why the
+    // page change is not a way to lose a setting the user just made.
+    closeSlim();
 
     const geo::PageSize ps = geo::pageSize(page);
     const int w = static_cast<int>(std::lround(ps.w * scale));
@@ -439,8 +447,12 @@ void RationsEditorView::composeChrome(Canvas &c)
         drawButton(c, geo::kBackButton);
     if (scrolling())
         drawScrollBar(c);
-    // The browser is an overlay on the window, not a row of the page, so it neither scrolls nor
-    // needs its clicks un-scrolled.
+    // Both overlays are on the WINDOW, not on a row of a page, so neither scrolls and neither
+    // needs its clicks un-scrolled. Slim first, browser second: the two cannot be open at once
+    // today (Slim's icon is on the head page and the browser opens from the other two), but the
+    // order says which would win if that ever stopped being true.
+    if (mSlimOpen)
+        drawSlimOverlay(c);
     if (mBrowser.isOpen())
         mBrowser.draw(c);
 }
@@ -521,8 +533,9 @@ void RationsEditorView::composeHead(Canvas &c)
     for (int i = 0; i < geo::kKnobCount; ++i)
         drawKnob(c, geo::kKnobs[i], true);
 
-    // Five bat switches and five LEDs: one per channel, plus the gate. Exactly one channel LED is
-    // ever lit, which is what kChannelId being a list parameter rather than four booleans buys.
+    // Four bat switches and four LEDs, one per channel — the gate's pair is up in the utility row
+    // now. Exactly one channel LED is ever lit, which is what kChannelId being a list parameter
+    // rather than four booleans buys.
     //
     // The switch and its lamp read DIFFERENT things, and on purpose. A bat switch on a real amp
     // moves the instant your hand moves it, so it follows the request; the lamp says which amp is
@@ -531,24 +544,22 @@ void RationsEditorView::composeHead(Canvas &c)
     // the honest report, and the reason the switch is held rather than faked.
     const int requested = requestedChannel();
     const int sounding = activeChannel();
-    const bool gateOn = paramValue(kNoiseGateOnId) > 0.5;
     for (int i = 0; i < geo::kToggleCount; ++i) {
-        const bool channel = i < geo::kChannelToggleCount;
-        drawToggle(c, geo::kToggles[i], channel ? (i == requested) : gateOn);
+        drawToggle(c, geo::kToggles[i], i == requested);
         drawLed(c, static_cast<float>(geo::kToggles[i].cx), static_cast<float>(geo::kLedCY),
-                channel ? (i == sounding) : gateOn);
+                i == sounding);
     }
 
-    // The utility row: BYPASS and EQ, each with its own lamp beside it. Both lamps say the stage
-    // is IN circuit, which is why the bypass one is lit when bypass is OFF: the parameter names
-    // the switch's action and the lamp reports the signal path, and on this one switch those are
-    // opposites. ToggleSpec::invert carries exactly the same fact for the bat.
+    // The utility row: BYPASS, EQ and GATE, each with its own lamp beside it. Every lamp says the
+    // stage is IN circuit, which is why the bypass one is lit when bypass is OFF: the parameter
+    // names the switch's action and the lamp reports the signal path, and on that one switch those
+    // are opposites. ToggleSpec::invert carries exactly the same fact for the bat.
     for (int i = 0; i < geo::kTopToggleCount; ++i) {
         const geo::ToggleSpec &t = geo::kTopToggles[i];
         const bool on = paramValue(t.id) > 0.5;
         drawToggle(c, t, on);
         drawLed(c, static_cast<float>(geo::kTopLedCX[i]), static_cast<float>(geo::kTopLedCY),
-                t.invert ? !on : on);
+                t.invert ? !on : on, static_cast<float>(geo::kTopLedR));
     }
 
     drawMeter(c, geo::kInputMeter, mInDisp, mInPeak);
@@ -558,6 +569,7 @@ void RationsEditorView::composeHead(Canvas &c)
 
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);
+    drawSlimIcon(c);
     drawGear(c);
 }
 
@@ -1403,37 +1415,67 @@ void RationsEditorView::drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled
                paramValue(k.id));
 
     const bool isIo = (k.id == kInputGainId || k.id == kOutputGainId);
+    const int channel = channelOfKnob(k);
+    const float clip = geo::kKnobPitch - 6.0f;
+    const bool dragging = (mDragParam == k.id);
+
+    // The legend row. The four channel dials take their legend from the channel, not from this
+    // table: the user names a channel by loading a folder into it or by typing over that name, and
+    // this is where that shows on the faceplate. k.label stays as the fallback and as the string
+    // the art audit measures — an arbitrary user name cannot be measured in advance, which is why
+    // the clip is here and is what keeps a long one out of its neighbour's column.
+    const std::string legend = channel >= 0 && mController ? mController->channelName(channel)
+                                                           : std::string(k.label);
+
+    // Whether a dial gets a permanent value row underneath is decided by geometry, not by kind.
+    //
+    // The four CHANNEL dials do not, because the band below them belongs to the bat switches,
+    // whose art spans 20 px either side of their own centre line, and the dial's art ends one
+    // pixel above the switch's begins. A readout there is drawn straight across the levers.  So
+    // they keep the older arrangement: one row, and the readout TAKES it while the dial is held.
+    // Losing the legend for the duration costs nothing — the pointer is on the dial being
+    // dragged, so which control it is is not in question — and what a channel dial reports is a
+    // capture name rather than a number, which is a legend-shaped thing anyway.
+    //
+    // Threshold, Bass, Middle and Treble have nothing under them since the gate switch moved up to
+    // the utility row, and the Input and Output dials have the row their legend used to occupy. So
+    // those six show legend AND value at once, which is the parent plug-in's arrangement and is
+    // the point of the whole rearrangement: an amp you can read without touching it.
+    const bool hasValueRow = (channel < 0);
+    const std::string readout = knobReadout(k);
+
+    if (!hasValueRow) {
+        const bool showValue = dragging && !readout.empty();
+        c.setFont(showValue ? Font::Body : Font::Title);
+        c.setFontSize(showValue ? geo::kKnobValueSize : geo::kKnobLabelSize);
+        c.setColor(showValue ? geo::kAccent : (enabled ? geo::kTextColor : geo::kDimColor));
+        const std::string text = c.clipToWidth(showValue ? readout : legend, clip);
+        c.drawString(text.c_str(), k.cx - c.stringWidth(text.c_str()) * 0.5f,
+                     static_cast<float>(k.cy - geo::kKnobLabelDY));
+        return;
+    }
+
     const float labelY =
         isIo ? static_cast<float>(geo::kIoLabelBaselineY) : (k.cy - geo::kKnobLabelDY);
+    const float valueY =
+        isIo ? static_cast<float>(geo::kIoValueBaselineY) : (k.cy + geo::kKnobValueDY);
 
-    // ONE text row per dial, and while the dial is being dragged the readout takes it.
-    //
-    // Not a second row underneath, which is where a value would naturally go and where it cannot
-    // go here: the band below the main row belongs to the bat switches, whose art spans 20 px
-    // either side of their own centre line, and a readout there is drawn straight across the
-    // levers. There is no gap to move it into — the dial's own art ends one pixel above the
-    // switch art begins — so the row above is the only space that exists.
-    //
-    // Losing the legend for the duration costs nothing: the pointer is on the dial being held, so
-    // which control it is is not in question, and the accent colour says the row is live rather
-    // than silkscreen.
-    const std::string readout = (mDragParam == k.id) ? knobReadout(k) : std::string();
-    const bool showValue = !readout.empty();
+    c.setFont(Font::Title);
+    c.setFontSize(isIo ? geo::kIoLabelSize : geo::kKnobLabelSize);
+    c.setColor(enabled ? geo::kTextColor : geo::kDimColor);
+    const std::string shownLegend = c.clipToWidth(legend, clip);
+    c.drawString(shownLegend.c_str(), k.cx - c.stringWidth(shownLegend.c_str()) * 0.5f, labelY);
 
-    c.setFont(showValue ? Font::Body : Font::Title);
-    c.setFontSize(showValue ? geo::kKnobValueSize
-                            : (isIo ? geo::kIoLabelSize : geo::kKnobLabelSize));
-    c.setColor(showValue ? geo::kAccent : (enabled ? geo::kTextColor : geo::kDimColor));
-    // The four channel dials take their legend from the channel, not from this table: the user
-    // names a channel by loading a folder into it or by typing over that name, and this is where
-    // that shows on the faceplate. k.label stays as the fallback and as the string the art audit
-    // measures — an arbitrary user name cannot be measured in advance, which is why the clip below
-    // was already here and why it is what keeps a long one out of its neighbour's column.
-    const std::string legend = channelOfKnob(k) >= 0 && mController
-                                   ? mController->channelName(channelOfKnob(k))
-                                   : std::string(k.label);
-    const std::string text = c.clipToWidth(showValue ? readout : legend, geo::kKnobPitch - 6.0f);
-    c.drawString(text.c_str(), k.cx - c.stringWidth(text.c_str()) * 0.5f, labelY);
+    // Dim when idle, accent while this dial is being dragged. The row does not appear and
+    // disappear — a value that came and went would make the panel twitch under the hand — it only
+    // changes colour, which says "live" without moving anything.
+    if (readout.empty())
+        return;
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kKnobValueSize);
+    c.setColor(dragging ? geo::kAccent : geo::kDimColor);
+    const std::string shownValue = c.clipToWidth(readout, clip);
+    c.drawString(shownValue.c_str(), k.cx - c.stringWidth(shownValue.c_str()) * 0.5f, valueY);
 }
 
 //------------------------------------------------------------------------
@@ -1479,10 +1521,10 @@ void RationsEditorView::drawToggleFallback(Canvas &c, const Rect &dest, bool bat
 void RationsEditorView::drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on)
 {
     const bool batUp = t.invert ? !on : on;
-    const Rect dest(t.cx - geo::kToggleW / 2.0f, t.cy - geo::kToggleH / 2.0f, geo::kToggleW,
-                    geo::kToggleH);
-    const int pw = static_cast<int>(std::lround(geo::kToggleW * mScale));
-    const int ph = static_cast<int>(std::lround(geo::kToggleH * mScale));
+    const Rect dest(t.cx - t.w / 2.0f, t.cy - t.h / 2.0f, static_cast<float>(t.w),
+                    static_cast<float>(t.h));
+    const int pw = static_cast<int>(std::lround(t.w * mScale));
+    const int ph = static_cast<int>(std::lround(t.h * mScale));
     if (cairo_surface_t *s =
             mImages.getScaled(batUp ? "switch_up_ring" : "switch_down_ring", pw, ph)) {
         c.drawImage(s, dest);
@@ -1615,6 +1657,106 @@ void RationsEditorView::drawIrRow(Canvas &c, int slot)
         c.strokeLine(x.left(), x.bottom(), x.right(), x.top());
         c.setPenSize(1.0f);
     }
+}
+
+//------------------------------------------------------------------------
+// Whether the Slim icon exists at all right now. ONE function, because the painter, the hit test
+// and the overlay's own survival all have to agree about it — an icon that is drawn and not
+// clickable, or clickable and not drawn, is worse than either.
+//
+// Shown only when a loaded channel's captures are slimmable containers, which is what both
+// plug-ins this one descends from do: they gate their icon on the loaded model actually being a
+// slimmable one. The older captures the trainer now calls A1 carry a single variant, so for them
+// Slim can do nothing whatever, and an icon offering it would be a lie the user only discovers by
+// trying it. A fresh instance with nothing loaded shows nothing either — there are no captures
+// yet to have said what they support.
+//
+// ANY loaded channel and not all: Slim is one setting that rebuilds all four banks, so if a single
+// bank can use it the control is worth reaching. This deliberately does NOT follow the sounding
+// channel the way the output section's greying does, because what it enables is not per-channel.
+bool RationsEditorView::slimAvailable() const
+{
+    return mController && mController->anyBankSlimmable();
+}
+
+//------------------------------------------------------------------------
+// The Slim icon, immediately left of the gear, drawn only while it is available.
+void RationsEditorView::drawSlimIcon(Canvas &c)
+{
+    if (!slimAvailable())
+        return;
+    if (cairo_surface_t *icon = mSvgs.getByHeight("SlimmableIcon", geo::kSlimIconH)) {
+        c.drawImageCentered(icon, static_cast<float>(geo::kSlimIconCX),
+                            static_cast<float>(geo::kSlimIconCY));
+        return;
+    }
+    // Degradation path, as the gear has: the icon's own shape in two strokes, so a missing asset
+    // still leaves something clickable that looks like what it opens.
+    const float cx = static_cast<float>(geo::kSlimIconCX);
+    const float cy = static_cast<float>(geo::kSlimIconCY);
+    const float half = geo::kSlimIconW * 0.5f;
+    c.setColor(geo::kDimColor);
+    c.setPenSize(2.0f);
+    c.strokeLine(cx - half, cy, cx + half, cy);
+    c.setColor(geo::kGold);
+    c.strokeEllipse(cx, cy, half * 0.25f, half * 0.25f);
+    c.setPenSize(1.0f);
+}
+
+//------------------------------------------------------------------------
+// One knob on a card, over the dimmed panel. The same dial art and the same dim as everything
+// else, because a control that looked different here would read as belonging to something else.
+void RationsEditorView::drawSlimOverlay(Canvas &c)
+{
+    c.setColor(0x000000, 170);
+    c.fillRect(c.bounds());
+
+    const Rect card(static_cast<float>(geo::kSlimOverlayX), static_cast<float>(geo::kSlimOverlayY),
+                    static_cast<float>(geo::kSlimOverlayW), static_cast<float>(geo::kSlimOverlayH));
+    c.setColor(geo::kFaceColor);
+    c.fillRoundRect(card, 10.0f);
+    c.setColor(geo::kGold);
+    c.setPenSize(1.0f);
+    c.strokeRoundRect(card, 10.0f);
+
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kSlimTitleSize);
+    c.setColor(geo::kTextColor);
+    c.drawString(geo::kSlimTitle, geo::kSlimKnobCX - c.stringWidth(geo::kSlimTitle) * 0.5f,
+                 static_cast<float>(geo::kSlimTitleBaselineY));
+
+    drawKnobAt(c, static_cast<float>(geo::kSlimKnobCX), static_cast<float>(geo::kSlimKnobCY),
+               static_cast<float>(geo::kSlimKnobR), paramValue(kSlimId));
+
+    const std::string value = paramText(kSlimId);
+    if (!value.empty()) {
+        c.setFont(Font::Body);
+        c.setFontSize(geo::kKnobValueSize);
+        c.setColor(mDragParam == kSlimId ? geo::kAccent : geo::kTextColor);
+        c.drawString(value.c_str(), geo::kSlimKnobCX - c.stringWidth(value.c_str()) * 0.5f,
+                     static_cast<float>(geo::kSlimValueBaselineY));
+    }
+
+    c.setFont(Font::Body);
+    c.setFontSize(geo::kSlimHintSize);
+    c.setColor(geo::kDimColor);
+    c.drawString(geo::kSlimHint, geo::kSlimKnobCX - c.stringWidth(geo::kSlimHint) * 0.5f,
+                 static_cast<float>(geo::kSlimHintBaselineY));
+}
+
+//------------------------------------------------------------------------
+// The only way out, so the publish cannot be forgotten by one of them. Applying rebuilds every
+// capture in every loaded bank, so it happens once per gesture and only if the knob actually
+// moved — see kMsgSetSlim and ChannelRack::setSlim.
+void RationsEditorView::closeSlim()
+{
+    if (!mSlimOpen)
+        return;
+    mSlimOpen = false;
+    if (mSlimDirty && mController)
+        mController->applySlim();
+    mSlimDirty = false;
+    invalidate();
 }
 
 //------------------------------------------------------------------------
@@ -1825,6 +1967,13 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
     // window class delivers double-clicks: the X11 view sees two ordinary presses and the Win32
     // one deliberately does not set CS_DBLCLKS, so that the two platforms behave the same.
     if (button == 3) {
+        // The Slim overlay closes on a right-click ANYWHERE, which is the gesture the author asked
+        // for and is tested before everything else so it cannot be swallowed by a control under
+        // the dim.
+        if (mSlimOpen) {
+            closeSlim();
+            return;
+        }
         if (mPage == geo::Page::Settings && !mBrowser.isOpen() && mController) {
             const float cy = contentY(fy);
             for (int i = 0; i < geo::kLevelRowCount; ++i) {
@@ -1860,6 +2009,19 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
         return;
     mMouseX = fx;
     mMouseY = fy;
+
+    // The Slim overlay captures input while open: its knob, or anywhere else to dismiss. Tested
+    // before the browser because it is drawn over it, and it returns unconditionally, so nothing
+    // underneath the dim can be clicked through.
+    if (mSlimOpen) {
+        if (hitCircle(fx, fy, geo::kSlimKnobCX, geo::kSlimKnobCY, geo::kSlimKnobR)) {
+            startDrag(kSlimId, fx, fy);
+            invalidate();
+        } else {
+            closeSlim();
+        }
+        return;
+    }
 
     // The file browser captures input while open.
     if (mBrowser.isOpen()) {
@@ -1916,6 +2078,20 @@ bool RationsEditorView::handleHeadClick(float x, float y)
         setPage(geo::Page::Settings);
         return true;
     }
+    // Slim opens an overlay rather than a page: it is one knob, and a page for one knob would be a
+    // window change and a back button to reach something most users set once. Tested against the
+    // same availability the icon is drawn from, so there is never an invisible hot spot beside the
+    // gear.
+    if (slimAvailable() &&
+        Rect(geo::kSlimIconCX - geo::kSlimIconW * 0.5f, geo::kSlimIconCY - geo::kSlimIconH * 0.5f,
+             geo::kSlimIconW, geo::kSlimIconH)
+            .inset(-4.0f)
+            .contains(x, y)) {
+        mSlimOpen = true;
+        mSlimDirty = false;
+        invalidate();
+        return true;
+    }
     for (const geo::ButtonSpec &b : geo::kPageButtons) {
         if (buttonRect(b).contains(x, y)) {
             setPage(b.target);
@@ -1948,25 +2124,21 @@ bool RationsEditorView::handleHeadClick(float x, float y)
                        static_cast<float>(geo::kToggleHitBottom - geo::kToggleHitTop));
         if (!bat.contains(x, y))
             continue;
-        if (i < geo::kChannelToggleCount) {
-            // One list parameter, four views onto it. Clicking the switch that is already up is a
-            // no-op: a real amp head has no all-channels-off position, so there is nothing for a
-            // second click to mean.
-            if (i != requestedChannel())
-                editParam(kChannelId, i / static_cast<double>(kChannelCount - 1));
-        } else {
-            editParam(t.id, paramValue(t.id) > 0.5 ? 0.0 : 1.0);
-        }
+        // One list parameter, four views onto it. Clicking the switch that is already up is a
+        // no-op: a real amp head has no all-channels-off position, so there is nothing for a
+        // second click to mean.
+        if (i != requestedChannel())
+            editParam(kChannelId, i / static_cast<double>(kChannelCount - 1));
         invalidate();
         return true;
     }
 
-    // The utility row. Both are plain booleans, so unlike the five above there is no list
+    // The utility row. All three are plain booleans, so unlike the four above there is no list
     // parameter to map and no already-up case to ignore.
     for (const geo::ToggleSpec &t : geo::kTopToggles) {
-        const Rect top(t.cx - geo::kToggleHitW / 2.0f,
-                       static_cast<float>(t.cy + geo::kToggleHitTop), geo::kToggleHitW,
-                       static_cast<float>(geo::kToggleHitBottom - geo::kToggleHitTop));
+        const Rect top(t.cx - geo::kTopToggleHitW / 2.0f,
+                       static_cast<float>(t.cy + geo::kTopToggleHitTop), geo::kTopToggleHitW,
+                       static_cast<float>(geo::kTopToggleHitBottom - geo::kTopToggleHitTop));
         if (!top.contains(x, y))
             continue;
         editParam(t.id, paramValue(t.id) > 0.5 ? 0.0 : 1.0);
@@ -2120,6 +2292,10 @@ void RationsEditorView::onMouseMove(int x, int y)
     } else {
         norm = clampNorm(mDragStartNorm + (mDragStartY - mMouseY) / kKnobDragRange);
     }
+    // A Slim drag that actually moved is what makes the release worth publishing. A click on the
+    // knob that goes nowhere leaves mSlimDirty false and costs no rebuild.
+    if (mDragParam == kSlimId && norm != mDragStartNorm)
+        mSlimDirty = true;
     mController->setParamNormalized(mDragParam, norm);
     mController->performEdit(mDragParam, norm);
     invalidate();
@@ -2134,8 +2310,16 @@ void RationsEditorView::onMouseUp(int /*x*/, int /*y*/, int button)
         invalidate(); // the thumb goes back to its resting brightness
     }
     if (mDragParam && mController) {
+        const bool wasSlim = (mDragParam == kSlimId);
         mController->endEdit(mDragParam);
         mDragParam = 0;
+        // Slim is published HERE and not while the knob moves: applying it rebuilds every capture
+        // in every loaded bank, so a drag that published every step would hold all four channels
+        // at ramped silence for the whole gesture. See kMsgSetSlim.
+        if (wasSlim && mSlimDirty) {
+            mController->applySlim();
+            mSlimDirty = false;
+        }
         invalidate(); // the readout goes away
     }
 }
@@ -2147,6 +2331,13 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
     const float fx = static_cast<float>((x - mOffX) / mScale);
     const float fy = static_cast<float>((y - mOffY) / mScale);
 
+    if (mSlimOpen) {
+        if (hitCircle(fx, fy, geo::kSlimKnobCX, geo::kSlimKnobCY, geo::kSlimKnobR)) {
+            nudgeParam(kSlimId, delta * 0.05);
+            mSlimDirty = true;
+        }
+        return;
+    }
     if (mBrowser.isOpen()) {
         if (mBrowser.handleWheel(delta))
             invalidate();
@@ -2559,6 +2750,14 @@ void RationsEditorView::ParamChanged(Vst::ParamID id, Vst::ParamValue value)
 void RationsEditorView::ModelCapsChanged(const int entryCounts[kChannelCount],
                                          const std::vector<std::string> names[kChannelCount])
 {
+    // A bank that has just been loaded or cleared can take the Slim control away underneath an
+    // open overlay - load a channel of older single-variant captures while it is up and the icon
+    // that opened it is gone. Shut it, exactly as the upstream plug-in hides its own overlay and
+    // knob when the model it belongs to goes away. closeSlim() publishes first if the knob moved,
+    // so a setting made a moment ago is not lost by the load that hid the control.
+    if (mSlimOpen && !slimAvailable())
+        closeSlim();
+
     for (int c = 0; c < kChannelCount; ++c) {
         mEntryCount[c] = entryCounts[c];
         mCaptureNames[c] = names[c];

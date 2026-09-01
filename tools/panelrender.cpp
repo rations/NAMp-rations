@@ -70,7 +70,7 @@ const char *const kRequiredImages[] = {
 // Every icon the editor rasterises. Folder is the author's own; the rest are
 // the original plug-in's, unmodified.
 const char *const kRequiredIcons[] = {
-    "Folder", "File", "Gear", "Cross", "ArrowLeft", "ArrowRight",
+    "Folder", "File", "Gear", "Cross", "ArrowLeft", "ArrowRight", "SlimmableIcon",
 };
 
 constexpr int kImageCount = static_cast<int>(sizeof(kRequiredImages) / sizeof(char *));
@@ -110,8 +110,8 @@ void drawCenteredText(Canvas &c, Font f, float size, uint32_t rgb, const char *t
 void drawToggle(Canvas &c, ImageCache &images, const geo::ToggleSpec &t, bool on)
 {
     const bool batUp = t.invert ? !on : on;
-    const Rect dest(t.cx - geo::kToggleW / 2.0f, t.cy - geo::kToggleH / 2.0f, geo::kToggleW,
-                    geo::kToggleH);
+    const Rect dest(t.cx - t.w / 2.0f, t.cy - t.h / 2.0f, static_cast<float>(t.w),
+                    static_cast<float>(t.h));
     if (cairo_surface_t *s = images.get(batUp ? "switch_up_ring" : "switch_down_ring")) {
         c.drawImage(s, dest);
     } else {
@@ -235,6 +235,43 @@ void drawIrRow(Canvas &c, SvgCache &icons, const geo::FileRow &row, const char *
 }
 
 //------------------------------------------------------------------------
+// The plug-in's dial readout, reproduced. In the editor the string comes back from
+// getParamStringByValue, which is the SDK denormalizing into "%.1f" at the precision the
+// parameter was given and the view appending KnobSpec::unit with one space. There is no
+// controller here, so the same arithmetic is written out — and it has to be the SAME string,
+// because what the audit below measures is whether the real readout fits its column.
+std::string knobValueText(const geo::KnobSpec &k, double norm)
+{
+    double lo = 0.0, hi = 1.0;
+    if (k.id == kNoiseGateThresholdId) {
+        lo = ranges::kNgMin;
+        hi = ranges::kNgMax;
+    } else if (k.id == kBassId || k.id == kMiddleId || k.id == kTrebleId) {
+        lo = ranges::kToneMin;
+        hi = ranges::kToneMax;
+    } else if (k.id == kInputGainId || k.id == kOutputGainId) {
+        lo = ranges::kGainMin;
+        hi = ranges::kGainMax;
+    } else {
+        return std::string(); // a channel dial names a capture, not a level
+    }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.1f", lo + norm * (hi - lo));
+    std::string out(buf);
+    if (k.unit) {
+        out += ' ';
+        out += k.unit;
+    }
+    return out;
+}
+
+// The four dials that have a permanent value row under them, and the two I/O dials, drawn in the
+// worst string each can show rather than in its demo position: what the audit is for is the
+// column, and the column has to hold "-100.0 dB" whether or not the demo happens to.
+const char *kWorstKnobValue[geo::kKnobCount] = {nullptr,     nullptr, nullptr, nullptr,
+                                                "-100.0 dB", "10.0",  "10.0",  "10.0"};
+const char *kWorstIoValue = "-40.0 dB";
+
 void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
 {
     c.setColor(geo::kBgColor);
@@ -256,28 +293,35 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
         drawCenteredText(c, Font::Title, geo::kKnobLabelSize, geo::kTextColor, geo::kKnobs[i].label,
                          static_cast<float>(geo::kKnobs[i].cx),
                          static_cast<float>(geo::kKnobs[i].cy - geo::kKnobLabelDY));
+        // The permanent value row, on the four dials that have one. Dim, because the editor draws
+        // it dim until that dial is dragged, and it is the idle panel that is being audited.
+        const std::string value = knobValueText(geo::kKnobs[i], demo[i]);
+        if (!value.empty())
+            drawCenteredText(c, Font::Body, geo::kKnobValueSize, geo::kDimColor, value.c_str(),
+                             static_cast<float>(geo::kKnobs[i].cx),
+                             static_cast<float>(geo::kKnobs[i].cy + geo::kKnobValueDY));
     }
 
-    // Five LEDs and five bat switches: one per channel, plus the gate. Exactly
-    // one channel LED is ever lit, which is the whole point of kChannelId being
-    // a list parameter rather than four booleans.
-    const bool gateOn = true;
+    // Four LEDs and four bat switches, one per channel. Exactly one channel LED
+    // is ever lit, which is the whole point of kChannelId being a list parameter
+    // rather than four booleans. The gate's pair is up in the utility row.
     for (int i = 0; i < geo::kToggleCount; ++i) {
-        const bool on = (i < geo::kChannelToggleCount) ? (i == activeChannel) : gateOn;
+        const bool on = (i == activeChannel);
         drawToggle(c, images, geo::kToggles[i], on);
         drawLed(c, images, static_cast<float>(geo::kToggles[i].cx), static_cast<float>(geo::kLedCY),
                 on);
     }
 
-    // The utility row — BYPASS and EQ with a lamp each, in the band left of the wordmark.
-    // Neither switch is in the mock; see geometry.h. Drawn in the state the panel is in when
-    // nobody has touched it: bypass off, EQ on, so both lamps are lit.
+    // The utility row — BYPASS, EQ and GATE with a lamp each, in the band left of the wordmark.
+    // None of the three is in the mock; see geometry.h. Drawn in the state the panel is in when
+    // nobody has touched it: bypass off, EQ and gate on, so all three lamps are lit.
     for (int i = 0; i < geo::kTopToggleCount; ++i) {
         const geo::ToggleSpec &t = geo::kTopToggles[i];
-        const bool on = (t.id == kToneStackOnId);
+        const bool on = (t.id != kBypassId);
         drawToggle(c, images, t, on);
         drawLed(c, images, static_cast<float>(geo::kTopLedCX[i]),
-                static_cast<float>(geo::kTopLedCY), t.invert ? !on : on);
+                static_cast<float>(geo::kTopLedCY), t.invert ? !on : on,
+                static_cast<float>(geo::kTopLedR));
     }
 
     drawMeter(c, images, geo::kInputMeter, 0.62f, 0.78f);
@@ -291,11 +335,19 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
         drawCenteredText(c, Font::Title, geo::kIoLabelSize, geo::kTextColor, geo::kIoKnobs[i].label,
                          static_cast<float>(geo::kIoKnobs[i].cx),
                          static_cast<float>(geo::kIoLabelBaselineY));
+        const std::string value = knobValueText(geo::kIoKnobs[i], io[i]);
+        drawCenteredText(c, Font::Body, geo::kKnobValueSize, geo::kDimColor, value.c_str(),
+                         static_cast<float>(geo::kIoKnobs[i].cx),
+                         static_cast<float>(geo::kIoValueBaselineY));
     }
 
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);
 
+    if (cairo_surface_t *slim = icons.getByHeight("SlimmableIcon", geo::kSlimIconH))
+        c.drawImage(slim, Rect(geo::kSlimIconCX - geo::kSlimIconW / 2.0f,
+                               geo::kSlimIconCY - geo::kSlimIconH / 2.0f, geo::kSlimIconW,
+                               geo::kSlimIconH));
     if (cairo_surface_t *gear = icons.getByHeight("Gear", 2 * geo::kGearR))
         c.drawImage(gear, Rect(geo::kGearCX - geo::kGearR, geo::kGearCY - geo::kGearR,
                                2 * geo::kGearR, 2 * geo::kGearR));
@@ -719,7 +771,9 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
         // The same bat the faceplate uses, through the same helper: a second way of drawing a
         // switch would be a second thing to keep looking like the first.
         constexpr geo::ToggleSpec kCalToggle = {kCalibrateInputId, geo::kCalToggleCX,
-                                                geo::kCalToggleCY, nullptr, false};
+                                                geo::kCalToggleCY, geo::kToggleW,
+                                                geo::kToggleH,     nullptr,
+                                                false};
         drawToggle(c, images, kCalToggle, /*on=*/true);
         const Rect tog(geo::kCalToggleCX - geo::kToggleW * 0.5f,
                        geo::kCalToggleCY - geo::kToggleH * 0.5f, geo::kToggleW, geo::kToggleH);
@@ -845,9 +899,16 @@ bool auditHitBoxes()
     // the same check — and BYPASS in particular has been moved once already, and EQ was fitted
     // into the space beside it with nothing to spare.
     for (const geo::ToggleSpec &t : geo::kTopToggles)
-        boxes.push_back(
-            {t.label, t.cx - geo::kToggleHitW / 2.0f, static_cast<float>(t.cy + geo::kToggleHitTop),
-             t.cx + geo::kToggleHitW / 2.0f, static_cast<float>(t.cy + geo::kToggleHitBottom)});
+        boxes.push_back({t.label, t.cx - geo::kTopToggleHitW / 2.0f,
+                         static_cast<float>(t.cy + geo::kTopToggleHitTop),
+                         t.cx + geo::kTopToggleHitW / 2.0f,
+                         static_cast<float>(t.cy + geo::kTopToggleHitBottom)});
+    // Slim's target, with the editor's own 4 px slop. It is the newest thing in that corner and
+    // the one with a real neighbour, so it is exactly the kind of box this audit exists for.
+    boxes.push_back({"slim icon", geo::kSlimIconCX - geo::kSlimIconW / 2.0f - 4,
+                     geo::kSlimIconCY - geo::kSlimIconH / 2.0f - 4,
+                     geo::kSlimIconCX + geo::kSlimIconW / 2.0f + 4,
+                     geo::kSlimIconCY + geo::kSlimIconH / 2.0f + 4});
     // The gear's click target is its radius plus the same 4 px slop the editor allows.
     boxes.push_back({"gear", static_cast<float>(geo::kGearCX - geo::kGearR - 4),
                      static_cast<float>(geo::kGearCY - geo::kGearR - 4),
@@ -1212,10 +1273,11 @@ bool auditText(FontStack &fonts)
     // bypass switch's click target, and reading it off the row rather than off
     // one named control is what stops this going stale the next time the row
     // grows.
-    float utilityRight = geo::kBypassToggleCX + geo::kToggleHitW / 2.0f;
+    float utilityRight = geo::kBypassToggleCX + geo::kTopToggleHitW / 2.0f;
     for (int i = 0; i < geo::kTopToggleCount; ++i) {
-        utilityRight = std::max(utilityRight, geo::kTopToggles[i].cx + geo::kToggleHitW / 2.0f);
-        utilityRight = std::max(utilityRight, geo::kTopLedCX[i] + static_cast<float>(geo::kLedR));
+        utilityRight = std::max(utilityRight, geo::kTopToggles[i].cx + geo::kTopToggleHitW / 2.0f);
+        utilityRight =
+            std::max(utilityRight, geo::kTopLedCX[i] + static_cast<float>(geo::kTopLedR));
     }
     const float titleRoom =
         2.0f * std::min(geo::kFaceCX - utilityRight,
@@ -1227,11 +1289,21 @@ bool auditText(FontStack &fonts)
     for (const geo::KnobSpec &k : geo::kKnobs)
         fits.push_back(
             {"dial legend", Font::Title, geo::kKnobLabelSize, k.label, geo::kKnobPitch - 8.0f});
+    // The permanent value rows, in the widest string each dial can ever show rather than in the
+    // demo position above — the column has to hold "-100.0 dB" whether or not the render happens
+    // to. Same allowance as the legend over it: a value that reached its neighbour's column would
+    // be the same defect one row down.
+    for (int i = 0; i < geo::kKnobCount; ++i)
+        if (kWorstKnobValue[i])
+            fits.push_back({"dial value", Font::Body, geo::kKnobValueSize, kWorstKnobValue[i],
+                            geo::kKnobPitch - 8.0f});
     // Input / Output sit in their own column outside the dial row; the limit is
     // the canvas edge on one side and the meter column's own width on the other.
     for (const geo::KnobSpec &k : geo::kIoKnobs)
         fits.push_back(
             {"i/o legend", Font::Title, geo::kIoLabelSize, k.label, 2.0f * geo::kSideCXL});
+    fits.push_back(
+        {"i/o value", Font::Body, geo::kKnobValueSize, kWorstIoValue, 2.0f * geo::kSideCXL});
     // BYPASS is drawn BELOW its LED, not beside it, so the LED is not what
     // bounds it: the input meter's column is, on the left, and the wordmark on
     // the right (which is further away, so the left bound decides it). EQ sits
@@ -1377,7 +1449,7 @@ bool auditText(FontStack &fonts)
             if (prevWhat && t.cx - half - prevRight < kUtilityLegendGap) {
                 fprintf(stderr,
                         "panelrender: the \"%s\" and \"%s\" legends are %.1f units apart, %.0f "
-                        "wanted — the utility row is out of space, see kEqToggleCX\n",
+                        "wanted — the utility row is out of space, see kTopPairPitch\n",
                         prevWhat, t.label, t.cx - half - prevRight, kUtilityLegendGap);
                 ++bad;
             }
@@ -1403,6 +1475,26 @@ bool auditText(FontStack &fonts)
                     "panelrender: the utility row's legends stop at y=%.1f and the dial legends "
                     "start at y=%.1f, %.0f units wanted — see kKnobLabelDY\n",
                     utilInk, legendInk, kUtilityLegendGap);
+            ++bad;
+        }
+
+        // The value row that the gate switch's move opened up, against the page buttons that sit
+        // below it. Bass, Middle and Treble are all inside those buttons' x span, so this is a
+        // real overlap and not a theoretical one — and it is measured with the descender rather
+        // than with the font size, because "-100.0 dB" has no descender and "5.0" has none
+        // either, so the size would report a clearance the ink does not need.
+        c.setFont(Font::Body);
+        c.setFontSize(static_cast<float>(geo::kKnobValueSize));
+        float valueInk = -1e9f;
+        for (int i = 0; i < geo::kKnobCount; ++i)
+            if (kWorstKnobValue[i])
+                valueInk = std::max(valueInk, (geo::kKnobs[i].cy + geo::kKnobValueDY) +
+                                                  c.stringDescent(kWorstKnobValue[i]));
+        if (static_cast<float>(geo::kPageButtonY) - valueInk < kUtilityLegendGap) {
+            fprintf(stderr,
+                    "panelrender: the dial value row's ink reaches y=%.1f and the page buttons "
+                    "start at y=%d, %.0f units wanted — see kKnobValueDY\n",
+                    valueInk, geo::kPageButtonY, kUtilityLegendGap);
             ++bad;
         }
     }

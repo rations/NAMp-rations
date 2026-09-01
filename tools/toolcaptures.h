@@ -11,6 +11,9 @@
 
 #pragma once
 
+#include <filesystem>
+#include <fstream>
+
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 
 #include "pluginterfaces/vst/ivstcomponent.h"
@@ -82,6 +85,79 @@ inline bool sendCaptureLoad(Steinberg::Vst::HostApplication &host,
 // All four channels from one root, each from its own subdirectory. A channel whose directory is
 // missing is not an error here: ModelBank warns and that channel outputs ramped silence, which is
 // the behaviour a tool asserting on a partial bank set wants to see rather than be spared.
+// Publish a Slim setting the way the settings overlay does: an IMessage on the message thread,
+// never the parameter queue, because applying it rebuilds every capture in every loaded bank.
+// The caller has to WAIT afterwards - a rebuilt bank is republished before any entry is ready, so
+// a render started too soon measures ramped silence rather than a smaller model.
+inline bool sendSlim(Steinberg::Vst::HostApplication &host, Steinberg::Vst::IComponent *component,
+                     double slim)
+{
+    using namespace Steinberg;
+    FUnknownPtr<Vst::IConnectionPoint> cp(component);
+    if (!cp)
+        return false;
+    TUID iid;
+    std::memcpy(iid, Vst::IMessage::iid, sizeof(TUID));
+    Vst::IMessage *raw = nullptr;
+    if (host.createInstance(iid, iid, reinterpret_cast<void **>(&raw)) != kResultOk || !raw)
+        return false;
+    IPtr<Vst::IMessage> msg = owned(raw);
+    msg->setMessageID(Rations::kMsgSetSlim);
+    msg->getAttributes()->setFloat(Rations::kSlimAttr, slim);
+    return cp->notify(msg) == kResultOk;
+}
+
+// Ask the processor to re-send its capability message, which is what the EDITOR does and what a
+// tool has to do too. The caps sent automatically on a load necessarily report an empty bank - the
+// worker has not built anything yet - so a tool that never asks sees zero captures for ever, and
+// any assertion about what the controller believes is loaded passes vacuously. Found exactly that
+// way: a check on the Slim parameter's title agreed with the captures while never having heard
+// about them.
+inline bool requestCaps(Steinberg::Vst::HostApplication &host,
+                        Steinberg::Vst::IComponent *component)
+{
+    using namespace Steinberg;
+    FUnknownPtr<Vst::IConnectionPoint> cp(component);
+    if (!cp)
+        return false;
+    TUID iid;
+    std::memcpy(iid, Vst::IMessage::iid, sizeof(TUID));
+    Vst::IMessage *raw = nullptr;
+    if (host.createInstance(iid, iid, reinterpret_cast<void **>(&raw)) != kResultOk || !raw)
+        return false;
+    IPtr<Vst::IMessage> msg = owned(raw);
+    msg->setMessageID(Rations::kMsgRequestCaps);
+    return cp->notify(msg) == kResultOk;
+}
+
+// Whether the captures under `root` are slimmable containers at all, read out of the files rather
+// than assumed. A capture with one variant is unaffected by Slim BY CONSTRUCTION, so a proof that
+// rendered the same audio at both ends of the knob would be reporting the file's shape and not the
+// plug-in's behaviour. Knowing which case we are in is what lets the offline proof assert in one
+// and say so in the other - the same rule the Calibrated output mode follows.
+inline bool rootStatesSlimmable(const std::string &root)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (int c = 0; c < Rations::kChannelCount; ++c) {
+        const fs::path dir = fs::path(root) / Rations::kChannelDefaultName[c];
+        for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file(ec) || it->path().extension() != ".nam")
+                continue;
+            std::ifstream f(it->path(), std::ios::binary);
+            if (!f)
+                continue;
+            // The architecture field is near the top of the file; a bounded read keeps this from
+            // pulling a megabyte of weights in to answer a question about one string.
+            std::string head(64 * 1024, '\0');
+            f.read(&head[0], static_cast<std::streamsize>(head.size()));
+            head.resize(static_cast<size_t>(f.gcount()));
+            return head.find("SlimmableContainer") != std::string::npos;
+        }
+    }
+    return false;
+}
+
 inline bool loadCaptureRoot(Steinberg::Vst::HostApplication &host,
                             Steinberg::Vst::IComponent *component, const std::string &root)
 {

@@ -307,7 +307,7 @@ std::pair<Vst::ParamID, double> cc(int number, int value)
 // arithmetic, which is the version of "a second copy of the layout" that fails loudly when the
 // layout changes under it instead of returning four plausible wrong numbers.
 bool readTrims(MemoryStream &s, double out[kChannelCount], std::vector<double> *pedals = nullptr,
-               double *eqOn = nullptr)
+               double *eqOn = nullptr, double *slim = nullptr)
 {
     s.seek(0, IBStream::kIBSeekSet, nullptr);
     IBStreamer streamer(&s, kLittleEndian);
@@ -359,7 +359,9 @@ bool readTrims(MemoryStream &s, double out[kChannelCount], std::vector<double> *
     // between - which is the same argument the pedals below are read by, one field further on.
     if (eqOn)
         *eqOn = 1.0; // what a version 1-6 project opens as
-    if (!pedals && !eqOn)
+    if (slim)
+        *slim = 1.0; // and what a version 1-7 project opens as: the whole model
+    if (!pedals && !eqOn && !slim)
         return true;
 
     // On to the pedalboard, which means reading past the output section and the four capture
@@ -401,9 +403,19 @@ bool readTrims(MemoryStream &s, double out[kChannelCount], std::vector<double> *
     // because the version-5 and version-6 fixtures below are made by rewriting the version word
     // and copying the tail byte for byte, so the double is still physically present in blobs that
     // must not read it.
-    if (version < 7 || !eqOn)
+    if (version < 7)
         return true;
-    return streamer.readDouble(*eqOn);
+    double eq = 1.0;
+    if (!streamer.readDouble(eq))
+        return false;
+    if (eqOn)
+        *eqOn = eq;
+    // Version 8 onwards: Slim, after it, and now the end of the blob. Same rule and same fixture
+    // trick as the EQ double above it: a version-7 blob made by rewriting the version word still
+    // physically CARRIES this value, so a reader that forgot its guard would find it.
+    if (version < 8 || !slim)
+        return true;
+    return streamer.readDouble(*slim);
 }
 
 // Rewrite a state blob's MIDI block: a different version word, a different number of rows, and a
@@ -1321,6 +1333,62 @@ int main(int argc, char **argv)
             Block eqOn;
             eqOn.params.push_back({kToneStackOnId, 1.0});
             rig.run(eqOn);
+            saved.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&saved) == kResultOk, "the blob under test is restored");
+        }
+
+        // --- Slim, which is the whole of state version 8 ------------------------------------
+        //
+        // The same shape as the EQ switch above, one field further on, and it matters for the same
+        // reason: it is last, so its offset depends on every length before it having been consumed
+        // correctly, and an older reader must not read it at all. A version 1-7 project opens at
+        // 1.0 - the whole model - because that is what every build before this one was hard-wired
+        // to and so is what that project actually sounded like.
+        {
+            Block slimDown;
+            slimDown.params.push_back({kSlimId, 0.0});
+            rig.run(slimDown);
+
+            MemoryStream withSlim;
+            double sv = -1.0, eq = -1.0;
+            double t[kChannelCount] = {};
+            std::vector<double> pv;
+            check(component->getState(&withSlim) == kResultOk &&
+                      readTrims(withSlim, t, &pv, &eq, &sv) && sv == 0.0,
+                  "Slim is written at the end of the blob");
+
+            withSlim.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&withSlim) == kResultOk,
+                  "a version 8 blob with Slim 0 loads");
+            MemoryStream again;
+            double svAgain = -1.0;
+            check(component->getState(&again) == kResultOk &&
+                      readTrims(again, t, &pv, &eq, &svAgain) && svAgain == 0.0,
+                  "... and Slim is still 0 after the round trip");
+            withSlim.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(controller->setComponentState(&withSlim) == kResultOk &&
+                      controller->getParamNormalized(kSlimId) == 0.0,
+                  "... and the editor reads it at the same offset");
+
+            std::vector<char> preSlim;
+            check(rewriteMidiBlock(withSlim, 7, kMidiLearnRowCount, preSlim),
+                  "a version 7 blob can be built from it");
+            MemoryStream blob(preSlim.data(), static_cast<TSize>(preSlim.size()));
+            blob.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&blob) == kResultOk, "a version 7 blob loads");
+            MemoryStream back;
+            double svBack = -1.0;
+            check(component->getState(&back) == kResultOk &&
+                      readTrims(back, t, &pv, &eq, &svBack) && svBack == 1.0,
+                  "... and opens at Slim 1.0, not at the byte its tail still carries");
+            blob.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(controller->setComponentState(&blob) == kResultOk &&
+                      controller->getParamNormalized(kSlimId) == 1.0,
+                  "... and the editor agrees with it");
+
+            Block slimUp;
+            slimUp.params.push_back({kSlimId, 1.0});
+            rig.run(slimUp);
             saved.seek(0, IBStream::kIBSeekSet, nullptr);
             check(component->setState(&saved) == kResultOk, "the blob under test is restored");
         }

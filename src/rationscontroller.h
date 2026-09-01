@@ -76,6 +76,11 @@ public:
     // the click.
     Steinberg::tresult setCaptureSource(int channel, const Steinberg::char8 *path,
                                         bool isDirectory);
+
+    // Publish the Slim setting to the processor, which is what makes it take effect: the parameter
+    // itself only records it. Called from the editor when the Slim knob is RELEASED, never while it
+    // moves — see kMsgSetSlim for why, and ChannelRack::setSlim for what it costs.
+    Steinberg::tresult applySlim();
     const std::string &capturePath(int channel) const;
     bool captureIsDirectory(int channel) const;
 
@@ -101,6 +106,14 @@ public:
     bool bankHasLoudness(int channel) const;
     bool bankHasInputLevel(int channel) const;
     bool bankHasOutputLevel(int channel) const;
+
+    // Whether ANY loaded channel's captures are slimmable, which is what decides whether the Slim
+    // icon is drawn at all. Any and not all: Slim is one setting that rebuilds every bank, so if a
+    // single loaded channel can use it the control is worth reaching - hiding it because one of
+    // four banks is an older capture would put the setting out of reach of the three that can.
+    // Unlike the output section's gating this does NOT follow the sounding channel, for the same
+    // reason: what it enables is not per-channel.
+    bool anyBankSlimmable() const;
 
     //---from IMidiMapping------------
     // One ParamID per controller number, on every channel and every event bus. The channel is

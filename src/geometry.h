@@ -323,13 +323,19 @@ constexpr int kToggleW = 24, kToggleH = 40;
 constexpr int kKnobToToggleGap = 6;
 constexpr int kToggleCY = kKnobCY + kKnobR + kKnobToToggleGap + kToggleH / 2; // 257
 
-// --- Channel / gate indicator LEDs (5), under the switches ------------------
-// Red when the channel is the one sounding, black otherwise; the gate's lamp
-// follows its own toggle. Centred on their dials.
+// --- Channel indicator LEDs (4), under the switches -------------------------
+// Red when the channel is the one sounding, black otherwise. Centred on their
+// dials.
+//
+// Four and not five: the gate's switch and lamp moved UP to the utility row
+// beside BYPASS and EQ. That is where a switch not tied to a single dial
+// belongs — it is the argument kEqToggle already makes for the tone stack — and
+// it is what freed the band under the Threshold dial for a value readout, which
+// is the whole reason the move happened.
 constexpr int kLedR = 9;
 constexpr int kToggleToLedGap = 6;
 constexpr int kLedCY = kToggleCY + kToggleH / 2 + kToggleToLedGap + kLedR; // 292
-constexpr int kLedCount = 5;
+constexpr int kLedCount = 4;
 
 // The gaps are named rather than folded into literal centres so the arithmetic
 // is checkable and so a part that grows fails the static_asserts below instead
@@ -354,7 +360,12 @@ constexpr KnobSpec kKnobs[kKnobCount] = {
     // is EQ, up in the utility band beside BYPASS, because a switch that takes
     // three dials out at once belongs with the other whole-signal-path switch
     // and not under whichever of the three it happened to be drawn beneath.
-    {kNoiseGateThresholdId, kKnobX0 + 4 * kKnobPitch, kKnobCY, kKnobR, "Gate", "dB"},
+    // "Threshold" and not "Gate", which is what this dial actually is and what
+    // the parent plug-in silkscreens: the dial sets a threshold in dB, and the
+    // thing called GATE is the switch up in the utility row that takes it in and
+    // out. Michroma at kKnobLabelSize measures 76 units against the 86 the art
+    // audit allows, so the longer word costs nothing.
+    {kNoiseGateThresholdId, kKnobX0 + 4 * kKnobPitch, kKnobCY, kKnobR, "Threshold", "dB"},
     {kBassId, kKnobX0 + 5 * kKnobPitch, kKnobCY, kKnobR, "Bass", nullptr},
     {kMiddleId, kKnobX0 + 6 * kKnobPitch, kKnobCY, kKnobR, "Middle", nullptr},
     {kTrebleId, kKnobX0 + 7 * kKnobPitch, kKnobCY, kKnobR, "Treble", nullptr},
@@ -367,16 +378,21 @@ constexpr double kKnobSweepDeg = 270.0;
 
 // Label baseline ABOVE the face centre (the mock puts all eight on y = 181).
 //
-// There is exactly ONE text row per dial, and it is this one. The mock has no
-// permanent value row — the silkscreen legend is all it shows — so the readout
-// that says where a dial has got to appears only while that dial is being
-// dragged, and it appears HERE, replacing the legend for the duration.
+// The legend row. What sits under a dial depends on which dial it is, and the
+// split is forced by geometry rather than chosen:
 //
-// Below the dial is not available and never was: the band under it holds the
-// bat switch and then the channel lamp, and between the dial's art and the
-// switch's there are 6 px. A value row underneath is drawn across the levers.
-// Confirmed by looking at it rather than by arithmetic — the first version of
-// this editor did exactly that.
+//   - The four CHANNEL dials have their bat switch 6 units below them and the
+//     channel lamp below that, so there is no second text row to give them. A
+//     value row underneath would be drawn across the levers — confirmed by
+//     looking at it, because the first version of this editor did exactly that.
+//     Their readout therefore still appears HERE, replacing the legend while
+//     that dial is dragged, and what it says is a capture name rather than a
+//     number.
+//   - Threshold, Bass, Middle and Treble have nothing under them since the gate
+//     switch moved to the utility row, so they get a permanent value row at
+//     kKnobValueDY and their legend never disappears. That is the parent
+//     plug-in's arrangement and the reason to prefer it is the obvious one: a
+//     player can read the amp without touching it.
 //
 // 38 rather than the 45 the mock measured, because the row above the dials is
 // no longer empty: the EQ switch's legend ends at y = 139 and the dial art now
@@ -385,12 +401,22 @@ constexpr double kKnobSweepDeg = 270.0;
 // and the smaller legend size is the other half of the same change.
 constexpr int kKnobLabelDY = 38; // 203 - 165
 
+// Value baseline BELOW the face centre, for the four dials that have room for
+// one. 44 is the parent plug-in's own number and it means the same thing here:
+// 16 units below the dial's edge, since both trees draw a 28-unit radius. The
+// row lands at y = 247, which clears the page buttons' top edge at 277 by 27 —
+// and Bass, Middle and Treble all sit inside those buttons' x span, so that is
+// a clearance that had to be checked rather than assumed.
+constexpr int kKnobValueDY = 44; // 203 + 44 = 247
+static_assert(kKnobValueDY > kKnobR, "a dial's value row is drawn across its own dial");
+
 // --- Bat toggles under the first five dials ---------------------------------
 // switch_up_ring.png / switch_down_ring.png are 112x184 and carry no meaning of
 // their own; which frame a value selects is decided in the view.
 struct ToggleSpec {
     Steinberg::Vst::ParamID id;
     int cx, cy;        // centre of the toggle art = the lever's PIVOT
+    int w, h;          // art size; the two rows are NOT the same size, see kTopToggleW
     const char *label; // drawn centred under the art; nullptr = no label
     bool invert;       // true = parameter on means bat DOWN
 };
@@ -408,17 +434,24 @@ constexpr int kToggleHitBottom = kToggleLabelDY + 5; // just under the label
 // The four channel switches select kChannelId rather than each toggling a
 // boolean of their own, so exactly one is ever up. The view maps switch i to
 // "kChannelId == i"; clicking the one that is already up is a no-op, because a
-// real amp head has no all-channels-off position. The gate's switch is an
-// ordinary boolean and is deliberately NOT on the MIDI path.
+// real amp head has no all-channels-off position.
+//
+// FOUR, not five. The gate's switch used to be the fifth entry here, under the
+// Threshold dial, and it moved to the utility row beside BYPASS and EQ. The
+// lower row is now one rule with no exception — a switch and a lamp under each
+// channel dial and nothing under any other — and the gate sits with the other
+// two switches that are not tied to a single dial. Its behaviour is unchanged:
+// an ordinary boolean, deliberately NOT on the MIDI path.
 constexpr int kChannelToggleCount = 4;
-constexpr int kToggleCount = 5;
+constexpr int kToggleCount = kChannelToggleCount;
 constexpr ToggleSpec kToggles[kToggleCount] = {
-    {kChannelId, kKnobs[0].cx, kToggleCY, nullptr, false},
-    {kChannelId, kKnobs[1].cx, kToggleCY, nullptr, false},
-    {kChannelId, kKnobs[2].cx, kToggleCY, nullptr, false},
-    {kChannelId, kKnobs[3].cx, kToggleCY, nullptr, false},
-    {kNoiseGateOnId, kKnobs[4].cx, kToggleCY, nullptr, false},
+    {kChannelId, kKnobs[0].cx, kToggleCY, kToggleW, kToggleH, nullptr, false},
+    {kChannelId, kKnobs[1].cx, kToggleCY, kToggleW, kToggleH, nullptr, false},
+    {kChannelId, kKnobs[2].cx, kToggleCY, kToggleW, kToggleH, nullptr, false},
+    {kChannelId, kKnobs[3].cx, kToggleCY, kToggleW, kToggleH, nullptr, false},
 };
+static_assert(kLedCount == kChannelToggleCount,
+              "there must be exactly one channel lamp per channel switch");
 
 // --- Gear (settings) button, top-right of the faceplate ---------------------
 // Opens Page::Settings, which is a page of its own rather than an overlay: the
@@ -444,31 +477,58 @@ constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
 // moment the gear or the meter columns move; written like this it cannot.
 constexpr int kBypassLedCX = 2 * kFaceCX - kGearCX; // 151
 constexpr int kBypassLedCY = kGearCY;
-// The switch sits inboard of its lamp, so the row reads meter, light, switch —
-// the same order, and the same gap, as before it moved.
-constexpr int kBypassLedToToggleDX = 40;
-constexpr int kBypassToggleCX = kBypassLedCX + kBypassLedToToggleDX; // 191
-constexpr int kBypassToggleCY = kBypassLedCY;
-
-// EQ sits immediately right of BYPASS, in the band the channel lamps vacated
-// when they moved down under their dials. The two are the faceplate's utility
-// switches — one takes the whole plug-in out of circuit, the other takes the
-// tone stack out — and they are the only two switches here that are not tied to
-// a single dial, so they share a row.
+// --- The utility row: three (lamp, switch) pairs ----------------------------
+// BYPASS, EQ and GATE. These are the faceplate's whole-signal-path switches —
+// one takes the plug-in out of circuit, one takes the tone stack out, one takes
+// the noise gate out — so none of them belongs under a single dial and they
+// share a row. GATE's did sit under the Threshold dial and moved here, which is
+// what freed that dial's value row.
 //
-// Its centre is the Clean dial's column, and that is the LEFTMOST position it
-// can have: the pair's click targets are kToggleHitW wide, so 251 is exactly
-// where EQ's stops touching BYPASS's, and further right would start crowding
-// the wordmark. The static_assert below is the one that says so; the vertical
-// one beside it is what keeps its legend clear of the dial legends underneath,
-// which is the clearance this row's move made tight.
-constexpr int kEqToggleCX = kKnobX0; // 251, the Clean column
-constexpr int kTopToggleCount = 2;
+// The row is ONE repeating unit: lamp, then its switch, then the next lamp,
+// then its switch. Every lamp is on the same side of the switch it reports, so
+// there is no side to learn, and the first pair's lamp is the one whose place
+// was not this row's to choose (see kBypassLedCX above), so the whole row is
+// laid out from it rightwards.
+//
+// The parts are SMALLER than the channel switches below — 20x34 against 24x40,
+// with a 7-unit lamp against 9 — and that is the row saying what it is. These
+// three are set when a rig is put together; the four below them are played. The
+// sizes are the parent plug-in's utility row, which is where this row's whole
+// shape comes from, and so is kTopPairPitch.
+constexpr int kTopToggleW = 20, kTopToggleH = 34;
+constexpr int kTopLedR = 7;
+// Lamp to its own switch, and pair to pair. What makes the row readable is the
+// RATIO of the two: 20 within a pair against 36 between them, so a lamp is
+// nearly twice as close to the switch it belongs to as to the one before it,
+// and proximity says which is which without a rule having to be learned.
+constexpr int kTopLedToToggleDX = 20;
+constexpr int kTopPairPitch = 56;
+static_assert(kTopPairPitch - kTopLedToToggleDX > kTopLedToToggleDX + kTopLedR,
+              "a utility lamp is no nearer its own switch than the previous one");
+
+constexpr int kBypassToggleCX = kBypassLedCX + kTopLedToToggleDX; // 171
+constexpr int kBypassToggleCY = kBypassLedCY;
+// Kept under its old name because a dozen places refer to the EQ switch on its
+// own. It is no longer kKnobX0: aligning it with the Clean dial's column was
+// what spread this row across 250 units, and the row reads as one group of
+// three rather than as three things scattered along the band.
+constexpr int kEqToggleCX = kBypassToggleCX + kTopPairPitch; // 227
+constexpr int kGateToggleCX = kEqToggleCX + kTopPairPitch;   // 283
+
+// The click target, sized from the pitch rather than from the art, exactly as
+// the parent plug-in sizes its own: pitch less a gap, so adjacent targets never
+// touch and the whole row is coverable by the pointer.
+constexpr int kTopToggleHitW = kTopPairPitch - 6;     // 50
+constexpr int kTopToggleHitTop = -kTopToggleH / 2;    // relative to cy
+constexpr int kTopToggleHitBottom = kToggleHitBottom; // still just under the label
+
+constexpr int kTopToggleCount = 3;
 constexpr ToggleSpec kTopToggles[kTopToggleCount] = {
     // Bypass on means the plug-in is OUT of circuit, which on an amp is the bat
-    // down. EQ reads the natural way round: on is up.
-    {kBypassId, kBypassToggleCX, kBypassToggleCY, "BYPASS", true},
-    {kToneStackOnId, kEqToggleCX, kBypassToggleCY, "EQ", false},
+    // down. EQ and GATE read the natural way round: on is up.
+    {kBypassId, kBypassToggleCX, kBypassToggleCY, kTopToggleW, kTopToggleH, "BYPASS", true},
+    {kToneStackOnId, kEqToggleCX, kBypassToggleCY, kTopToggleW, kTopToggleH, "EQ", false},
+    {kNoiseGateOnId, kGateToggleCX, kBypassToggleCY, kTopToggleW, kTopToggleH, "GATE", false},
 };
 // Named because the bypass switch is referred to on its own in a dozen places
 // that predate the pair.
@@ -477,27 +537,81 @@ constexpr ToggleSpec kTopToggles[kTopToggleCount] = {
 // header defines the same symbol and the link fails.
 inline constexpr const ToggleSpec &kBypassToggle = kTopToggles[0];
 
-// A lamp each, and they are BESIDE their switches rather than under them, which
-// is the one place on the faceplate that does not follow the channel columns'
-// rule. Two reasons, and neither is taste. This row's switches carry a legend
-// under them and the channel switches do not, so there is nothing under a bat
-// here to put a lamp in; and the band is 44 units deep between the faceplate's
-// top edge and the dial legends, which is a switch and a legend and no more.
-//
-// Which SIDE is then decided for us on the left and taken to match on the
-// right: BYPASS's lamp is the gear's mirror through the faceplate centre and so
-// is fixed at 151, inboard of it. EQ's is the same 40 units from its own
-// switch, on the far side, so the row reads lamp-BYPASS ... EQ-lamp. The two
-// switches are 60 apart and each lamp is 40 from its own, so proximity says
-// which lamp belongs to which switch without a rule having to be learned.
-constexpr int kTopLedCX[kTopToggleCount] = {kBypassLedCX,
-                                            kEqToggleCX + kBypassLedToToggleDX}; // 151, 291
+constexpr int kTopLedCX[kTopToggleCount] = {kBypassLedCX, kBypassLedCX + kTopPairPitch,
+                                            kBypassLedCX + 2 * kTopPairPitch}; // 151, 207, 263
 constexpr int kTopLedCY = kBypassLedCY;
-static_assert(kTopLedCX[1] - kLedR > kEqToggleCX + kToggleHitW / 2,
-              "the EQ lamp is inside the EQ switch's own click target");
 
-static_assert(kEqToggleCX - kToggleHitW / 2 >= kBypassToggleCX + kToggleHitW / 2,
+// A lamp falls INSIDE its own switch's click target, and that is deliberate
+// rather than tolerated: at 20 units apart the two read as one control, so a
+// click on the lamp toggling the switch beside it is what anyone would expect.
+// What must NOT happen is a lamp reaching back into the PREVIOUS switch's
+// target, because then one pair is stealing another's clicks — that is the
+// clearance worth asserting, and it is the tight one.
+static_assert(kTopLedCX[1] - kTopLedR > kBypassToggleCX + kTopToggleHitW / 2,
+              "the EQ lamp is inside the BYPASS switch's click target");
+static_assert(kTopLedCX[2] - kTopLedR > kEqToggleCX + kTopToggleHitW / 2,
+              "the GATE lamp is inside the EQ switch's click target");
+static_assert(kEqToggleCX - kTopToggleHitW / 2 > kBypassToggleCX + kTopToggleHitW / 2,
               "the EQ and BYPASS click targets overlap — one would swallow the other's clicks");
+static_assert(kGateToggleCX - kTopToggleHitW / 2 > kEqToggleCX + kTopToggleHitW / 2,
+              "the GATE and EQ click targets overlap — one would swallow the other's clicks");
+// The utility row's legends sit directly above the dial legends. Measured with
+// the font size as a conservative stand-in for the cap height, which is about
+// three quarters of it, so real ink has more clearance than this asks for.
+static_assert(kBypassToggleCY + kToggleLabelDY + 4 <= kKnobCY - kKnobLabelDY - kKnobLabelSize,
+              "the utility row's legends have come down onto the dial legends");
+static_assert(kBypassToggleCY + kTopToggleH / 2 <
+                  kBypassToggleCY + kToggleLabelDY - kToggleLabelSize,
+              "the utility row's legends are drawn on their own switches");
+// The wordmark is drawn as TEXT and its width is measured at draw time, so this
+// is the one clearance on this row a static_assert can only check against a
+// measured number: "Rations" in Michroma at kTitleSize is 279 units wide, so
+// centred on kFaceCX its ink begins at 426. panelrender's ink audit is what
+// checks this for real; the assert catches the gross case at compile time.
+constexpr int kWordmarkInkLeft = 426;
+static_assert(kGateToggleCX + kTopToggleHitW / 2 < kWordmarkInkLeft,
+              "the utility row has grown into the wordmark");
+// Opens an overlay rather than a page: it is one knob, and a page for one knob
+// would be a window change and a back button to reach a control most users set
+// once and never touch. The file browser is the pattern it follows.
+//
+// It is placed off the GEAR rather than off the faceplate centre: these two are
+// a pair of icons in the corner, and what matters is the gap between them, not
+// where either one lands relative to anything on the left. The document is
+// 128x64, so a height of 20 draws 40 wide through getByHeight.
+constexpr int kSlimToGearGap = 12;
+// The gear's own height, so the two icons in the corner are a matched pair.
+constexpr int kSlimIconH = 2 * kGearR;
+constexpr int kSlimIconW = 2 * kSlimIconH; // the .svg's own 2:1
+constexpr int kSlimIconCX = kGearCX - kGearR - kSlimToGearGap - kSlimIconW / 2; // 938
+constexpr int kSlimIconCY = kGearCY;
+static_assert(kSlimIconCX + kSlimIconW / 2 < kGearCX - kGearR - 4,
+              "the Slim icon has reached the gear's click target");
+
+// The overlay: a card on the head page, centred on the faceplate, with one dial
+// on it. Sized to the dial plus its title and readout rather than to a fraction
+// of the window, because it holds exactly one control and a bigger card would
+// only be more black.
+constexpr int kSlimKnobR = 42;
+constexpr int kSlimOverlayW = 220, kSlimOverlayH = 212;
+constexpr int kSlimOverlayX = kFaceCX - kSlimOverlayW / 2;
+constexpr int kSlimOverlayY = (kWinH - kSlimOverlayH) / 2;
+constexpr int kSlimKnobCX = kFaceCX;
+constexpr int kSlimKnobCY = kSlimOverlayY + 96;
+constexpr int kSlimTitleSize = 18;
+constexpr int kSlimTitleBaselineY = kSlimOverlayY + 34;
+constexpr int kSlimValueBaselineY = kSlimKnobCY + kSlimKnobR + 24;
+constexpr int kSlimHintSize = 11;
+constexpr int kSlimHintBaselineY = kSlimOverlayY + kSlimOverlayH - 18;
+inline constexpr const char *kSlimTitle = "Slim";
+// What the control is FOR, in the one place a user meets it. "Model size" and
+// not "slimmable container variant": the panel says what it buys, not what it
+// is called in the file format.
+inline constexpr const char *kSlimHint = "Smaller model, less CPU";
+static_assert(kSlimValueBaselineY + kKnobValueSize < kSlimHintBaselineY - kSlimHintSize,
+              "the Slim overlay's readout and hint have run together");
+static_assert(kSlimKnobCY - kSlimKnobR > kSlimTitleBaselineY,
+              "the Slim overlay's dial is drawn on its own title");
 // The utility row's legends sit directly above the dial legends. Measured with
 // the font size as a conservative stand-in for the cap height, which is about
 // three quarters of it, so real ink has more clearance than this asks for.
@@ -527,7 +641,14 @@ struct MeterRect {
     int x, y, w, h;
     const char *label;
 };
-constexpr int kMeterW = 27, kMeterH = 146, kMeterY = 89;
+// The meters moved UP by 12 (they were at y = 89) and did not change size: the
+// Input and Output dials needed a legend above them as well as a value below,
+// and the 17 units between the meter's bottom edge and the dial's top were not
+// a text row. Raising them costs nothing — there is nothing else in these two
+// columns above the dial — and it keeps the meter art at its measured size,
+// which shortening it would not.
+constexpr int kMeterW = 27, kMeterH = 146, kMeterY = 77;
+static_assert(kMeterY > kFaceT + 8, "the meters have reached the top of the faceplate");
 constexpr MeterRect kInputMeter = {kInputMeterId, kSideCXL - kMeterW / 2, kMeterY, kMeterW, kMeterH,
                                    nullptr};
 constexpr MeterRect kOutputMeter = {
@@ -538,10 +659,29 @@ constexpr MeterRect kOutputMeter = {
 // Smaller than the main row (the mock draws them at 46 px, not 56).
 constexpr int kIoKnobR = 23;
 constexpr int kIoKnobCY = 275;
-// Close under the dial rather than down on the piping: at kIoLabelSize the cap
-// height is about 9 px, and a baseline left where a 25 px legend needed it
-// leaves the word floating clear of the control it names.
-constexpr int kIoLabelBaselineY = 312;
+// These two dials are the only ones on the faceplate whose legend used to sit
+// BELOW them, at 312, which was the whole of the text they had. They now read
+// the same way round as the other four — legend above, value below — so the
+// legend moved above the dial and the value took the row it vacated.
+//
+// Above and not below-the-legend: 312 plus a second row lands 4 units off the
+// faceplate's bottom bezel, which reads as cramped and is the sort of thing the
+// ink audit passes and a person does not.
+constexpr int kIoLabelBaselineY = 244;
+constexpr int kIoValueBaselineY = 312;
+// The legend's descender must clear the dial's own art, and the raised meter
+// must clear the legend's cap. Michroma's cap height is about three quarters of
+// its size and it descends about a quarter, so both are checked conservatively
+// against the size itself and real ink has more room than this asks for —
+// panelrender's ink audit is what measures the ink.
+static_assert(kIoLabelBaselineY + kIoLabelSize / 4 < kIoKnobCY - kIoKnobR,
+              "the Input/Output legends are drawn on their own dials");
+static_assert(kMeterY + kMeterH < kIoLabelBaselineY - kIoLabelSize,
+              "the meters have come down onto the Input/Output legends");
+static_assert(kIoValueBaselineY > kIoKnobCY + kIoKnobR,
+              "the Input/Output value row is drawn on its own dial");
+static_assert(kIoValueBaselineY + kKnobValueSize / 4 < kFaceB - 8,
+              "the Input/Output value row has reached the faceplate's edge");
 constexpr KnobSpec kIoKnobs[2] = {
     {kInputGainId, kSideCXL, kIoKnobCY, kIoKnobR, "Input", "dB"},
     {kOutputGainId, kSideCXR, kIoKnobCY, kIoKnobR, "Output", "dB"},
@@ -561,11 +701,16 @@ constexpr int kPageButtonCount = 2;
 // own cx so the pair follows the row if the pitch ever changes.
 //
 // Middle and not Bass, though Bass is the one this looks like it should line up
-// with: at 147 px wide the Pedalboard button would then run from 569 to 716 and
-// sit on top of the Gate bat switch, whose hit box is 597..657 on the same row.
-// Nothing narrower fixes it either — clearing the switch would cap the button at
-// 59 px, and "Pedalboard" is 108 px at kPageButtonTextSize. The Gate switch is
-// what owns that stretch of the row. panelrender checks the clearance.
+// with. The reason was the Gate bat switch: at 147 px wide the Pedalboard button
+// would run from 569 to 716 and sit on top of that switch's 597..657 hit box,
+// and nothing narrower fixed it either — clearing the switch capped the button
+// at 59 px against a 108 px "Pedalboard".
+//
+// That switch has since moved to the utility row, so the constraint is gone and
+// Bass is now free. The seam stays on Middle anyway: it is where it has been,
+// nothing is wrong with it, and moving a measured position because a reason
+// expired is how a panel drifts. Recorded rather than deleted so the next person
+// to look at Bass finds out it is available and that this is a choice.
 constexpr int kPageButtonSeamGap = 10;
 constexpr int kPageButtonSeamCX = kKnobs[6].cx; // Middle
 constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
@@ -1076,7 +1221,15 @@ constexpr int kLevelRowCount = kChannelToggleCount;
 // The slider's track, as an offset from the row's left edge. Starts at
 // kMidiTextX so it begins where the MIDI section's binding text does.
 constexpr int kLevelSliderX = 116;
-constexpr int kLevelSliderW = 302;
+// The width is not a free choice: it is what CENTRES the track, and it was got
+// wrong first time. The left edge is a column decision (above), but the row is
+// centred on the page and so is the heading over it, so a track inset by
+// kLevelSliderX on the left must be inset by the same on the right - otherwise
+// its 0 dB mark, the one thing on this page with a visible centre of its own,
+// sits somewhere the eye reads as a mistake. It was 302, which put the tick 29
+// units left of the heading above it. Written as the arithmetic rather than as
+// the number so it cannot drift out of step with either constant it depends on.
+constexpr int kLevelSliderW = kMidiRowW - 2 * kLevelSliderX;
 constexpr int kLevelTrackH = 5;
 constexpr int kLevelThumbW = 12;
 constexpr int kLevelThumbH = 20;
@@ -1091,6 +1244,8 @@ constexpr int kLevelReadoutW = 70;
 // pointer and the thumb move one for one.
 constexpr float kLevelTravel = static_cast<float>(kLevelSliderW - kLevelThumbW);
 constexpr float kLevelDragRange = kLevelTravel;
+static_assert(2 * kLevelSliderX + kLevelSliderW == kMidiRowW,
+              "the level slider's track is no longer centred in its row");
 // Within this many logical units of the centre, a drag snaps to exactly 0 dB.
 // A trim whose default is the middle has to be returnable to the middle by hand;
 // right-clicking the row does it exactly, and this makes dragging do it too.

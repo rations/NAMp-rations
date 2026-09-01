@@ -385,6 +385,7 @@ set(RATIONS_IMG_FILES
     img/Folder.svg
     img/File.svg
     img/Gear.svg
+    img/SlimmableIcon.svg
     img/Cross.svg
     img/ArrowLeft.svg
     img/ArrowRight.svg
