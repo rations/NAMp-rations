@@ -2,9 +2,12 @@
 
 #include "x11plugview.h"
 
+#include "pluginterfaces/base/keycodes.h"
+
 #include <cairo/cairo-xlib.h>
 
 #include <X11/Xutil.h>
+#include <X11/keysym.h>
 
 #include <atomic>
 #include <cstdarg>
@@ -39,6 +42,56 @@ constexpr int kMapFallbackTicks = 6; // ~200 ms at 33 ms
 // something woke it up).
 constexpr unsigned long kSummaryTicks = 30;
 constexpr unsigned long kQuietRedrawTicks = 15;
+
+//------------------------------------------------------------------------
+// One X keysym to one VirtualKeyCodes value (pluginterfaces/base/keycodes.h), or 0 for a key
+// that has no virtual code and is therefore carried by its character instead. Only the keys a
+// text field needs are mapped: the point of this table is editing, not a general key API, and a
+// code invented for a key nobody handles would be a guess rather than a translation.
+int16 virtualKeyFromKeySym(KeySym sym)
+{
+    switch (sym) {
+        case XK_BackSpace:
+            return KEY_BACK;
+        case XK_Tab:
+            return KEY_TAB;
+        case XK_Return:
+            return KEY_RETURN;
+        case XK_KP_Enter:
+            return KEY_ENTER;
+        case XK_Escape:
+            return KEY_ESCAPE;
+        case XK_Delete:
+        case XK_KP_Delete:
+            return KEY_DELETE;
+        case XK_Left:
+        case XK_KP_Left:
+            return KEY_LEFT;
+        case XK_Right:
+        case XK_KP_Right:
+            return KEY_RIGHT;
+        case XK_Up:
+        case XK_KP_Up:
+            return KEY_UP;
+        case XK_Down:
+        case XK_KP_Down:
+            return KEY_DOWN;
+        case XK_Home:
+        case XK_KP_Home:
+            return KEY_HOME;
+        case XK_End:
+        case XK_KP_End:
+            return KEY_END;
+        case XK_Page_Up:
+        case XK_KP_Page_Up:
+            return KEY_PAGEUP;
+        case XK_Page_Down:
+        case XK_KP_Page_Down:
+            return KEY_PAGEDOWN;
+        default:
+            return 0;
+    }
+}
 
 //------------------------------------------------------------------------
 // Non-fatal X error handling.
@@ -382,8 +435,17 @@ bool X11PlugView::openWindow(::Window parent)
     attrs.background_pixmap = None; // we paint every pixel ourselves
     attrs.border_pixel = 0;         // required whenever our depth differs from the parent's
     attrs.colormap = colormap;
+    // KeyPressMask is a DELIBERATE DEPARTURE from the SDK, which says a view "must not handle
+    // keyboard events by the means of platform callbacks, but let the host pass them to the view"
+    // (pluginterfaces/gui/iplugview.h). It is selected because no host tested here ever calls
+    // IPlugView::onKeyDown, so the SDK's route delivers nothing and the editor's one text field
+    // was unusable. Selecting the mask costs nothing on its own: X delivers a key to this window
+    // only while this window holds the input focus, and focus is taken only around an open text
+    // field (setKeyboardFocus). At every other moment keys propagate to the host exactly as
+    // before, so the host's own key commands are untouched.
     attrs.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                       LeaveWindowMask | StructureNotifyMask | PropertyChangeMask;
+                       LeaveWindowMask | StructureNotifyMask | PropertyChangeMask | KeyPressMask |
+                       FocusChangeMask;
 
     const unsigned long errorsBefore = gErrorCount.load();
     mWindow = XCreateWindow(mDisplay, parent, 0, 0, width, height, 0, depth, InputOutput, visual,
@@ -440,8 +502,68 @@ bool X11PlugView::openWindow(::Window parent)
 }
 
 //------------------------------------------------------------------------
+// Take the X input focus for this window, or give it straight back.
+//
+// WHY THIS EXISTS, and it is a deliberate departure from the SDK. iplugview.h states that a view
+// "must not handle keyboard events by the means of platform callbacks, but let the host pass them
+// to the view", and the editor does implement IPlugView::onKeyDown for exactly that. Measured,
+// no host available here ever calls it: the SDK's own editorhost selects KeyPressMask and then
+// never calls onKeyDown anywhere in its source, and Reaper delivers nothing to it either — the
+// build in which the text field was first written does not accept a key today, so the SDK route
+// has never once carried one. A field that cannot be typed into is not a field.
+//
+// What the SDK rule protects is the host's key commands, and that is preserved rather than
+// traded away: focus is taken only while a text field is actually open, and is handed back to
+// whoever held it the moment the field closes. Outside that window this view holds no focus and
+// X routes every key to the host exactly as it did before. onKeyDown is still implemented and
+// still preferred, so a host that does route keys keeps working unchanged.
+void X11PlugView::setKeyboardFocus(bool wanted)
+{
+    if (!mDisplay || !mWindow || wanted == mKeyFocus)
+        return;
+
+    if (wanted) {
+        // XSetInputFocus on a window that is not viewable is a BadMatch, and an unmapped editor
+        // is an ordinary state here (see ensureMapped) rather than a rare one.
+        XWindowAttributes attrs;
+        if (XGetWindowAttributes(mDisplay, mWindow, &attrs) == 0 || attrs.map_state != IsViewable)
+            return;
+        ::Window focus = None;
+        int revert = RevertToParent;
+        XGetInputFocus(mDisplay, &focus, &revert);
+        mPrevFocus = focus;
+        mPrevRevert = revert;
+        XSetInputFocus(mDisplay, mWindow, RevertToParent, CurrentTime);
+        XFlush(mDisplay);
+        mKeyFocus = true;
+        trace("keyboard focus taken, previous=0x%lx", mPrevFocus);
+        return;
+    }
+
+    mKeyFocus = false;
+    const ::Window prev = mPrevFocus;
+    mPrevFocus = None;
+    // PointerRoot and None are legal focus values in their own right and are handed back as they
+    // are; a real window may have been destroyed while we held the focus, so it is probed first
+    // rather than trusted. A failed probe leaves the focus where it is, which is this window —
+    // wrong, but far better than pointing it at a dead id.
+    if (prev == PointerRoot || prev == None) {
+        XSetInputFocus(mDisplay, prev, mPrevRevert, CurrentTime);
+    } else if (prev != mWindow) {
+        XWindowAttributes attrs;
+        if (XGetWindowAttributes(mDisplay, prev, &attrs) != 0)
+            XSetInputFocus(mDisplay, prev, mPrevRevert, CurrentTime);
+    }
+    XFlush(mDisplay);
+    trace("keyboard focus released to 0x%lx", prev);
+}
+
+//------------------------------------------------------------------------
 void X11PlugView::closeWindow()
 {
+    // Never leave the focus pointed at a window that is about to stop existing.
+    setKeyboardFocus(false);
+
     if (mBuffer) {
         cairo_surface_destroy(mBuffer);
         mBuffer = nullptr;
@@ -709,6 +831,43 @@ void X11PlugView::drainEvents()
 
             case LeaveNotify:
                 onMouseLeave();
+                break;
+
+            case KeyPress: {
+                // XLookupString applies the shift and lock state for us and yields the Latin-1
+                // byte, which is why the character is taken from it rather than decoded from the
+                // keysym by hand. It is asked for one byte because the field being fed is ASCII
+                // only; a longer answer is a multi-byte character this editor cannot store.
+                XKeyEvent ke = event.xkey;
+                char text[8] = {0};
+                KeySym sym = NoSymbol;
+                const int n = XLookupString(&ke, text, sizeof(text) - 1, &sym, nullptr);
+                const unsigned char byte = (n >= 1) ? static_cast<unsigned char>(text[0]) : 0;
+                const char16 ch = (byte >= 0x20 && byte < 0x7F) ? static_cast<char16>(byte) : 0;
+                // KeyModifier's own mapping, from pluginterfaces/base/keycodes.h: kCommandKey is
+                // documented as "Windows: ctrl key" and kControlKey as "Windows: win key", so
+                // ControlMask is kCommandKey here and Mod4 (Super) is kControlKey. Getting these
+                // the wrong way round would make Ctrl-C read as a plain C.
+                int16 mods = 0;
+                if (ke.state & ShiftMask)
+                    mods |= kShiftKey;
+                if (ke.state & ControlMask)
+                    mods |= kCommandKey;
+                if (ke.state & Mod1Mask)
+                    mods |= kAlternateKey;
+                if (ke.state & Mod4Mask)
+                    mods |= kControlKey;
+                if (onKeyDownNative(ch, virtualKeyFromKeySym(sym), mods))
+                    mDirty = true;
+                break;
+            }
+
+            case FocusOut:
+                // Focus can be taken away by the host or the window manager at any moment. Let
+                // the flag follow reality, or a later release would hand focus somewhere it no
+                // longer is and steal it from whoever has it now.
+                mKeyFocus = false;
+                mPrevFocus = None;
                 break;
 
             case ConfigureNotify:

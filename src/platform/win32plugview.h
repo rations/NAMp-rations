@@ -148,6 +148,18 @@ protected:
         (void)x, (void)y, (void)delta;
     }
 
+    // Keyboard, taken from the PLATFORM window rather than handed in by the host. Return true
+    // if the key was consumed. See setKeyboardFocus() in the .cpp for why this exists alongside
+    // IPlugView::onKeyDown, which the SDK names as the only route and which no host tested here
+    // actually uses. `key` is an ASCII character or 0; `keyCode` is a VirtualKeyCodes value from
+    // pluginterfaces/base/keycodes.h or 0; `modifiers` is a KeyModifier mask. The three arguments
+    // are deliberately IPlugView::onKeyDown's own, so a subclass can route both to one handler.
+    virtual bool onKeyDownNative(char16 key, int16 keyCode, int16 modifiers)
+    {
+        (void)key, (void)keyCode, (void)modifiers;
+        return false;
+    }
+
     // ~30 Hz, immediately before a repaint is considered. Animation (meter
     // decay) belongs here.
     virtual void onTick()
@@ -194,6 +206,10 @@ protected:
         ViewRect proposed(rect.left, rect.top, rect.left + w, rect.top + h);
         return plugFrame->resizeView(this, &proposed) == kResultTrue;
     }
+
+    // Take the keyboard focus, or hand it straight back to whoever had it. Called by the editor
+    // around a text field, and never held for longer than one — see the .cpp.
+    void setKeyboardFocus(bool wanted);
 
     // Request a repaint on the next tick. Cheap; call it freely.
     void invalidate()
@@ -245,6 +261,11 @@ private:
     cairo_surface_t *mSurface = nullptr; // Cairo image surface over mDibBits
 
     UINT_PTR mTimerId = 0;
+
+    // Keyboard focus, held only while a text field is open. mPrevFocus is whatever had the focus
+    // when we took it, so it can be given back rather than left wherever we put it.
+    bool mKeyFocus = false;
+    HWND mPrevFocus = nullptr;
 
     // The 100% size, captured at construction, so a content scale factor is
     // applied to the design size rather than compounding on the current one.

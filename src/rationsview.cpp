@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -2543,6 +2544,10 @@ void RationsEditorView::beginRename(int channel)
     // the folder's name starts from it rather than from an empty field.
     mRenameText = mController->channelName(channel);
     mRenameCaret = mRenameText.size();
+    // Take the keyboard for exactly as long as this field is open, and no longer. Every exit
+    // from the field — commit, cancel, a click elsewhere, a page change — runs through
+    // commitRename() or cancelRename(), so there is no path that leaves it held.
+    setKeyboardFocus(true);
     invalidate();
 }
 
@@ -2564,6 +2569,7 @@ void RationsEditorView::commitRename()
         mController->setChannelName(channel, next == current ? "" : next.c_str());
     }
     mRenameText.clear();
+    setKeyboardFocus(false);
     invalidate();
 }
 
@@ -2571,6 +2577,7 @@ void RationsEditorView::cancelRename()
 {
     mRenaming = -1;
     mRenameText.clear();
+    setKeyboardFocus(false);
     invalidate();
 }
 
@@ -2626,16 +2633,40 @@ bool RationsEditorView::handleRenameKey(char16 key, int16 keyCode, int16 modifie
             break;
     }
 
+    // SHIFT IS PART OF TYPING, NOT A COMMAND. kShiftKey is set for every capital letter and for
+    // most punctuation (KeyModifier in pluginterfaces/base/keycodes.h), so refusing any modifier
+    // at all made JCM800 untypeable while jcm800 was fine — the first half of a name a user is
+    // likely to want. Only the three command modifiers are refused, so Ctrl-S still reaches the
+    // host's own key command rather than being eaten as text.
+    const Steinberg::int16 kCommandMods = static_cast<Steinberg::int16>(
+        Steinberg::kAlternateKey | Steinberg::kCommandKey | Steinberg::kControlKey);
+    if ((modifiers & kCommandMods) != 0)
+        return false;
+
+    Steinberg::char16 ch = key;
+    // A fallback for hosts that fill only the virtual code. The SDK defines KEY_0..KEY_9 and
+    // KEY_A..KEY_Z as ASCII + VKEY_FIRST_ASCII and supplies VirtualKeyCodeToChar to undo that;
+    // it returns the UPPER-case letter unconditionally, so the shift state has to be applied
+    // here. FLAGGED: no host on this machine has been observed to deliver a key this way, or
+    // indeed at all — see onKeyDown below. It is written from the SDK's own helper rather than
+    // from an observation, and costs nothing when `key` is filled in as documented.
+    if ((ch < 0x20 || ch > 0x7E) && keyCode >= Steinberg::VKEY_FIRST_ASCII) {
+        ch = static_cast<Steinberg::char16>(
+            Steinberg::VirtualKeyCodeToChar(static_cast<Steinberg::uint8>(keyCode)));
+        if ((modifiers & Steinberg::kShiftKey) == 0 && ch >= 'A' && ch <= 'Z')
+            ch = static_cast<Steinberg::char16>(ch - 'A' + 'a');
+    }
+
     // A printable character. Deliberately ASCII only: `key` is one UTF-16 code unit, and turning a
     // stream of those into UTF-8 correctly means handling surrogate pairs and dead keys, which is
     // a real piece of text handling rather than a few lines. A name outside ASCII is set by naming
     // the FOLDER, which goes through the filesystem and carries whatever bytes it likes. Flagged
     // here rather than left to be discovered.
-    if (modifiers != 0 || key < 0x20 || key > 0x7E)
+    if (ch < 0x20 || ch > 0x7E)
         return false;
     if (mRenameText.size() >= kRenameMaxChars)
         return true; // consumed, but the field is full
-    mRenameText.insert(mRenameCaret, 1, static_cast<char>(key));
+    mRenameText.insert(mRenameCaret, 1, static_cast<char>(ch));
     ++mRenameCaret;
     invalidate();
     return true;
@@ -2644,9 +2675,44 @@ bool RationsEditorView::handleRenameKey(char16 key, int16 keyCode, int16 modifie
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsEditorView::onKeyDown(char16 key, int16 keyCode, int16 modifiers)
 {
-    return handleRenameKey(key, keyCode, modifiers) ? kResultTrue : kResultFalse;
+    const bool handled = handleRenameKey(key, keyCode, modifiers);
+    // Whether a host routes keys to an embedded view at all is the host's policy, and it is the
+    // one thing about this field that cannot be established by reading our own source: if this
+    // line never prints, no key ever reached the plug-in and nothing below it is at fault. Same
+    // env-var idiom as RATIONS_X11_TRACE / RATIONS_WIN_TRACE, and off by default.
+    static const bool trace = std::getenv("RATIONS_KEY_TRACE") != nullptr;
+    if (trace) {
+        std::fprintf(stderr,
+                     "[Rations] onKeyDown key=0x%04x ('%c') keyCode=%d modifiers=0x%02x "
+                     "renaming=%d handled=%d\n",
+                     static_cast<unsigned>(key),
+                     (key >= 0x20 && key <= 0x7E) ? static_cast<char>(key) : '.',
+                     static_cast<int>(keyCode), static_cast<unsigned>(modifiers), mRenaming,
+                     handled ? 1 : 0);
+    }
+    return handled ? kResultTrue : kResultFalse;
 }
 
+// The platform route. Identical handling to onKeyDown above, deliberately: the two differ only in
+// where the key came from, and routing both through handleRenameKey is what stops them drifting.
+// The trace is shared too, so one run says which route — if either — is carrying keys in a host.
+bool RationsEditorView::onKeyDownNative(char16 key, int16 keyCode, int16 modifiers)
+{
+    const bool handled = handleRenameKey(key, keyCode, modifiers);
+    static const bool trace = std::getenv("RATIONS_KEY_TRACE") != nullptr;
+    if (trace) {
+        std::fprintf(stderr,
+                     "[Rations] native key=0x%04x ('%c') keyCode=%d modifiers=0x%02x "
+                     "renaming=%d handled=%d\n",
+                     static_cast<unsigned>(key),
+                     (key >= 0x20 && key <= 0x7E) ? static_cast<char>(key) : '.',
+                     static_cast<int>(keyCode), static_cast<unsigned>(modifiers), mRenaming,
+                     handled ? 1 : 0);
+    }
+    return handled;
+}
+
+//------------------------------------------------------------------------
 // Nothing is done on release, and kResultFalse is the honest answer for every key: reporting a
 // release as handled would tell the host this view is consuming keys it is not.
 tresult PLUGIN_API RationsEditorView::onKeyUp(char16, int16, int16)

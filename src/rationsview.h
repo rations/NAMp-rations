@@ -128,15 +128,23 @@ private:
     void drawScrollBar(Canvas &c);
 
 public:
-    // Keyboard, from the host. The SDK is explicit that a view must NOT take keys from platform
-    // callbacks and must let the host pass them in here (pluginterfaces/gui/iplugview.h), which is
-    // why the X11 window does not select KeyPressMask.
+    // Keyboard, from the host. This is the route the SDK names — a view must let the host pass
+    // keys in here (pluginterfaces/gui/iplugview.h) — and it is still the preferred one, so a
+    // host that routes keys keeps working. No host tested here does, which is why there is a
+    // second route below.
     Steinberg::tresult PLUGIN_API onKeyDown(Steinberg::char16 key, Steinberg::int16 keyCode,
                                             Steinberg::int16 modifiers) SMTG_OVERRIDE;
     Steinberg::tresult PLUGIN_API onKeyUp(Steinberg::char16 key, Steinberg::int16 keyCode,
                                           Steinberg::int16 modifiers) SMTG_OVERRIDE;
 
 private:
+    // Keyboard from the platform window, which is the route that actually carries a key in every
+    // host tested here. Both routes end in handleRenameKey, so there is one handler and no way
+    // for the two to drift apart. See the platform view's setKeyboardFocus() for why a plug-in
+    // ends up reading its own window despite the SDK saying it must not.
+    bool onKeyDownNative(Steinberg::char16 key, Steinberg::int16 keyCode,
+                         Steinberg::int16 modifiers) SMTG_OVERRIDE;
+
     void drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled);
     void drawKnobAt(Canvas &c, float cx, float cy, float r, double norm);
     void drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on);

@@ -3,6 +3,8 @@
 
 #include "win32plugview.h"
 
+#include "pluginterfaces/base/keycodes.h"
+
 #include <windowsx.h> // GET_X_LPARAM / GET_Y_LPARAM
 
 #include <cstdarg>
@@ -115,6 +117,67 @@ const wchar_t *windowClassName(WNDPROC proc)
 }
 
 //------------------------------------------------------------------------
+// One Win32 virtual key to one VirtualKeyCodes value (pluginterfaces/base/keycodes.h), or 0 for
+// a key that has no virtual code and is therefore carried by its character instead. Only the keys
+// a text field needs are mapped: the point of this table is editing, not a general key API, and a
+// code invented for a key nobody handles would be a guess rather than a translation.
+int16 virtualKeyFromVK(int vk)
+{
+    switch (vk) {
+        case VK_BACK:
+            return KEY_BACK;
+        case VK_TAB:
+            return KEY_TAB;
+        case VK_RETURN:
+            return KEY_RETURN;
+        case VK_ESCAPE:
+            return KEY_ESCAPE;
+        case VK_DELETE:
+            return KEY_DELETE;
+        case VK_LEFT:
+            return KEY_LEFT;
+        case VK_RIGHT:
+            return KEY_RIGHT;
+        case VK_UP:
+            return KEY_UP;
+        case VK_DOWN:
+            return KEY_DOWN;
+        case VK_HOME:
+            return KEY_HOME;
+        case VK_END:
+            return KEY_END;
+        case VK_PRIOR:
+            return KEY_PAGEUP;
+        case VK_NEXT:
+            return KEY_PAGEDOWN;
+        default:
+            return 0;
+    }
+}
+
+//------------------------------------------------------------------------
+// The modifier state as a KeyModifier mask. GetKeyState's high bit is "down now", which is what
+// is wanted: the message queue's own modifier state at the time this key was generated.
+//
+// The mapping is the SDK's own, from the comments on KeyModifier: kCommandKey is documented as
+// "Windows: ctrl key" and kControlKey as "Windows: win key", so VK_CONTROL is kCommandKey here
+// and the Windows key is kControlKey. Reading these the wrong way round would make Ctrl-C look
+// like a plain C to anything that inspects the mask.
+int16 currentKeyModifiers()
+{
+    int16 mods = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+        mods |= kShiftKey;
+    if (GetKeyState(VK_CONTROL) & 0x8000)
+        mods |= kCommandKey;
+    if (GetKeyState(VK_MENU) & 0x8000)
+        mods |= kAlternateKey;
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000))
+        mods |= kControlKey;
+    return mods;
+}
+
+//------------------------------------------------------------------------
 const char *messageName(UINT msg)
 {
     switch (msg) {
@@ -154,6 +217,14 @@ const char *messageName(UINT msg)
             return "WM_CAPTURECHANGED";
         case WM_SHOWWINDOW:
             return "WM_SHOWWINDOW";
+        case WM_KEYDOWN:
+            return "WM_KEYDOWN";
+        case WM_CHAR:
+            return "WM_CHAR";
+        case WM_GETDLGCODE:
+            return "WM_GETDLGCODE";
+        case WM_KILLFOCUS:
+            return "WM_KILLFOCUS";
         default:
             return nullptr;
     }
@@ -376,6 +447,44 @@ LRESULT Win32PlugView::wndProc(UINT msg, WPARAM wParam, LPARAM lParam)
             }
             return 0;
         }
+
+        case WM_GETDLGCODE:
+            // Ask for the keys a dialog manager would otherwise eat on our behalf. Without this
+            // a host that runs its FX window through IsDialogMessage never lets Tab, Return or
+            // the arrow keys reach this window at all, and a text field loses exactly the keys
+            // it most needs. Only claimed while a field is actually open.
+            if (mKeyFocus)
+                return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS;
+            break;
+
+        case WM_KEYDOWN:
+            // The virtual keys only. A printable character arrives separately as WM_CHAR, which
+            // is where the keyboard layout and the shift state have already been applied for us;
+            // decoding one from a VK here would be re-implementing ToUnicode badly.
+            if (const int16 virt = virtualKeyFromVK(static_cast<int>(wParam))) {
+                if (onKeyDownNative(0, virt, currentKeyModifiers()))
+                    return 0;
+            }
+            break;
+
+        case WM_CHAR: {
+            // Control characters reach here too (Return is 0x0D, Backspace 0x08); they are
+            // already handled as virtual keys above, so anything below 0x20 is dropped rather
+            // than inserted as text.
+            const unsigned ch = static_cast<unsigned>(wParam);
+            if (ch >= 0x20 && ch < 0x7F) {
+                if (onKeyDownNative(static_cast<char16>(ch), 0, currentKeyModifiers()))
+                    return 0;
+            }
+            break;
+        }
+
+        case WM_KILLFOCUS:
+            // Focus can be taken away by the host at any moment. Let the flag follow reality, or
+            // a later release would hand focus somewhere it no longer is.
+            mKeyFocus = false;
+            mPrevFocus = nullptr;
+            break;
 
         case WM_CAPTURECHANGED:
             // Someone else took the capture — a host opening a modal dialog
@@ -636,8 +745,54 @@ bool Win32PlugView::openWindow(HWND parent)
 }
 
 //------------------------------------------------------------------------
+// Take the keyboard focus for this window, or give it straight back.
+//
+// WHY THIS EXISTS, and it is a deliberate departure from the SDK. iplugview.h states that a view
+// "must not handle keyboard events by the means of platform callbacks, but let the host pass them
+// to the view", and the editor does implement IPlugView::onKeyDown for exactly that. Measured, no
+// host available here ever calls it, so the SDK route has never once carried a key and the
+// editor's one text field could not be typed into. A field that cannot be typed into is not a
+// field.
+//
+// What the SDK rule protects is the host's key commands, and that is preserved rather than traded
+// away: focus is taken only while a text field is actually open, and is handed back to whoever
+// held it the moment the field closes. Outside that window this view holds no focus, WM_KEYDOWN
+// and WM_CHAR go wherever they went before, and WM_GETDLGCODE claims nothing. onKeyDown is still
+// implemented and still preferred, so a host that does route keys keeps working unchanged.
+void Win32PlugView::setKeyboardFocus(bool wanted)
+{
+    if (!mWindow || wanted == mKeyFocus)
+        return;
+
+    if (wanted) {
+        // A window that is not visible cannot usefully hold the focus, and taking it would move
+        // it away from something the user can actually see.
+        if (!IsWindowVisible(mWindow))
+            return;
+        mPrevFocus = GetFocus();
+        SetFocus(mWindow);
+        mKeyFocus = true;
+        trace("keyboard focus taken, previous=%p", static_cast<void *>(mPrevFocus));
+        return;
+    }
+
+    mKeyFocus = false;
+    HWND prev = mPrevFocus;
+    mPrevFocus = nullptr;
+    // The window that had the focus may have been destroyed while we held it, so it is probed
+    // rather than trusted. A failed probe leaves the focus here, which is wrong but is far better
+    // than calling SetFocus on a dead handle.
+    if (prev && prev != mWindow && IsWindow(prev))
+        SetFocus(prev);
+    trace("keyboard focus released to %p", static_cast<void *>(prev));
+}
+
+//------------------------------------------------------------------------
 void Win32PlugView::closeWindow()
 {
+    // Never leave the focus pointed at a window that is about to stop existing.
+    setKeyboardFocus(false);
+
     if (mTimerId) {
         if (mWindow)
             KillTimer(mWindow, mTimerId);

@@ -17,16 +17,20 @@
 #     handshake eats it. A control that "does not respond" to the first click responds to the
 #     second, so a warm-up click is burned before anything is measured. Without it a working
 #     control reads as broken and you go looking for a bug that is not there.
-#   * THIS HOST DELIVERS NO KEYBOARD INPUT, so `type` and `key` below will appear to do nothing
-#     and that is not a plug-in bug. The SDK routes keys to a plug-in through
-#     IPlugView::onKeyDown and forbids a view from taking them off its own window; the SDK's own
-#     editorhost selects KeyPressMask on the window and then never calls onKeyDown at all — there
-#     is not one occurrence of it anywhere in its source. So a null result from `type` here says
-#     only that this rig cannot ask the question. The commands are kept because the question is
-#     real and a host that DOES route keys will answer it, and because the alternative is somebody
-#     later concluding from silence that the field is broken. The channel-rename field is
-#     deliberately the second way to name a channel for this exact reason: the first is the
-#     basename of whatever the channel loaded, which needs no keyboard and works everywhere.
+#   * `type` AND `key` NOW WORK, and they did not always. This host still never calls
+#     IPlugView::onKeyDown — there is not one occurrence of it anywhere in editorhost's source —
+#     so for as long as that was the plug-in's only route, a null result here said nothing about
+#     the plug-in and the header said so. The editor now also reads keys from its own window while
+#     a text field is open, which is what these commands exercise; the reasoning, and the terms
+#     that keep the host's key commands out of it, are in RULES section 4.
+#   * `type` HOLDS SHIFT where the layout needs it, so capitals and shifted punctuation are
+#     typeable and testable. It asks the keyboard mapping which level a keysym sits on rather than
+#     calling isupper(), which would be right for letters on one layout and wrong for symbols on
+#     every layout. This matters: the field's own handler once rejected any key with a modifier
+#     set, so a rig that could not press Shift could not have caught it.
+#   * The channel-rename field is still the SECOND way to name a channel. The first is the
+#     basename of whatever the channel loaded, which needs no keyboard and works everywhere,
+#     including in hosts that decline to give an embedded view the focus.
 #
 #   * A DRAG HAS TO TAKE REAL TIME. The editor coalesces motion and repaints on a timer, and the
 #     drag readout is only drawn while the button is held, so a screenshot has to be taken from a

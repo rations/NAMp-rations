@@ -89,6 +89,28 @@ static void resizeTopLevel(int w, int h)
     XFlush(display);
 }
 
+// Whether this keysym sits on a SHIFTED level of the keycode that carries it, which is the only
+// layout-correct way to know that Shift has to be held. Asking isupper() instead would be right
+// for letters on a US layout and wrong for everything else, and it is exactly the capitals that
+// have to be provable here: the field's own handler once rejected any key with a modifier set,
+// so a rig that could not press Shift could not have caught it.
+static int keysymNeedsShift(KeySym sym, KeyCode code)
+{
+    int perCode = 0;
+    KeySym *map = XGetKeyboardMapping(display, code, 1, &perCode);
+    if (!map)
+        return 0;
+    int shifted = 0;
+    for (int level = 0; level < perCode; ++level) {
+        if (map[level] == sym) {
+            shifted = (level % 2) == 1; // levels alternate unshifted, shifted
+            break;
+        }
+    }
+    XFree(map);
+    return shifted;
+}
+
 // One key, by keysym. Focus is set to the target window first: XTEST delivers to whatever has
 // the input focus, and without this the keys land wherever the desktop last put it - which looks
 // exactly like a plug-in that ignored them.
@@ -97,8 +119,14 @@ static void pressKeysym(KeySym sym)
     const KeyCode code = XKeysymToKeycode(display, sym);
     if (code == 0)
         return;
+    const int shift = keysymNeedsShift(sym, code);
+    const KeyCode shiftCode = shift ? XKeysymToKeycode(display, XK_Shift_L) : 0;
+    if (shiftCode)
+        XTestFakeKeyEvent(display, shiftCode, True, CurrentTime);
     XTestFakeKeyEvent(display, code, True, CurrentTime);
     XTestFakeKeyEvent(display, code, False, CurrentTime);
+    if (shiftCode)
+        XTestFakeKeyEvent(display, shiftCode, False, CurrentTime);
     XFlush(display);
     usleep(30000);
 }
