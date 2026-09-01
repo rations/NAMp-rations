@@ -34,8 +34,18 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     kTrebleId = 106,             // 0 .. 10, default 5
     kNoiseGateOnId = 108,        // toggle, default on
 
+    // Bass / Middle / Treble in or out of circuit, as one switch — the EQ bat on the faceplate.
+    // 114 and not NAMp's 107, for the reason the retirement note below gives: retiring an ID is a
+    // promise about a NUMBER, and the promise does not become void because the control came back.
+    // A project written against a build in which 107 did not exist must not later find something
+    // answering on that lane. It sits at 114 rather than in a fresh block because it belongs with
+    // the shared signal-path controls at 100..108 and 114 is the first number after the
+    // retirements that has never meant anything.
+    kToneStackOnId = 114, // toggle, default on
+
     // RETIRED NAMp IDs — never reuse these numbers in this plug-in.
-    //   107  Tone Stack on/off   Bass/Middle/Treble are always on here, by design.
+    //   107  Tone Stack on/off   The control DOES exist here now, at 114. See the note on the
+    //                            output section below: the same rule, for the same reason.
     //   110  Slim                fixed at 1.0 (full size), permanently. The captures support a
     //                            smaller variant and it would cost less CPU; this plug-in always
     //                            plays them whole, so there is nothing here to expose.
@@ -555,9 +565,10 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // Version of the state blob written by getState and accepted by setState / setComponentState.
 // Version 1 ended after the two IR paths; version 2 appends the MIDI learn table; version 3
 // appends the four channel trims; version 4 appends the output section and the four capture
-// sources; version 5 appends the pedalboard, length-prefixed. An older blob is still loaded - it is a project saved before the pedal, the trims or
-// the loader could do anything - so this is a minimum-compatible marker rather than a gate, and
-// the readers check the version before reading anything an older writer would not have written.
+// sources; version 5 appends the pedalboard, length-prefixed. An older blob is still loaded - it is
+// a project saved before the pedal, the trims or the loader could do anything - so this is a
+// minimum-compatible marker rather than a gate, and the readers check the version before reading
+// anything an older writer would not have written.
 //
 // What an older project opens as: every trim at 0 dB, which is exactly the level it was mixed at;
 // output mode at Normalized, which is what every build before version 4 was hard-wired to; and
@@ -575,7 +586,14 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // written down, an old blob is read as exactly kMidiLearnRowsV2 rows (frozen at 4 in midilearn.h),
 // and rows beyond what this build has are skipped rather than refused - which is what lets a blob
 // from a build with MORE rows still open here.
-inline constexpr Steinberg::int32 kStateVersion = 6;
+//
+// Version 7 appends the EQ switch — one double, after the pedalboard block, which is the end of
+// the blob. It goes at the END and not beside the other seven shared controls at the front, even
+// though that is where it belongs by meaning: those eight doubles are the first thing every
+// reader since version 1 takes, so inserting a ninth would move every field after it and make
+// every existing project unreadable. A version 1-6 project opens with EQ ON, which is what every
+// build before this one was hard-wired to and so is what that project actually sounded like.
+inline constexpr Steinberg::int32 kStateVersion = 7;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.

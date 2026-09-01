@@ -99,10 +99,13 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     treble->setPrecision(1);
     parameters.addParameter(treble);
 
-    // The gate's own toggle. Deliberately NOT on the MIDI path: it stays on for as long as the
-    // user has it on. There is no tone-stack toggle — Bass, Middle and Treble are always on.
+    // The gate's own toggle, and the tone stack's. Both are deliberately off the MIDI path: they
+    // stay as the user set them, and neither is something a foot reaches for mid-song. Only the
+    // channel and the five pedals are learnable — see kMidiLearnRows.
     parameters.addParameter(STR16("Gate On"), nullptr, 1, 1.0, Vst::ParameterInfo::kCanAutomate,
                             kNoiseGateOnId);
+    parameters.addParameter(STR16("EQ On"), nullptr, 1, 1.0, Vst::ParameterInfo::kCanAutomate,
+                            kToneStackOnId);
 
     // Cabinet blend: 0 = IR A, 1 = IR B. Inert while only one slot is filled, in which case that
     // IR runs at unity and the editor draws this control disabled.
@@ -468,6 +471,13 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
                 setParamNormalized(kPedalParams[i].id, std::clamp(value, 0.0, 1.0));
         }
     }
+
+    // Version 7 onwards: the EQ switch, at the end of the blob. A version 1-6 project opens with
+    // it on, which is what those builds were hard-wired to.
+    double toneStackOn = 1.0;
+    if (version >= 7 && !streamer.readDouble(toneStackOn))
+        return kResultFalse;
+    setParamNormalized(kToneStackOnId, toneStackOn > 0.5 ? 1.0 : 0.0);
 
     refreshParamTitles();
     if (mView)

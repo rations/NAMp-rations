@@ -440,6 +440,9 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             case kNoiseGateOnId:
                 mNoiseGateOn.store(value, std::memory_order_relaxed);
                 break;
+            case kToneStackOnId:
+                mToneStackOn.store(value, std::memory_order_relaxed);
+                break;
             case kChannelId:
                 mChannelNorm.store(value, std::memory_order_relaxed);
                 break;
@@ -765,15 +768,25 @@ void RationsProcessor::applyDsp(const float *in, float *outL, float *outR, int32
     if (ngOn)
         gateOutput = mNoiseGateGain.Process(modelOutput, 1, static_cast<size_t>(numSamples));
 
-    // 5. Tone stack. Always on — unlike the parent plug-in there is no bypass for it, because an
-    // amp head's tone controls are not a stage you switch out.
-    mToneStack.SetParam("bass", denorm(mBassNorm.load(std::memory_order_relaxed), ranges::kToneMin,
-                                       ranges::kToneMax));
-    mToneStack.SetParam("middle", denorm(mMiddleNorm.load(std::memory_order_relaxed),
-                                         ranges::kToneMin, ranges::kToneMax));
-    mToneStack.SetParam("treble", denorm(mTrebleNorm.load(std::memory_order_relaxed),
-                                         ranges::kToneMin, ranges::kToneMax));
-    DSP_SAMPLE **tsOutput = mToneStack.Process(gateOutput, 1, numSamples);
+    // 5. Tone stack, under the EQ switch. Skipped entirely when it is out, exactly as the parent
+    // plug-in skips it: the stage is a set of biquads and the pointer simply passes through, so
+    // "out" costs nothing and is not a second code path. Unlike the noise gate above there is no
+    // trigger half to keep running, so there is nothing here that has to happen either way.
+    //
+    // Its parameters are set only when it is IN. A stage that is not running has nothing to be
+    // told, and setting them regardless would put three SetParam calls and their coefficient
+    // recomputes on the audio thread for a stage nobody is listening to.
+    const bool tsOn = mToneStackOn.load(std::memory_order_relaxed) > 0.5;
+    DSP_SAMPLE **tsOutput = gateOutput;
+    if (tsOn) {
+        mToneStack.SetParam("bass", denorm(mBassNorm.load(std::memory_order_relaxed),
+                                           ranges::kToneMin, ranges::kToneMax));
+        mToneStack.SetParam("middle", denorm(mMiddleNorm.load(std::memory_order_relaxed),
+                                             ranges::kToneMin, ranges::kToneMax));
+        mToneStack.SetParam("treble", denorm(mTrebleNorm.load(std::memory_order_relaxed),
+                                             ranges::kToneMin, ranges::kToneMax));
+        tsOutput = mToneStack.Process(gateOutput, 1, numSamples);
+    }
 
     // 6. The cabinet: one IR, two blended, or none. The weights come from the correlation measured
     // between the two files at load time, so the middle of the dial neither bumps (two mic
@@ -1320,7 +1333,9 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
             if (!streamer.readDouble(value))
                 return kResultFalse;
             // Values this build does not have are read and discarded rather than skipped, because
-            // the stream has to be consumed either way and there is nothing after this block.
+            // the stream has to be consumed either way — and from version 7 there IS something
+            // after this block, so consuming the whole count is what keeps that at the right
+            // offset when a later build writes a longer one.
             if (i < kPedalParamCount)
                 mPedalNorm[i].store(std::clamp(value, 0.0, 1.0), std::memory_order_relaxed);
         }
@@ -1328,6 +1343,13 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
         // knob was added. Everything it did not carry keeps the default the constructor set, which
         // is why those defaults are set there and not here.
     }
+
+    // Version 7 onwards: the EQ switch. A version 1-6 project opens with it ON, which is what
+    // every build before this one was hard-wired to and so is what that project sounded like.
+    double toneStackOn = 1.0;
+    if (version >= 7 && !streamer.readDouble(toneStackOn))
+        return kResultFalse;
+    mToneStackOn.store(toneStackOn > 0.5 ? 1.0 : 0.0, std::memory_order_relaxed);
 
     return kResultOk;
 }
@@ -1403,6 +1425,12 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     streamer.writeInt32(kPedalParamCount);
     for (int i = 0; i < kPedalParamCount; ++i)
         streamer.writeDouble(mPedalNorm[i].load(std::memory_order_relaxed));
+
+    // Version 7 onwards: the EQ switch. Appended at the END rather than put with the other seven
+    // shared controls at the front, where it belongs by meaning: those eight doubles are the first
+    // thing every reader since version 1 takes, so a ninth inserted among them would move every
+    // field after it and make every existing project unreadable.
+    streamer.writeDouble(mToneStackOn.load(std::memory_order_relaxed));
     return kResultOk;
 }
 

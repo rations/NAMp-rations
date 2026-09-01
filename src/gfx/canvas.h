@@ -163,6 +163,12 @@ public:
     // 0 and "Depth" reports what its p really costs. The pedalboard's layout audit needs the
     // difference, because a label row's clearance is set by the strings that are in it.
     float stringDescent(const char *text) const;
+    // The mirror of stringDescent: how far this string's INK rises above its baseline. Again
+    // cairo's ink extent for these actual glyphs and not the face's nominal ascent, so a legend
+    // in caps reports its cap height and one with no ascender reports its x-height. The head
+    // panel's clearance audit needs it for the same reason the pedalboard's needs the descent:
+    // what a row has to clear is the ink that is in it.
+    float stringAscent(const char *text) const;
     // Truncate with an ellipsis until it fits maxW at the current font.
     std::string clipToWidth(const std::string &s, float maxW) const;
 

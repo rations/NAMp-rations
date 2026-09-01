@@ -246,10 +246,17 @@ constexpr int pageMaxH(Page p)
 // 15 logical px is 15*s device px, and an intermediate window size can still
 // land on a stepped value. Being even at the sizes the window actually rests at
 // is what is available; being even everywhere is not.
-constexpr int kTitleSize = 56;       // the wordmark; fitted to the mock's cap height
-constexpr int kKnobLabelSize = 15;   // dial legends, main row
-constexpr int kIoLabelSize = 15;     // Input / Output, same row as the toggles
-constexpr int kToggleLabelSize = 11; // BYPASS
+constexpr int kTitleSize = 56; // the wordmark; fitted to the mock's cap height
+// The dial legends and the utility row's, both one step down the cap-even list
+// (15 -> 12 and 11 -> 10; 13 and 14 are not available, see the note above).
+// They came down when the channel lamps moved out of the band above the dials
+// and the EQ switch moved into it: two legend rows now share a band that used
+// to hold one, and the room between them is worth more than the extra point of
+// size was. Michroma is a wide face, so a legend at 12 is still wider than the
+// Roboto readout at 12 that replaces it while a dial is being dragged.
+constexpr int kKnobLabelSize = 12;   // dial legends, main row
+constexpr int kIoLabelSize = 12;     // Input / Output; one legend size on the faceplate
+constexpr int kToggleLabelSize = 10; // BYPASS, EQ
 constexpr int kPageButtonTextSize = 15;
 constexpr int kBlendLabelSize = 12;
 constexpr int kKnobValueSize = 12;   // Roboto: the drag readout
@@ -289,14 +296,48 @@ struct KnobSpec {
     const char *label;
     const char *unit; // appended to the drag readout (nullptr = none)
 };
+// --- The lower stack: dial, switch, lamp, in that order ----------------------
+// These three rows are ONE column of stacked parts per channel, and they are
+// derived DOWNWARDS from the dial rather than each being a measured number,
+// because the dial is the one of the three whose position is fixed by something
+// outside this group: the band above it now carries the EQ switch's legend (see
+// kEqToggle), and how close the dial legends may come to that is what decides
+// where the dial row sits. Everything else follows.
+//
+// The lamps used to sit ABOVE the dials, at y = 147, in the band between the
+// wordmark's row and the dial legends. They moved to the BOTTOM of each column,
+// under the switch, so that band could take the EQ switch beside BYPASS — and
+// the dial row and the switch row moved up by 24 and 19 to open the space at
+// the bottom for them. The Input and Output dials, their legends and the page
+// buttons did not move: those are placed against the faceplate's own bottom
+// edge and there was nothing wrong with where they were.
+//
+// One consequence, and it is deliberate: the switch row is no longer level with
+// the Input and Output dials. It cannot be and also have a lamp under it, and
+// the lamp is what a player looks at from six feet away.
 constexpr int kKnobCount = 8;
 constexpr int kKnobR = 28;
-constexpr int kKnobCY = 226;
-// Measured off the mock: seven of the eight dials sit on a perfect 94 px grid
-// whose first position is 251. The eighth — Clean — is drawn 11 px left of it,
-// which is the only irregularity in the row and reads as a hand-placement slip
-// rather than an intention, so the row is regularised onto the grid the other
-// seven agree on. If that gap WAS deliberate, this is the constant to break.
+constexpr int kKnobCY = 203;
+
+constexpr int kToggleW = 24, kToggleH = 40;
+constexpr int kKnobToToggleGap = 6;
+constexpr int kToggleCY = kKnobCY + kKnobR + kKnobToToggleGap + kToggleH / 2; // 257
+
+// --- Channel / gate indicator LEDs (5), under the switches ------------------
+// Red when the channel is the one sounding, black otherwise; the gate's lamp
+// follows its own toggle. Centred on their dials.
+constexpr int kLedR = 9;
+constexpr int kToggleToLedGap = 6;
+constexpr int kLedCY = kToggleCY + kToggleH / 2 + kToggleToLedGap + kLedR; // 292
+constexpr int kLedCount = 5;
+
+// The gaps are named rather than folded into literal centres so the arithmetic
+// is checkable and so a part that grows fails the static_asserts below instead
+// of silently overlapping. Both are 6, and the DRAWN clearances are not equal:
+// dial.png's ink fills its 256x256 box edge to edge, while switch_up_ring.png's
+// ink starts 8 rows into a 184-row frame — 1.7 units once it is drawn at 40 —
+// so the dial-to-switch gap reads as 7.7 with the bat up and 6 with it down,
+// which is the bat travelling and is what it should look like.
 constexpr int kKnobPitch = 94;
 constexpr int kKnobX0 = 251;
 
@@ -309,8 +350,10 @@ constexpr KnobSpec kKnobs[kKnobCount] = {
     {kOd1GainId, kKnobX0 + 2 * kKnobPitch, kKnobCY, kKnobR, "OD1", nullptr},
     {kOd2GainId, kKnobX0 + 3 * kKnobPitch, kKnobCY, kKnobR, "OD2", nullptr},
     // Shared section. The gate has its own bat switch below it like the four
-    // channels do; Bass/Middle/Treble have none, because unlike the parent
-    // plug-in the tone stack here is always on.
+    // channels do; Bass/Middle/Treble share ONE switch and it is not here — it
+    // is EQ, up in the utility band beside BYPASS, because a switch that takes
+    // three dials out at once belongs with the other whole-signal-path switch
+    // and not under whichever of the three it happened to be drawn beneath.
     {kNoiseGateThresholdId, kKnobX0 + 4 * kKnobPitch, kKnobCY, kKnobR, "Gate", "dB"},
     {kBassId, kKnobX0 + 5 * kKnobPitch, kKnobCY, kKnobR, "Bass", nullptr},
     {kMiddleId, kKnobX0 + 6 * kKnobPitch, kKnobCY, kKnobR, "Middle", nullptr},
@@ -329,20 +372,18 @@ constexpr double kKnobSweepDeg = 270.0;
 // that says where a dial has got to appears only while that dial is being
 // dragged, and it appears HERE, replacing the legend for the duration.
 //
-// Below the dial is not available and never was: the bat switches sit on
-// y = 275 with art 20 px either side of that, and the dials' own art ends at
-// y = 254, so the gap between them is a single pixel. A value row underneath is
-// drawn across the levers. Confirmed by looking at it rather than by arithmetic
-// — the first version of this editor did exactly that.
-constexpr int kKnobLabelDY = 45; // 226 - 181
-
-// --- Channel / gate indicator LEDs (5), above the dial labels ---------------
-// Red when the channel is the one sounding, black otherwise; the gate's LED
-// follows its own toggle. Centred on their dials — the mock's are 1 to 3 px
-// off, which is hand placement, not a design.
-constexpr int kLedR = 9;
-constexpr int kLedCY = 147;
-constexpr int kLedCount = 5;
+// Below the dial is not available and never was: the band under it holds the
+// bat switch and then the channel lamp, and between the dial's art and the
+// switch's there are 6 px. A value row underneath is drawn across the levers.
+// Confirmed by looking at it rather than by arithmetic — the first version of
+// this editor did exactly that.
+//
+// 38 rather than the 45 the mock measured, because the row above the dials is
+// no longer empty: the EQ switch's legend ends at y = 139 and the dial art now
+// begins at y = 174, so the legend is centred in what is left instead of being
+// pushed up against the switch's. The static_assert below is what holds that,
+// and the smaller legend size is the other half of the same change.
+constexpr int kKnobLabelDY = 38; // 203 - 165
 
 // --- Bat toggles under the first five dials ---------------------------------
 // switch_up_ring.png / switch_down_ring.png are 112x184 and carry no meaning of
@@ -353,10 +394,8 @@ struct ToggleSpec {
     const char *label; // drawn centred under the art; nullptr = no label
     bool invert;       // true = parameter on means bat DOWN
 };
-constexpr int kToggleW = 24, kToggleH = 40;
-// Level with the Input and Output dials, so the bottom of the panel reads as one
-// row rather than three.
-constexpr int kToggleCY = 275;
+// kToggleW, kToggleH and kToggleCY are declared with the lower stack above,
+// because the dial row and the lamp row are derived from them.
 constexpr int kToggleLabelDY = 33;
 // The CLICK target is deliberately bigger than the art: the lever is 24 px wide
 // and at the minimum window scale that is 16 physical px, which is a miss
@@ -410,10 +449,70 @@ constexpr int kBypassLedCY = kGearCY;
 constexpr int kBypassLedToToggleDX = 40;
 constexpr int kBypassToggleCX = kBypassLedCX + kBypassLedToToggleDX; // 191
 constexpr int kBypassToggleCY = kBypassLedCY;
-constexpr ToggleSpec kBypassToggle = {kBypassId, kBypassToggleCX, kBypassToggleCY, "BYPASS",
-                                      // Bypass on means the plug-in is OUT of
-                                      // circuit, which on an amp is the bat down.
-                                      true};
+
+// EQ sits immediately right of BYPASS, in the band the channel lamps vacated
+// when they moved down under their dials. The two are the faceplate's utility
+// switches — one takes the whole plug-in out of circuit, the other takes the
+// tone stack out — and they are the only two switches here that are not tied to
+// a single dial, so they share a row.
+//
+// Its centre is the Clean dial's column, and that is the LEFTMOST position it
+// can have: the pair's click targets are kToggleHitW wide, so 251 is exactly
+// where EQ's stops touching BYPASS's, and further right would start crowding
+// the wordmark. The static_assert below is the one that says so; the vertical
+// one beside it is what keeps its legend clear of the dial legends underneath,
+// which is the clearance this row's move made tight.
+constexpr int kEqToggleCX = kKnobX0; // 251, the Clean column
+constexpr int kTopToggleCount = 2;
+constexpr ToggleSpec kTopToggles[kTopToggleCount] = {
+    // Bypass on means the plug-in is OUT of circuit, which on an amp is the bat
+    // down. EQ reads the natural way round: on is up.
+    {kBypassId, kBypassToggleCX, kBypassToggleCY, "BYPASS", true},
+    {kToneStackOnId, kEqToggleCX, kBypassToggleCY, "EQ", false},
+};
+// Named because the bypass switch is referred to on its own in a dozen places
+// that predate the pair.
+// `inline` is load-bearing: a constexpr REFERENCE has external linkage, unlike a
+// constexpr object, so without it every translation unit that includes this
+// header defines the same symbol and the link fails.
+inline constexpr const ToggleSpec &kBypassToggle = kTopToggles[0];
+
+// A lamp each, and they are BESIDE their switches rather than under them, which
+// is the one place on the faceplate that does not follow the channel columns'
+// rule. Two reasons, and neither is taste. This row's switches carry a legend
+// under them and the channel switches do not, so there is nothing under a bat
+// here to put a lamp in; and the band is 44 units deep between the faceplate's
+// top edge and the dial legends, which is a switch and a legend and no more.
+//
+// Which SIDE is then decided for us on the left and taken to match on the
+// right: BYPASS's lamp is the gear's mirror through the faceplate centre and so
+// is fixed at 151, inboard of it. EQ's is the same 40 units from its own
+// switch, on the far side, so the row reads lamp-BYPASS ... EQ-lamp. The two
+// switches are 60 apart and each lamp is 40 from its own, so proximity says
+// which lamp belongs to which switch without a rule having to be learned.
+constexpr int kTopLedCX[kTopToggleCount] = {kBypassLedCX,
+                                            kEqToggleCX + kBypassLedToToggleDX}; // 151, 291
+constexpr int kTopLedCY = kBypassLedCY;
+static_assert(kTopLedCX[1] - kLedR > kEqToggleCX + kToggleHitW / 2,
+              "the EQ lamp is inside the EQ switch's own click target");
+
+static_assert(kEqToggleCX - kToggleHitW / 2 >= kBypassToggleCX + kToggleHitW / 2,
+              "the EQ and BYPASS click targets overlap — one would swallow the other's clicks");
+// The utility row's legends sit directly above the dial legends. Measured with
+// the font size as a conservative stand-in for the cap height, which is about
+// three quarters of it, so real ink has more clearance than this asks for.
+static_assert(kBypassToggleCY + kToggleLabelDY + 4 <= kKnobCY - kKnobLabelDY - kKnobLabelSize,
+              "the utility row's legends have come down onto the dial legends");
+// The lower stack, top to bottom: dial art, switch art, lamp. Derived, so these
+// can only fail if a part grows — and the last one is the one that is not
+// derived and so is the one that can actually be broken: the lamp is the lowest
+// thing on the faceplate and there is nothing under it but the piping.
+static_assert(kKnobCY + kKnobR < kToggleCY - kToggleH / 2,
+              "the bat switches are drawn on the dials");
+static_assert(kToggleCY + kToggleH / 2 < kLedCY - kLedR,
+              "the channel lamps are drawn on the bat switches");
+static_assert(kLedCY + kLedR < kFaceB - 8, "the channel lamps have reached the faceplate's edge");
+static_assert(kKnobLabelDY > kKnobR, "a dial legend is drawn across its own dial");
 
 // --- Level meters and the Input / Output dials, on the outer edges ----------
 // One column per side, shared by the meter, the dial under it and the dial's
@@ -475,6 +574,14 @@ constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
     {kPageButtonSeamCX + kPageButtonSeamGap / 2, kPageButtonY, kPageButtonW, kPageButtonH,
      "Cabinet", Page::Cabinet},
 };
+// The channel lamps' row and the page buttons' row share a centre line, which is
+// what gives the bottom of the faceplate one reading line across its whole
+// width now that the switch row has moved off the Input/Output dials. It fell
+// out of the stack above rather than being aimed at, and it is asserted rather
+// than left as a coincidence so that moving either one is a decision: if the
+// lamps are meant to sit somewhere else, delete this.
+static_assert(kLedCY == kPageButtonY + kPageButtonH / 2,
+              "the channel lamps no longer line up with the page buttons");
 
 // The way back, drawn top-left on every page that is not the head. Its position
 // is the same on all three, and it is deliberately clear of every page's own

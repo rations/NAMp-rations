@@ -539,11 +539,17 @@ void RationsEditorView::composeHead(Canvas &c)
                 channel ? (i == sounding) : gateOn);
     }
 
-    // Bypass. The LED follows the plug-in being IN circuit, so it is off when bypassed.
-    const bool bypassed = paramValue(kBypassId) > 0.5;
-    drawToggle(c, geo::kBypassToggle, bypassed);
-    drawLed(c, static_cast<float>(geo::kBypassLedCX), static_cast<float>(geo::kBypassLedCY),
-            !bypassed);
+    // The utility row: BYPASS and EQ, each with its own lamp beside it. Both lamps say the stage
+    // is IN circuit, which is why the bypass one is lit when bypass is OFF: the parameter names
+    // the switch's action and the lamp reports the signal path, and on this one switch those are
+    // opposites. ToggleSpec::invert carries exactly the same fact for the bat.
+    for (int i = 0; i < geo::kTopToggleCount; ++i) {
+        const geo::ToggleSpec &t = geo::kTopToggles[i];
+        const bool on = paramValue(t.id) > 0.5;
+        drawToggle(c, t, on);
+        drawLed(c, static_cast<float>(geo::kTopLedCX[i]), static_cast<float>(geo::kTopLedCY),
+                t.invert ? !on : on);
+    }
 
     drawMeter(c, geo::kInputMeter, mInDisp, mInPeak);
     drawMeter(c, geo::kOutputMeter, mOutDisp, mOutPeak);
@@ -1955,12 +1961,15 @@ bool RationsEditorView::handleHeadClick(float x, float y)
         return true;
     }
 
-    const Rect bypass(geo::kBypassToggle.cx - geo::kToggleHitW / 2.0f,
-                      static_cast<float>(geo::kBypassToggle.cy + geo::kToggleHitTop),
-                      geo::kToggleHitW,
-                      static_cast<float>(geo::kToggleHitBottom - geo::kToggleHitTop));
-    if (bypass.contains(x, y)) {
-        editParam(kBypassId, paramValue(kBypassId) > 0.5 ? 0.0 : 1.0);
+    // The utility row. Both are plain booleans, so unlike the five above there is no list
+    // parameter to map and no already-up case to ignore.
+    for (const geo::ToggleSpec &t : geo::kTopToggles) {
+        const Rect top(t.cx - geo::kToggleHitW / 2.0f,
+                       static_cast<float>(t.cy + geo::kToggleHitTop), geo::kToggleHitW,
+                       static_cast<float>(geo::kToggleHitBottom - geo::kToggleHitTop));
+        if (!top.contains(x, y))
+            continue;
+        editParam(t.id, paramValue(t.id) > 0.5 ? 0.0 : 1.0);
         invalidate();
         return true;
     }

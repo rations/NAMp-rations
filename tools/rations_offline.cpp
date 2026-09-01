@@ -472,6 +472,12 @@ int main(int argc, char **argv)
     // below says otherwise, so the trim measurement above and the render the report describes are
     // both taken in the state the plug-in ships in.
     double outputModeNorm = Rations::normFromOutputMode(Rations::kOutputNormalized);
+    // The tone stack and its switch. Both are pushed at their defaults by every pass, so nothing
+    // above changes: Bass/Middle/Treble default to the middle of their range and EQ to on, which
+    // is exactly what the processor's constructor already holds. The EQ check below is the only
+    // caller that moves them.
+    double toneNorm = 0.5;
+    double eqOnNorm = 1.0;
     auto renderPass = [&](double levelNorm) {
         for (size_t pos = 0; pos < total; pos += static_cast<size_t>(callBlock)) {
             const size_t n = std::min(static_cast<size_t>(callBlock), total - pos);
@@ -503,6 +509,17 @@ int main(int argc, char **argv)
                     paramChanges.addParameterData(Rations::kOutputModeId, queueIndex)) {
                 int32 pointIndex = 0;
                 q->addPoint(0, outputModeNorm, pointIndex);
+            }
+            for (Vst::ParamID id : {Rations::kBassId, Rations::kMiddleId, Rations::kTrebleId}) {
+                if (Vst::IParamValueQueue *q = paramChanges.addParameterData(id, queueIndex)) {
+                    int32 pointIndex = 0;
+                    q->addPoint(0, toneNorm, pointIndex);
+                }
+            }
+            if (Vst::IParamValueQueue *q =
+                    paramChanges.addParameterData(Rations::kToneStackOnId, queueIndex)) {
+                int32 pointIndex = 0;
+                q->addPoint(0, eqOnNorm, pointIndex);
             }
             outParamChanges.clearQueue();
             data.inputParameterChanges = &paramChanges;
@@ -669,6 +686,80 @@ int main(int argc, char **argv)
         output = reference;
     }
 
+    // --- the EQ switch -------------------------------------------------------------------------
+    // Bass, Middle and Treble go IN or OUT of circuit together. "Out" is not "flat": the NAM tone
+    // stack has no flat setting, so a switch that merely parked the three at their middle would
+    // still be colouring the signal, and the difference is exactly the thing a player reaches for
+    // this switch to hear. So the claim is stronger than "the output changes":
+    //
+    //   * with the switch OUT, the three dials are inert BIT FOR BIT. Not "close to inert": the
+    //     stage is skipped entirely, so the same input has to give back the same samples, and any
+    //     difference at all means the tone stack is still in the path somewhere.
+    //   * with the switch IN, the same two dial settings differ. Otherwise the check above would
+    //     pass just as well on a build that had removed the tone stack altogether.
+    //   * and the two states differ from each other, which is what says the stage was REMOVED and
+    //     not merely frozen at whatever it last held.
+    //
+    // Each state is rendered twice and the second is the measurement, for the same reason the trim
+    // and output-mode checks render twice: the first pass after a change carries the arrival as
+    // well as the value, and the models need a receptive field of the new material before their
+    // output is a function of it alone.
+    int eqFailures = 0;
+    {
+        const std::vector<float> reference = output;
+        auto renderTone = [&](double tone, bool eqOn) {
+            toneNorm = tone;
+            eqOnNorm = eqOn ? 1.0 : 0.0;
+            renderPass(0.5);
+            renderPass(0.5);
+            return output;
+        };
+        auto maxAbsDiff = [&](const std::vector<float> &a, const std::vector<float> &b) {
+            double worst = 0.0;
+            for (size_t i = 0; i < total; ++i)
+                worst = std::max(worst, std::fabs(static_cast<double>(a[i]) - b[i]));
+            return worst;
+        };
+
+        const std::vector<float> inMin = renderTone(0.0, true);
+        const std::vector<float> inMax = renderTone(1.0, true);
+        const std::vector<float> outMin = renderTone(0.0, false);
+        const std::vector<float> outMax = renderTone(1.0, false);
+
+        const double movedIn = maxAbsDiff(inMin, inMax);
+        const double movedOut = maxAbsDiff(outMin, outMax);
+        const double removed = maxAbsDiff(inMin, outMin);
+        printf("eq switch      dials move the output by %.6f in circuit, %.6f out; the stage "
+               "itself is worth %.6f\n",
+               movedIn, movedOut, removed);
+
+        if (movedOut != 0.0) {
+            fprintf(stderr,
+                    "FAIL: with EQ out, moving Bass/Middle/Treble still changed the output by "
+                    "%.9f - the tone stack is not being skipped\n",
+                    movedOut);
+            ++eqFailures;
+        }
+        if (movedIn <= 1e-6) {
+            fprintf(stderr,
+                    "FAIL: with EQ in, moving Bass/Middle/Treble changed the output by only "
+                    "%.9f - the tone stack is not in circuit\n",
+                    movedIn);
+            ++eqFailures;
+        }
+        if (removed <= 1e-6) {
+            fprintf(stderr,
+                    "FAIL: switching EQ out changed the output by only %.9f - the stage is being "
+                    "frozen rather than removed\n",
+                    removed);
+            ++eqFailures;
+        }
+
+        toneNorm = 0.5;
+        eqOnNorm = 1.0;
+        output = reference;
+    }
+
     processor->setProcessing(false);
     if (!opt.saveState.empty()) {
         MemoryStream saved;
@@ -753,7 +844,7 @@ int main(int argc, char **argv)
     printf("unwritten      %zu\n", stale);
     printf("wall           %.1f ms  (RTF %.4f)\n", wallMs, wallMs / (opt.seconds * 1000.0));
 
-    int failures = trimFailures + modeFailures;
+    int failures = trimFailures + modeFailures + eqFailures;
     if (nonFinite) {
         fprintf(stderr, "FAIL: %zu non-finite output samples\n", nonFinite);
         ++failures;

@@ -305,6 +305,18 @@ float Canvas::stringDescent(const char *text) const
     return below > 0.0 ? static_cast<float>(below) : 0.0f;
 }
 
+float Canvas::stringAscent(const char *text) const
+{
+    if (!text || !*text)
+        return 0.0f;
+    cairo_text_extents_t ext;
+    cairo_text_extents(mCr, text, &ext);
+    // y_bearing is the ink box's top relative to the baseline and is NEGATIVE above it, so the
+    // height above the baseline is its negation. A string whose ink is entirely below the
+    // baseline would give a negative value, which is clamped away.
+    return ext.y_bearing < 0.0 ? static_cast<float>(-ext.y_bearing) : 0.0f;
+}
+
 std::string Canvas::clipToWidth(const std::string &s, float maxW) const
 {
     if (stringWidth(s.c_str()) <= maxW)

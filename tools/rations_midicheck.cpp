@@ -306,8 +306,8 @@ std::pair<Vst::ParamID, double> cc(int number, int value)
 // read forward - and, since it has to, it reads forward through everything rather than seeking by
 // arithmetic, which is the version of "a second copy of the layout" that fails loudly when the
 // layout changes under it instead of returning four plausible wrong numbers.
-bool readTrims(MemoryStream &s, double out[kChannelCount],
-               std::vector<double> *pedals = nullptr)
+bool readTrims(MemoryStream &s, double out[kChannelCount], std::vector<double> *pedals = nullptr,
+               double *eqOn = nullptr)
 {
     s.seek(0, IBStream::kIBSeekSet, nullptr);
     IBStreamer streamer(&s, kLittleEndian);
@@ -355,14 +355,19 @@ bool readTrims(MemoryStream &s, double out[kChannelCount],
     for (int c = 0; c < kChannelCount; ++c)
         if (!streamer.readDouble(out[c]))
             return false;
-    if (!pedals)
+    // The EQ switch is the last field in the blob, so asking for it means walking everything
+    // between - which is the same argument the pedals below are read by, one field further on.
+    if (eqOn)
+        *eqOn = 1.0; // what a version 1-6 project opens as
+    if (!pedals && !eqOn)
         return true;
 
     // On to the pedalboard, which means reading past the output section and the four capture
     // sources first. This is where the MIDI block's length prefix is really tested: get that count
     // wrong and everything from here on is read at the wrong offset, so a wrong answer here is a
     // loud failure rather than four plausible numbers.
-    pedals->clear();
+    if (pedals)
+        pedals->clear();
     if (version < 4)
         return true;
     for (int i = 0; i < 3; ++i) // output mode, calibrate, calibration level
@@ -388,9 +393,17 @@ bool readTrims(MemoryStream &s, double out[kChannelCount],
         double v = 0.0;
         if (!streamer.readDouble(v))
             return false;
-        pedals->push_back(v);
+        if (pedals)
+            pedals->push_back(v);
     }
-    return true;
+    // Version 7 onwards: the EQ switch, one double, and the end of the blob. Read only when the
+    // VERSION says it is there - which is the whole of what this reader is asserting about it,
+    // because the version-5 and version-6 fixtures below are made by rewriting the version word
+    // and copying the tail byte for byte, so the double is still physically present in blobs that
+    // must not read it.
+    if (version < 7 || !eqOn)
+        return true;
+    return streamer.readDouble(*eqOn);
 }
 
 // Rewrite a state blob's MIDI block: a different version word, a different number of rows, and a
@@ -1248,12 +1261,68 @@ int main(int argc, char **argv)
         // Round trip at the current version: the pedal rows come back and still work.
         for (int r = 0; r < kMidiLearnRowCount; ++r)
             sendMessage(hostContext, component, kMsgMidiClear, &r);
-        reloadAndCheck(saved, "a version 6 blob reloads");
+        reloadAndCheck(saved, "a current-version blob reloads");
         {
             Block press = stomp(rig, 100 + kPedalFlanger);
             double v = 0.0;
             check(echoOf(press, kPedalOnId[kPedalFlanger], v),
                   "a pedal row survives save and reload");
+        }
+
+        // --- the EQ switch, which is the whole of state version 7 ---------------------------
+        //
+        // It is appended after the pedalboard block, so it is the one field whose offset depends
+        // on a LENGTH the reader has to have consumed correctly - and it is the field an older
+        // reader must not read at all. Both halves are checked, and the fixtures make the second
+        // half real rather than theoretical: rewriteMidiBlock copies the tail byte for byte, so a
+        // version 5 or 6 blob built from a version 7 one still HAS the EQ double sitting in it.
+        // A reader that forgot its version guard would find it and come back with EQ off.
+        {
+            Block eqOff;
+            eqOff.params.push_back({kToneStackOnId, 0.0});
+            rig.run(eqOff);
+
+            MemoryStream withEq;
+            double eq = -1.0;
+            double t[kChannelCount] = {};
+            std::vector<double> pv;
+            check(component->getState(&withEq) == kResultOk && readTrims(withEq, t, &pv, &eq) &&
+                      eq == 0.0,
+                  "the EQ switch is written at the end of the blob");
+
+            withEq.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&withEq) == kResultOk, "a version 7 blob with EQ off loads");
+            MemoryStream again;
+            double eqAgain = -1.0;
+            check(component->getState(&again) == kResultOk &&
+                      readTrims(again, t, &pv, &eqAgain) && eqAgain == 0.0,
+                  "... and EQ is still off after the round trip");
+            withEq.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(controller->setComponentState(&withEq) == kResultOk &&
+                      controller->getParamNormalized(kToneStackOnId) == 0.0,
+                  "... and the editor reads it at the same offset");
+
+            std::vector<char> preEq;
+            check(rewriteMidiBlock(withEq, 6, kMidiLearnRowCount, preEq),
+                  "a version 6 blob can be built from it");
+            MemoryStream blob(preEq.data(), static_cast<TSize>(preEq.size()));
+            blob.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&blob) == kResultOk, "a version 6 blob loads");
+            MemoryStream back;
+            double eqBack = -1.0;
+            check(component->getState(&back) == kResultOk && readTrims(back, t, &pv, &eqBack) &&
+                      eqBack == 1.0,
+                  "... and opens with EQ ON, not with the byte its tail still carries");
+            blob.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(controller->setComponentState(&blob) == kResultOk &&
+                      controller->getParamNormalized(kToneStackOnId) == 1.0,
+                  "... and the editor agrees with it");
+
+            Block eqOn;
+            eqOn.params.push_back({kToneStackOnId, 1.0});
+            rig.run(eqOn);
+            saved.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&saved) == kResultOk, "the blob under test is restored");
         }
 
         // A project written before the footswitch rows existed: version 5, four rows, no count.

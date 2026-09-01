@@ -215,6 +215,11 @@ private:
     dsp::noise_gate::Trigger mNoiseGateTrigger;
     dsp::noise_gate::Gain mNoiseGateGain;
     dsp::tone_stack::BasicNamToneStack mToneStack;
+    // Bass / Middle / Treble in or out of circuit. Read once per block on the audio thread, like
+    // every other shared control here; the tone stack itself is never reset when it is switched
+    // out, because it is a set of biquads whose state is 3 samples deep and re-entering it with
+    // stale state costs less than a click's worth of anything.
+    std::atomic<double> mToneStackOn{1.0};
 
     // Pre-allocated double-precision work buffers, sized in setupProcessing for mMaxBlockSize.
     // mDryBuf keeps the ungained input so the bypass ramp has something to fade back to.

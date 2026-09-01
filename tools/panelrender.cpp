@@ -269,10 +269,16 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
                 on);
     }
 
-    // Bypass, in the band left of the wordmark. Not in the mock — see geometry.h.
-    drawToggle(c, images, geo::kBypassToggle, false);
-    drawLed(c, images, static_cast<float>(geo::kBypassLedCX), static_cast<float>(geo::kBypassLedCY),
-            true);
+    // The utility row — BYPASS and EQ with a lamp each, in the band left of the wordmark.
+    // Neither switch is in the mock; see geometry.h. Drawn in the state the panel is in when
+    // nobody has touched it: bypass off, EQ on, so both lamps are lit.
+    for (int i = 0; i < geo::kTopToggleCount; ++i) {
+        const geo::ToggleSpec &t = geo::kTopToggles[i];
+        const bool on = (t.id == kToneStackOnId);
+        drawToggle(c, images, t, on);
+        drawLed(c, images, static_cast<float>(geo::kTopLedCX[i]),
+                static_cast<float>(geo::kTopLedCY), t.invert ? !on : on);
+    }
 
     drawMeter(c, images, geo::kInputMeter, 0.62f, 0.78f);
     drawMeter(c, images, geo::kOutputMeter, 0.48f, 0.0f);
@@ -834,13 +840,14 @@ bool auditHitBoxes()
         boxes.push_back({b.label, static_cast<float>(b.x), static_cast<float>(b.y),
                          static_cast<float>(b.x + b.w), static_cast<float>(b.y + b.h)});
 
-    // The upper band: bypass and the gear. Not the same row as the five bat switches, but on the
-    // same faceplate and hit-tested from the same click, so they belong in the same check — and
-    // the bypass pair in particular has been moved once already.
-    boxes.push_back({"BYPASS", geo::kBypassToggle.cx - geo::kToggleHitW / 2.0f,
-                     static_cast<float>(geo::kBypassToggle.cy + geo::kToggleHitTop),
-                     geo::kBypassToggle.cx + geo::kToggleHitW / 2.0f,
-                     static_cast<float>(geo::kBypassToggle.cy + geo::kToggleHitBottom)});
+    // The upper band: the two utility switches and the gear. Not the same row as the five bat
+    // switches, but on the same faceplate and hit-tested from the same click, so they belong in
+    // the same check — and BYPASS in particular has been moved once already, and EQ was fitted
+    // into the space beside it with nothing to spare.
+    for (const geo::ToggleSpec &t : geo::kTopToggles)
+        boxes.push_back(
+            {t.label, t.cx - geo::kToggleHitW / 2.0f, static_cast<float>(t.cy + geo::kToggleHitTop),
+             t.cx + geo::kToggleHitW / 2.0f, static_cast<float>(t.cy + geo::kToggleHitBottom)});
     // The gear's click target is its radius plus the same 4 px slop the editor allows.
     boxes.push_back({"gear", static_cast<float>(geo::kGearCX - geo::kGearR - 4),
                      static_cast<float>(geo::kGearCY - geo::kGearR - 4),
@@ -1186,6 +1193,11 @@ bool auditPedalHitBoxes()
 }
 
 //------------------------------------------------------------------------
+// What the utility row's two legends must keep clear of each other, and of the dial legends on
+// the row below. Eight units at kToggleLabelSize = 10 is about a whole cap height, which is what
+// stops two centred legends in one column reading as one stacked pair.
+constexpr float kUtilityLegendGap = 8.0f;
+
 bool auditText(FontStack &fonts)
 {
     cairo_surface_t *scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
@@ -1194,10 +1206,19 @@ bool auditText(FontStack &fonts)
 
     std::vector<TextFit> fits;
 
-    // The wordmark. Its band is bounded on the left by the bypass toggle and on
-    // the right by the gear, and it is centred between them.
+    // The wordmark. Its band is bounded on the left by the utility row and on the
+    // right by the gear, and it is centred between them. The left bound is the
+    // EQ lamp, which is the rightmost thing in that row — it used to be the
+    // bypass switch's click target, and reading it off the row rather than off
+    // one named control is what stops this going stale the next time the row
+    // grows.
+    float utilityRight = geo::kBypassToggleCX + geo::kToggleHitW / 2.0f;
+    for (int i = 0; i < geo::kTopToggleCount; ++i) {
+        utilityRight = std::max(utilityRight, geo::kTopToggles[i].cx + geo::kToggleHitW / 2.0f);
+        utilityRight = std::max(utilityRight, geo::kTopLedCX[i] + static_cast<float>(geo::kLedR));
+    }
     const float titleRoom =
-        2.0f * std::min(geo::kFaceCX - (geo::kBypassToggleCX + geo::kToggleHitW / 2.0f),
+        2.0f * std::min(geo::kFaceCX - utilityRight,
                         (geo::kGearCX - geo::kGearR) - static_cast<float>(geo::kFaceCX));
     fits.push_back({"wordmark", Font::Title, geo::kTitleSize, "Rations", titleRoom});
 
@@ -1213,9 +1234,14 @@ bool auditText(FontStack &fonts)
             {"i/o legend", Font::Title, geo::kIoLabelSize, k.label, 2.0f * geo::kSideCXL});
     // BYPASS is drawn BELOW its LED, not beside it, so the LED is not what
     // bounds it: the input meter's column is, on the left, and the wordmark on
-    // the right (which is further away, so the left bound decides it).
-    fits.push_back({"toggle legend", Font::Title, geo::kToggleLabelSize, geo::kBypassToggle.label,
-                    2.0f * (geo::kBypassToggleCX - (geo::kInputMeter.x + geo::kMeterW) - 8.0f)});
+    // the right (which is further away, so the left bound decides it). EQ sits
+    // between the two, so this allowance is the outer bound for both of them —
+    // what separates the PAIR is measured below, because two centred legends of
+    // different widths are a pairwise question and not an allowance one.
+    for (const geo::ToggleSpec &t : geo::kTopToggles)
+        fits.push_back({"toggle legend", Font::Title, geo::kToggleLabelSize, t.label,
+                        2.0f * (geo::kBypassToggleCX -
+                                static_cast<float>(geo::kInputMeter.x + geo::kMeterW) - 8.0f)});
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         fits.push_back(
             {"page button", Font::Title, geo::kPageButtonTextSize, b.label, b.w - 16.0f});
@@ -1328,7 +1354,58 @@ bool auditText(FontStack &fonts)
     fits.push_back({"settings footnote 3", Font::Body, geo::kSettingsFootnoteSize,
                     geo::kSettingsFootnote3, static_cast<float>(geo::kMidiRowW)});
 
+    // The utility row, measured as a pair rather than against an allowance.
+    //
+    // BYPASS and EQ are both centred on their own switch and are very different
+    // widths ("BYPASS" is nearly three times "EQ"), so neither one fits inside
+    // half the pitch and neither one needs to: what matters is the gap between
+    // the two ink boxes. The row was fitted into the band the channel lamps
+    // vacated and there is nothing to spare in it, so the gap is measured.
+    //
+    // The vertical bound is measured here too, and it is the one the lamps'
+    // move made tight: these legends sit directly above the dial legends, and
+    // the static_assert in geometry.h can only use the font SIZE as a stand-in
+    // for the cap height. This uses the real ink.
     int bad = 0;
+    {
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kToggleLabelSize);
+        float prevRight = -1e9f;
+        const char *prevWhat = nullptr;
+        for (const geo::ToggleSpec &t : geo::kTopToggles) {
+            const float half = 0.5f * c.stringWidth(t.label);
+            if (prevWhat && t.cx - half - prevRight < kUtilityLegendGap) {
+                fprintf(stderr,
+                        "panelrender: the \"%s\" and \"%s\" legends are %.1f units apart, %.0f "
+                        "wanted — the utility row is out of space, see kEqToggleCX\n",
+                        prevWhat, t.label, t.cx - half - prevRight, kUtilityLegendGap);
+                ++bad;
+            }
+            prevRight = t.cx + half;
+            prevWhat = t.label;
+        }
+        float utilInk = geo::kBypassToggleCY + geo::kToggleLabelDY;
+        for (const geo::ToggleSpec &t : geo::kTopToggles)
+            utilInk = std::max(utilInk, geo::kBypassToggleCY + geo::kToggleLabelDY +
+                                            c.stringDescent(t.label));
+        // The dial legends underneath. Every one of the eight, because they are all on one row
+        // and the tallest ink is what the row above has to clear — and a channel's legend is a
+        // user's folder name at run time, so the table's own strings are a floor and not a
+        // guarantee. That is what the clip to kKnobPitch - 6 handles horizontally; vertically a
+        // cap is a cap.
+        c.setFontSize(static_cast<float>(geo::kKnobLabelSize));
+        float legendInk = 1e9f;
+        for (const geo::KnobSpec &k : geo::kKnobs)
+            legendInk = std::min(legendInk, (k.cy - static_cast<float>(geo::kKnobLabelDY)) -
+                                                c.stringAscent(k.label));
+        if (legendInk - utilInk < kUtilityLegendGap) {
+            fprintf(stderr,
+                    "panelrender: the utility row's legends stop at y=%.1f and the dial legends "
+                    "start at y=%.1f, %.0f units wanted — see kKnobLabelDY\n",
+                    utilInk, legendInk, kUtilityLegendGap);
+            ++bad;
+        }
+    }
     for (const TextFit &f : fits) {
         c.setFont(f.font);
         c.setFontSize(f.size);
