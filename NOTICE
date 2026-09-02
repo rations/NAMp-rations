@@ -150,8 +150,12 @@ The graphics stack — Linux and Windows differ here
 On Linux these are system shared libraries: present on the machine, linked at
 run time, and NOT redistributed by this project. They are Cairo (LGPL 2.1 /
 MPL 1.1), FreeType (FTL / GPLv2 dual licence, used under the FTL), fontconfig
-(MIT-style) and libX11 (MIT). There is no JACK dependency: this project ships
-the VST3 bundle only.
+(MIT-style) and libX11 (MIT).
+
+The Linux release also carries rations-standalone, which additionally links
+JACK's client library (LGPL 2.1, dynamically linked, and likewise not
+redistributed here). The VST3 bundle does NOT link it, and the release script
+checks that rather than asserting it; nothing on Windows links it at all.
 
 On Windows there is no system copy of any of them, so the Windows release
 STATICALLY LINKS and therefore redistributes them inside Rations.vst3. That changes

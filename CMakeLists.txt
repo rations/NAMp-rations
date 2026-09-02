@@ -5,9 +5,12 @@
 # Eigen (MPL2) as the linear-algebra backend. The editor is a Steinberg IPlugView embedded into
 # the host's own window and painted with Cairo/FreeType — no plug-in or GUI framework.
 #
-# ONE product: the VST3 bundle. Unlike its parent NAMp there is no standalone, no plug-in host and
-# no rack — the pedalboard is built into the plug-in rather than hosting other people's, so nothing
-# here links JACK, LV2 or the SDK's hosting layer.
+# TWO products on Linux, ONE on Windows. The VST3 bundle is the plug-in and is all Windows ships;
+# Linux adds rations-standalone, which hosts that same bundle on JACK so the amp can be played
+# without a DAW. What is still absent, and is the real distinction from the parent NAMp, is the
+# RACK: nothing here hosts anyone else's plug-ins, scans for them or links LV2, because the
+# pedalboard is built into the plug-in rather than hosting other people's. The plug-in itself links
+# neither JACK nor the SDK's hosting layer — only the standalone and the offline tools do.
 #
 # Builds two ways:
 #   - standalone: point the four dependency variables below at source trees (each defaults to an
@@ -449,7 +452,9 @@ endif()
 #
 # The sources go straight into the bundle target rather than through an
 # intermediate static library. NAMp needed that library because its standalone
-# linked the same sources; Rations ships the bundle and nothing else, so a
+# LINKS the plug-in's sources; rations-standalone LOADS the built bundle instead
+# — as a module, the way a DAW does, so the editor resolves its art through
+# dladdr by the same route in both — and therefore compiles none of this. A
 # library would only be a second name for one thing.
 # ---------------------------------------------------------------------------
 set(RATIONS_PLUGIN_SOURCES
@@ -721,8 +726,54 @@ if(NOT RATIONS_WINDOWS)
         target_compile_features(rations_jackcheck PRIVATE cxx_std_17)
         target_compile_options(rations_jackcheck PRIVATE -Wall)
         add_dependencies(rations_jackcheck Rations)
+
+        # -------------------------------------------------------------------
+        # rations-standalone — the amp without a DAW: one X window, the plug-in's
+        # own editor embedded in it, a Linux::IRunLoop the editor registers with,
+        # and a JACK client driving the processor. A footswitch reaches it on a
+        # JACK MIDI port, and what the session was playing is kept in
+        # ~/.config/Rations/standalone.state.
+        #
+        # It is a HOST: the bundle is loaded as a module rather than linked in, so
+        # the editor's dladdr-based resource lookup (src/platform/respath.cpp)
+        # resolves Contents/Resources exactly as it does inside a DAW, and there is
+        # no second compilation of the plug-in to keep in step with the first.
+        # Nothing of src/ is compiled here; the include path is for rationsids.h's
+        # parameter IDs alone.
+        #
+        # It shares the JACK probe above deliberately - one answer to "is JACK
+        # here", not two - and, like the gate, its absence must never stop the
+        # plug-in from building.
+        # -------------------------------------------------------------------
+        add_executable(rations-standalone
+            ${RATIONS_ROOT}/standalone/main.cpp
+            ${RATIONS_ROOT}/standalone/runloop.h
+            ${RATIONS_ROOT}/standalone/runloop.cpp
+            ${RATIONS_ROOT}/standalone/jackclient.h
+            ${RATIONS_ROOT}/standalone/jackclient.cpp
+            ${RATIONS_ROOT}/standalone/midiroute.h
+            ${RATIONS_ROOT}/standalone/midiroute.cpp
+            ${RATIONS_MODULE_LOADER}
+            ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+            # The event list carries Note On to the plug-in - the one of the three
+            # footswitch messages that is still MIDI when it arrives. MemoryStream
+            # is what the settings file is read and written through. Neither is in
+            # sdk_hosting, which is why rations_midicheck names them both too.
+            ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+            ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+            ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+        )
+        target_include_directories(rations-standalone
+            PRIVATE ${RATIONS_ROOT}/src ${RATIONS_JACK_INCLUDE_DIRS})
+        target_link_libraries(rations-standalone
+            PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES} ${RATIONS_PLATFORM_GUI_LIBS})
+        target_link_directories(rations-standalone PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
+        target_compile_features(rations-standalone PRIVATE cxx_std_17)
+        target_compile_options(rations-standalone PRIVATE -Wall)
+        add_dependencies(rations-standalone Rations)
     else()
-        message(STATUS "jack not found - rations_jackcheck (the live switch gate) will not be built")
+        message(STATUS "jack not found - rations_jackcheck (the live switch gate) and "
+                       "rations-standalone will not be built")
     endif()
 endif()
 

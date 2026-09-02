@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Rations
+GenericName=Guitar Amplifier
+Comment=Four-channel Neural Amp Modeler amp head (JACK)
+Exec=rations-standalone
+Icon=rations
+Terminal=false
+Categories=AudioVideo;Audio;X-Digital_Processing;
+Keywords=guitar;amp;amplifier;NAM;neural;JACK;
+StartupNotify=false
+StartupWMClass=rations-standalone

@@ -1,7 +1,8 @@
 # Rations
 
 A four-channel amp head built on [Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
-captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**.
+captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**, plus
+a JACK standalone on Linux for playing it without a DAW.
 
 A `.nam` capture freezes an amp at one knob position on one channel. A real amp head has several
 channels, each with its own gain range, and you change channel with your foot mid-song. Rations
@@ -48,6 +49,26 @@ cmake --build build
 ```
 
 That produces `build/VST3/Release/Rations.vst3`. Copy or symlink it into `~/.vst3/`.
+
+### The standalone (Linux)
+
+The same build also produces `build/rations-standalone` when JACK's development files are present
+(`libjack-jackd2-dev`): the amp without a DAW, in a window of its own, with the plug-in's own
+editor in it and a MIDI port for a footswitch.
+
+```
+./build/rations-standalone
+```
+
+It is a **host**, not a second copy of the plug-in: it loads `Rations.vst3` the way a DAW does —
+which is what keeps the editor resolving its art and fonts by the same route in both — looking in
+`$RATIONS_VST3`, then beside itself, then the build tree, `~/.vst3`, `/usr/local/lib/vst3` and
+`/usr/lib/vst3`. It registers `Rations:in`, `Rations:out_l`, `Rations:out_r` and `Rations:midi_in`,
+connects the audio to the first physical ports it finds, and leaves the MIDI port for you to patch.
+What it was playing is kept in `~/.config/Rations/standalone.state`; `--no-state` starts empty.
+
+`scripts/makedist-linux.sh` packages the two into a tarball with a launcher entry and an
+`install.sh`. There is no standalone on Windows — that release is the plug-in only.
 
 ### Windows, cross-built from Linux
 

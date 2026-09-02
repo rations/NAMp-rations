@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Cross-build Rations for 64-bit Windows and package the release ZIP into dist/.
 #
-# ONE PRODUCT. Rations ships the VST3 bundle and nothing else on either
-# platform: there is no standalone, no rack and no plug-in host, so there is no
-# second binary to package here.
+# ONE PRODUCT ON WINDOWS. This archive is the VST3 bundle and nothing else. The
+# standalone is a JACK application and therefore a Linux product - it ships with
+# that release (scripts/makedist-linux.sh) - and there is no rack and no plug-in
+# host on either platform, so there is no second binary to package here.
 #
 # TWO WAYS TO INSTALL IT, both in the ZIP. Rations-install.exe puts the bundle
 # where hosts look and registers an uninstall entry; the Rations.vst3 folder
@@ -432,8 +433,9 @@ Requirements
 the GCC runtime are all linked into the plug-in, so there is no redistributable
 to install and nothing to put beside the binary.
 
-There is no 32-bit build and no standalone. Nothing in this archive is built
-for Linux - the Linux release is a separate download.
+There is no 32-bit build, and no standalone in this archive: the standalone is
+a JACK application, so it ships with the Linux release - which is a separate
+download, and the only place anything here is built for Linux.
 
 Captures
 --------
