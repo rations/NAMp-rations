@@ -37,10 +37,15 @@
 #     second process while the drag is still in flight.
 #
 # The window size doubles as the page identity, since every page brings its own: head 1133x403,
-# cabinet 640x460, pedalboard 662x681, settings 640x1166 (at scale 1.0). So --size is both how the
+# cabinet 640x460, pedalboard 662x681, settings 640x524 (at scale 1.0). So --size is both how the
 # window is found and how you say which page you expect to be looking at. Keep these in step with
 # geometry.h's kPageSizes -- the settings and pedalboard figures here were both stale once, which
 # is a comment that silently tells you to look for the wrong window.
+#
+# The settings figure is the odd one out and is NOT its page size: that page is 1166 units tall and
+# scrolls, so it OPENS at kSettingsDefaultViewH and can then be dragged to any height between
+# kSettingsMinViewH and the whole page. 524 is the height to look for after a fresh click on the
+# gear; after a `resize`, pass whatever you resized it to.
 #
 # Usage:
 #   scripts/editor-drive.sh shot out.png

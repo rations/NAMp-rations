@@ -104,6 +104,22 @@ constexpr int kSettingsPageH = 1166;
 // stops the two spellings drifting apart.
 constexpr int kSettingsMinViewH = 190;
 
+// The height the settings page's window OPENS at, in logical units, and it is
+// deliberately not the whole page. A window tall enough to show all 1166 units
+// is taller than most screens have room for once the host's own furniture is
+// accounted for, and opening at full height hands the user a window they have to
+// shrink before the scrollbar this page was given is any use at all. So it opens
+// at the top of the MIDI list: the capture loaders and the channel levels whole,
+// the "MIDI Learn" heading sitting on the bottom edge saying there is more below.
+// The rest is scrolled to, and the window is free to be dragged anywhere between
+// kSettingsMinViewH and the full page afterwards — this is an opening size, not a
+// constraint, and constrainSize() is still the only thing that says what is legal.
+//
+// Spelled as a literal for the same reason kSettingsMinViewH is: it is needed
+// long before kSettingsHeadingY is declared, and the static_assert beside that
+// constant is what stops the two spellings drifting apart.
+constexpr int kSettingsDefaultViewH = 524;
+
 struct PageSize {
     int w, h;
 };
@@ -1260,6 +1276,12 @@ constexpr int kLevelFootnoteY = 486;
 // Section 3: MIDI learn. The gate is deliberately absent from it: the gate is not
 // on the MIDI path at all.
 constexpr int kSettingsHeadingY = 514;
+// The opening height of the page's window, up beside kSettingsPageH where
+// pageMinH()'s neighbours are, is this heading's baseline plus enough room for
+// its descenders — so the heading is whole on the bottom edge rather than half
+// off it.
+static_assert(kSettingsDefaultViewH == kSettingsHeadingY + 10,
+              "kSettingsDefaultViewH must stay the MIDI heading's baseline plus its descender");
 constexpr int kMidiRowY0 = 532;
 
 // The top edge of one MIDI row. One function rather than the arithmetic written at each site,

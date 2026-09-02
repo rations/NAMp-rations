@@ -180,7 +180,13 @@ void RationsEditorView::setPage(geo::Page page)
 
     const geo::PageSize ps = geo::pageSize(page);
     const int w = static_cast<int>(std::lround(ps.w * scale));
-    const int h = static_cast<int>(std::lround(ps.h * scale));
+    // A scrolling page opens at its DEFAULT viewport rather than at its full height: the settings
+    // page is 1166 units tall, and a window that shows all of it is taller than the screen has
+    // room for on most machines. kSettingsDefaultViewH lands the bottom edge under the MIDI
+    // heading, so the two sections above it are whole and the scrollbar says the rest is there.
+    // Every other page is shown whole, as before, because every other page fits.
+    const int pageH = geo::pageScrolls(page) ? geo::kSettingsDefaultViewH : ps.h;
+    const int h = static_cast<int>(std::lround(pageH * scale));
     requestResize(w, h);
 
     // Unconditionally, whatever the host did. A successful resize has already run onResized() and
