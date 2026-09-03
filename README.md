@@ -1,5 +1,9 @@
 # Rations
 
+![The Rations amp head](docs/amp-head.png)
+
+![The pedalboard page](docs/pedalboard.png)
+
 A four-channel amp head built on [Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
 captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**, plus
 a JACK standalone on Linux for playing it without a DAW.
@@ -15,6 +19,7 @@ captures, and its dial sweeps that whole bank *continuously*: rest on one captur
 playing it exactly, in between you are hearing the two either side blended. Capture your amp at
 each mark of its own gain control and that dial is the amp's gain control, at the amp's own
 spacing.
+You need to number your captures 1 to 10. Example Gain-1.nam Gain-2.nam etc. Each bank loads up to 64 captures at a time, so you can load folders of all different captures if you like.
 
 **Exactly one channel sounds at a time**, chosen by a bat switch or a MIDI footswitch. The change
 is instant and inaudible — about 18 ms, with no click and no gap — which is the whole reason this
@@ -35,6 +40,60 @@ over it.
 Captures must be feed-forward (WaveNet or ConvNet). An LSTM capture is refused rather than
 silently accepted, because the click-free sweep rests on the model's output being a function of a
 bounded input window, and an LSTM's cell state has unbounded memory.
+
+## Installing
+
+Release archives are on the [releases page](https://github.com/rations/rations-amp/releases) — a
+tarball for Linux and a ZIP for Windows. To build it yourself instead, see [Building](#building).
+
+Nothing ships with captures: a fresh instance comes up with four empty channels, and the first
+thing to do after installing is load your own into them.
+
+### Linux
+
+The tarball holds the plug-in and the standalone, which are the same amp twice — the standalone
+*hosts* `Rations.vst3` rather than duplicating it, so keep the two together.
+
+```
+tar xf Rations-*-linux-x86_64.tar.gz
+cd Rations-*/
+./install.sh
+```
+
+Everything goes under your home directory and nothing needs root:
+
+| | |
+|---|---|
+| `~/.vst3/Rations.vst3` | the plug-in |
+| `~/.local/bin/rations-standalone` | the standalone |
+| `~/.local/share/applications/` | a menu entry, with an icon |
+
+Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all three again.
+
+You can also skip the script: copy `Rations.vst3` into `~/.vst3/` by hand if you only want the
+plug-in, and run `./rations-standalone` where you extracted it. cairo, FreeType and fontconfig come
+from your system; the standalone additionally wants a JACK server (jackd, or a PipeWire desktop,
+which provides one).
+
+### Windows
+
+The ZIP holds `Rations-install.exe` and the same bundle loose, so you can install it either way.
+
+**With the installer.** Run it. It is not code-signed, so SmartScreen shows a blue "Windows
+protected your PC" box — click *More info*, then *Run anyway*, or install by hand instead; the two
+put exactly the same folder in exactly the same place. Run it as an administrator and it installs
+for everyone in `C:\Program Files\Common Files\VST3`; run it normally and it installs just for you
+in `%LOCALAPPDATA%\Programs\Common\VST3`. It tells you which, and you can change the folder.
+Remove it later from *Apps & features*.
+
+**By hand.** Copy the whole `Rations.vst3` **folder** — not a file — into one of those same two
+directories, then rescan plug-ins in your DAW. Do not rename anything inside it: the bundle carries
+its own art and fonts in `Contents\Resources`, and the binary inside `Contents\x86_64-win` must
+keep the name `Rations.vst3` or no host will load it. To uninstall, delete the folder.
+
+Either way, keep only **one** copy: hosts scan both directories, so a copy in each shows up as two
+Rations entries. There is no runtime to install — cairo, FreeType, libpng and zlib are linked into
+the bundle.
 
 ## Building
 

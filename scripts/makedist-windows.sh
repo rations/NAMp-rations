@@ -445,10 +445,10 @@ Captures
 Rations ships NO captures - it plays yours, and it wants four sets of them.
 
 Click the "Captures, MIDI, Settings" button, top right, to open the settings
-page. The top section has one loader per
-channel: point each at a DIRECTORY of .nam files, or at a single .nam. That
-folder's name becomes the channel's name on the front panel, and you can type
-over it if you would rather call it something else.
+page. The top section has one loader per channel: point each at a DIRECTORY of
+.nam files, or at a single .nam. That folder's name becomes the channel's name
+on the front panel, and you can type over it if you would rather call it
+something else.
 
 Each channel's dial then sweeps that whole bank continuously - no reload, no
 click, no dialog. One click of the mouse wheel on a channel dial is exactly one
