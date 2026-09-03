@@ -24,7 +24,7 @@ continuously on a worker thread so the one you stomp to is already exact when yo
 **Around them:** a shared Threshold / Bass / Middle / Treble section, Input and Output, and BYPASS
 / EQ / GATE. A cabinet page that loads one or two impulse responses with a blend between them. A
 pedalboard of five pedals — Boost and Chorus before the amp, Flanger, Delay and Reverb after it.
-A settings page behind the gear carrying the capture loaders, a trim per channel, the MIDI-learn
+A settings page behind the gear icon carrying the capture loaders, a trim per channel, the MIDI-learn
 rows and the output section.
 
 **You load your own captures.** Nothing ships in the bundle — a fresh instance comes up with four
@@ -48,7 +48,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-That produces `build/VST3/Release/Rations.vst3`. Copy or symlink it into `~/.vst3/`.
+That produces `build/VST3/Release/Rations.vst3`. Copy it into `~/.vst3/`.
 
 ### The standalone (Linux)
 
@@ -84,8 +84,7 @@ scripts/makedist-windows.sh        # gates, installer, ZIP into dist/
 ```
 
 Everything is linked statically, so the bundle has no redistributable and nothing sits beside the
-binary. Wine is a smoke test, not certification — a real Windows machine is the gate before a
-release.
+binary.
 
 ## Testing
 
