@@ -70,7 +70,7 @@ const char *const kRequiredImages[] = {
 // Every icon the editor rasterises. Folder is the author's own; the rest are
 // the original plug-in's, unmodified.
 const char *const kRequiredIcons[] = {
-    "Folder", "File", "Gear", "Cross", "ArrowLeft", "ArrowRight", "SlimmableIcon",
+    "Folder", "File", "Cross", "ArrowLeft", "ArrowRight", "SlimmableIcon",
 };
 
 constexpr int kImageCount = static_cast<int>(sizeof(kRequiredImages) / sizeof(char *));
@@ -187,7 +187,7 @@ void drawMeter(Canvas &c, ImageCache &images, const geo::MeterRect &m, float lev
 }
 
 //------------------------------------------------------------------------
-void drawButton(Canvas &c, const geo::ButtonSpec &b)
+void drawButton(Canvas &c, const geo::ButtonSpec &b, int textSize = geo::kPageButtonTextSize)
 {
     const Rect r(b.x, b.y, b.w, b.h);
     c.setColor(0x0C0B0A);
@@ -198,8 +198,8 @@ void drawButton(Canvas &c, const geo::ButtonSpec &b)
     // Baseline from the button's centre rather than its bottom: the cap height
     // is about 0.72 em in Michroma, so half of that below the centre puts the
     // legend optically centred at any size.
-    drawCenteredText(c, Font::Title, geo::kPageButtonTextSize, geo::kTextColor, b.label,
-                     r.centerX(), r.centerY() + geo::kPageButtonTextSize * 0.36f);
+    drawCenteredText(c, Font::Title, static_cast<float>(textSize), geo::kTextColor, b.label,
+                     r.centerX(), r.centerY() + textSize * 0.36f);
 }
 
 //------------------------------------------------------------------------
@@ -348,9 +348,7 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
         c.drawImage(slim, Rect(geo::kSlimIconCX - geo::kSlimIconW / 2.0f,
                                geo::kSlimIconCY - geo::kSlimIconH / 2.0f, geo::kSlimIconW,
                                geo::kSlimIconH));
-    if (cairo_surface_t *gear = icons.getByHeight("Gear", 2 * geo::kGearR))
-        c.drawImage(gear, Rect(geo::kGearCX - geo::kGearR, geo::kGearCY - geo::kGearR,
-                               2 * geo::kGearR, 2 * geo::kGearR));
+    drawButton(c, geo::kSettingsButton, geo::kSettingsButtonTextSize);
 }
 
 //------------------------------------------------------------------------
@@ -894,7 +892,8 @@ bool auditHitBoxes()
         boxes.push_back({b.label, static_cast<float>(b.x), static_cast<float>(b.y),
                          static_cast<float>(b.x + b.w), static_cast<float>(b.y + b.h)});
 
-    // The upper band: the two utility switches and the gear. Not the same row as the five bat
+    // The upper band: the three utility switches and the settings button. Not the same row as the
+    // five bat
     // switches, but on the same faceplate and hit-tested from the same click, so they belong in
     // the same check — and BYPASS in particular has been moved once already, and EQ was fitted
     // into the space beside it with nothing to spare.
@@ -903,17 +902,18 @@ bool auditHitBoxes()
                          static_cast<float>(t.cy + geo::kTopToggleHitTop),
                          t.cx + geo::kTopToggleHitW / 2.0f,
                          static_cast<float>(t.cy + geo::kTopToggleHitBottom)});
-    // Slim's target, with the editor's own 4 px slop. It is the newest thing in that corner and
-    // the one with a real neighbour, so it is exactly the kind of box this audit exists for.
+    // Slim's target, with the editor's own 4 px slop. It has a real neighbour on each side — the
+    // settings button and the wordmark — so it is exactly the kind of box this audit exists for,
+    // and it moved when the gear became that button.
     boxes.push_back({"slim icon", geo::kSlimIconCX - geo::kSlimIconW / 2.0f - 4,
                      geo::kSlimIconCY - geo::kSlimIconH / 2.0f - 4,
                      geo::kSlimIconCX + geo::kSlimIconW / 2.0f + 4,
                      geo::kSlimIconCY + geo::kSlimIconH / 2.0f + 4});
-    // The gear's click target is its radius plus the same 4 px slop the editor allows.
-    boxes.push_back({"gear", static_cast<float>(geo::kGearCX - geo::kGearR - 4),
-                     static_cast<float>(geo::kGearCY - geo::kGearR - 4),
-                     static_cast<float>(geo::kGearCX + geo::kGearR + 4),
-                     static_cast<float>(geo::kGearCY + geo::kGearR + 4)});
+    // The settings button's click target is its plate exactly, as the page buttons' are.
+    boxes.push_back({geo::kSettingsButton.label, static_cast<float>(geo::kSettingsButton.x),
+                     static_cast<float>(geo::kSettingsButton.y),
+                     static_cast<float>(geo::kSettingsButton.x + geo::kSettingsButton.w),
+                     static_cast<float>(geo::kSettingsButton.y + geo::kSettingsButton.h)});
     // The two level meters are not clickable, but a control drawn on top of one is a control
     // drawn on top of the thing it is supposed to sit beside, so they are in the check as
     // obstacles.
@@ -935,24 +935,27 @@ bool auditHitBoxes()
                 ++hits;
             }
         }
-    // The bypass lamp is placed as the gear's reflection through the faceplate centre, which is
-    // what makes it sit the same distance from the input meter as the gear does from the output
-    // meter. That is a relationship, not a coincidence, so it is checked rather than trusted: the
-    // two meter columns are themselves symmetric about that centre, so if this ever fails it is
-    // because someone moved a column and not because the arithmetic drifted.
-    const int mirrored = 2 * geo::kFaceCX - geo::kGearCX;
-    if (geo::kBypassLedCX != mirrored) {
+    // The settings button's right edge is the reflection of the utility row's left edge — the
+    // bypass lamp's — through the faceplate centre, which is what makes the two clusters sit the
+    // same distance from their own meter column. That is a relationship, not a coincidence, so it
+    // is checked rather than trusted: the two meter columns are themselves symmetric about that
+    // centre, so if this ever fails it is because someone moved a column or gave the button a
+    // width without moving its x, not because the arithmetic drifted. It was the gear's mirror
+    // until the gear became this button; the symmetry survived the change and the two halves of
+    // it swapped which one is measured.
+    const int mirrored = 2 * geo::kFaceCX - (geo::kBypassLedCX - geo::kTopLedR);
+    if (geo::kSettingsButtonRight != mirrored) {
         fprintf(stderr,
-                "panelrender: the bypass lamp is at x=%d but the gear's mirror is x=%d — the "
-                "lamp no longer sits off the input meter the way the gear sits off the output "
-                "meter\n",
-                geo::kBypassLedCX, mirrored);
+                "panelrender: the settings button ends at x=%d but the bypass lamp's mirror is "
+                "x=%d — the button no longer sits off the output meter the way the utility row "
+                "sits off the input meter\n",
+                geo::kSettingsButtonRight, mirrored);
         ++hits;
     }
 
     if (hits == 0)
-        printf("hit boxes  %zu targets on the faceplate, none overlapping; bypass lamp mirrors "
-               "the gear\n",
+        printf("hit boxes  %zu targets on the faceplate, none overlapping; settings button "
+               "mirrors the utility row\n",
                boxes.size());
     return hits == 0;
 }
@@ -1268,11 +1271,14 @@ bool auditText(FontStack &fonts)
     std::vector<TextFit> fits;
 
     // The wordmark. Its band is bounded on the left by the utility row and on the
-    // right by the gear, and it is centred between them. The left bound is the
-    // EQ lamp, which is the rightmost thing in that row — it used to be the
-    // bypass switch's click target, and reading it off the row rather than off
-    // one named control is what stops this going stale the next time the row
-    // grows.
+    // right by the corner cluster, and it is centred between them. The left bound
+    // is the EQ lamp, which is the rightmost thing in that row — it used to be
+    // the bypass switch's click target, and reading it off the row rather than
+    // off one named control is what stops this going stale the next time the row
+    // grows. The right bound is the Slim icon and not the settings button beside
+    // it, for the same reason: the icon is the leftmost thing in that corner
+    // whenever the loaded captures can use it, and reading the button would
+    // measure the wrong gap.
     float utilityRight = geo::kBypassToggleCX + geo::kTopToggleHitW / 2.0f;
     for (int i = 0; i < geo::kTopToggleCount; ++i) {
         utilityRight = std::max(utilityRight, geo::kTopToggles[i].cx + geo::kTopToggleHitW / 2.0f);
@@ -1281,7 +1287,8 @@ bool auditText(FontStack &fonts)
     }
     const float titleRoom =
         2.0f * std::min(geo::kFaceCX - utilityRight,
-                        (geo::kGearCX - geo::kGearR) - static_cast<float>(geo::kFaceCX));
+                        (geo::kSlimIconCX - geo::kSlimIconW / 2.0f - 4.0f) -
+                            static_cast<float>(geo::kFaceCX));
     fits.push_back({"wordmark", Font::Title, geo::kTitleSize, "Rations", titleRoom});
 
     // Dial legends: they must not reach their neighbours', so the allowance is
@@ -1317,6 +1324,10 @@ bool auditText(FontStack &fonts)
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         fits.push_back(
             {"page button", Font::Title, geo::kPageButtonTextSize, b.label, b.w - 16.0f});
+    // The settings button carries the longest legend on the faceplate at the smallest size any
+    // button uses, so this is the one of the three that a change to either number would break.
+    fits.push_back({"settings button", Font::Title, geo::kSettingsButtonTextSize,
+                    geo::kSettingsButton.label, geo::kSettingsButton.w - 16.0f});
     fits.push_back({"back button", Font::Title, geo::kPageButtonTextSize, geo::kBackButton.label,
                     geo::kBackButton.w - 16.0f});
 

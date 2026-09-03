@@ -469,14 +469,13 @@ constexpr ToggleSpec kToggles[kToggleCount] = {
 static_assert(kLedCount == kChannelToggleCount,
               "there must be exactly one channel lamp per channel switch");
 
-// --- Gear (settings) button, top-right of the faceplate ---------------------
-// Opens Page::Settings, which is a page of its own rather than an overlay: the
-// MIDI rows want a narrow window, and drawing them over the head page would put
-// them in the middle of 1133 px of faceplate.
-//
-// Declared ahead of the bypass pair because the bypass LED is derived from it —
-// see there.
-constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
+// --- The top band -----------------------------------------------------------
+// The band between the faceplate's top edge and the dial legends carries three
+// things and they share one centre line: the utility row on the left, the
+// wordmark in the middle, and the settings button on the right. It was a single
+// number inside the gear's declaration until the gear became a button; it is its
+// own constant now because three separate groups read it.
+constexpr int kTopBandCY = 106;
 
 // --- Bypass, in the empty band left of the wordmark -------------------------
 // NOT IN THE MOCK. The author asked for a bypass toggle after the mock was
@@ -484,15 +483,18 @@ constexpr int kGearCX = 981, kGearCY = 106, kGearR = 11;
 // empty space on the faceplate large enough to hold one without disturbing a
 // measured position.
 //
-// The LED IS THE GEAR'S MIRROR, and it is written that way rather than as a
-// number: the author's instruction was that the light sit at the same distance
-// from the input meter as the gear sits from the output meter, and since the
-// two meter columns are placed symmetrically about kFaceCX (both at kSideDX),
-// reflecting the gear through that centre is exactly that condition. Written as
-// a literal 151 it would be a number that silently stops meaning anything the
-// moment the gear or the meter columns move; written like this it cannot.
-constexpr int kBypassLedCX = 2 * kFaceCX - kGearCX; // 151
-constexpr int kBypassLedCY = kGearCY;
+// THE MIRROR STILL HOLDS AND IT HAS TURNED ROUND. The author's instruction was
+// that this light sit at the same distance from the input meter as the settings
+// control sits from the output meter, and since the two meter columns are placed
+// symmetrically about kFaceCX (both at kSideDX), reflecting one through that
+// centre is exactly that condition. It used to be written the other way — the
+// gear was the measured one and this lamp was 2 * kFaceCX - kGearCX — and the
+// dependency reversed when the gear became a button, because the utility row
+// grew rightwards off this lamp and is now the fixed half of the pair while the
+// button's width is the part free to move. So the number is measured here and
+// kSettingsButtonRight is the reflection; see there, and panelrender checks it.
+constexpr int kBypassLedCX = 151;
+constexpr int kBypassLedCY = kTopBandCY;
 // --- The utility row: three (lamp, switch) pairs ----------------------------
 // BYPASS, EQ and GATE. These are the faceplate's whole-signal-path switches —
 // one takes the plug-in out of circuit, one takes the tone stack out, one takes
@@ -587,22 +589,77 @@ static_assert(kBypassToggleCY + kTopToggleH / 2 <
 constexpr int kWordmarkInkLeft = 426;
 static_assert(kGateToggleCX + kTopToggleHitW / 2 < kWordmarkInkLeft,
               "the utility row has grown into the wordmark");
+// The wordmark's ink ends the same distance the other side of the faceplate
+// centre, and the corner cluster is measured against it below.
+constexpr int kWordmarkInkRight = 2 * kFaceCX - kWordmarkInkLeft; // 706
+
+// --- The settings button, top-right of the faceplate ------------------------
+// A LABELLED BUTTON, NOT AN ICON, and that is the whole of this decision. It was
+// a 22-unit gear in the corner, and loading captures — which is the first thing
+// anyone must do with this plug-in, since it ships none (D11) — lives behind it
+// along with the MIDI rows, the channel trims and the output section. New users
+// did not find it. An icon is a good handle for someone on their tenth session
+// and a poor one for someone on their first, so the three things behind it are
+// written on it and the icon is gone.
+//
+// It stays in the CORNER rather than joining Pedalboard and Cabinet in the
+// bottom row: nothing 200 units wide is free there (the Output dial's column
+// ends that row), and the corner is where the hand of everyone who already has
+// the plug-in installed goes. Style, size and behaviour are the page buttons'
+// exactly — same rounded gold-edged plate, same height, same drawButton — so it
+// reads as a third destination and not as a fourth kind of control.
+struct ButtonSpec {
+    int x, y, w, h;
+    const char *label;
+    Page target;
+};
+constexpr int kPageButtonH = 30;
+// One step down the cap-even list from the page buttons' 15 (see the typography
+// note: 13 and 14 are not available). The legend is 24 characters against
+// "Pedalboard"'s ten, and Michroma is a wide face — at 15 it is 236 units, which
+// does not fit between the wordmark and the output meter with the Slim icon
+// beside it. At 11 it is 173.
+constexpr int kSettingsButtonTextSize = 11;
+constexpr const char *kSettingsButtonLabel = "Captures, MIDI, Settings";
+constexpr int kSettingsButtonW = 203;
+constexpr int kSettingsButtonH = kPageButtonH;
+// The RIGHT EDGE is the mirror of the utility row's left edge — the bypass
+// lamp's — through the faceplate centre, which is the same symmetry the gear
+// used to carry and is described at kBypassLedCX. The two clusters therefore
+// begin and end at the same distance from their own meter column.
+constexpr int kSettingsButtonRight = 2 * kFaceCX - (kBypassLedCX - kTopLedR); // 988
+constexpr int kSettingsButtonX = kSettingsButtonRight - kSettingsButtonW;     // 785
+constexpr int kSettingsButtonY = kTopBandCY - kSettingsButtonH / 2;           // 91
+static_assert(kSettingsButtonX > kWordmarkInkRight,
+              "the settings button has grown into the wordmark");
+constexpr ButtonSpec kSettingsButton = {kSettingsButtonX, kSettingsButtonY,     kSettingsButtonW,
+                                        kSettingsButtonH, kSettingsButtonLabel, Page::Settings};
 // Opens an overlay rather than a page: it is one knob, and a page for one knob
 // would be a window change and a back button to reach a control most users set
 // once and never touch. The file browser is the pattern it follows.
 //
-// It is placed off the GEAR rather than off the faceplate centre: these two are
-// a pair of icons in the corner, and what matters is the gap between them, not
-// where either one lands relative to anything on the left. The document is
-// 128x64, so a height of 20 draws 40 wide through getByHeight.
-constexpr int kSlimToGearGap = 12;
-// The gear's own height, so the two icons in the corner are a matched pair.
-constexpr int kSlimIconH = 2 * kGearR;
+// It is placed off the SETTINGS BUTTON rather than off the faceplate centre:
+// the two are one cluster in the corner, and what matters is the gap between
+// them, not where either lands relative to anything on the left. It sat off the
+// gear on the same rule and moved left with it when the gear became a wider
+// button. The document is 128x64, so a height of 20 draws 40 wide through
+// getByHeight.
+constexpr int kSlimToButtonGap = 12;
+// The gear's own height, unchanged: the icon did not become a button and there
+// is no longer anything in the corner for it to be a matched pair WITH, so the
+// size that was measured stays the size it is.
+constexpr int kSlimIconH = 22;
 constexpr int kSlimIconW = 2 * kSlimIconH; // the .svg's own 2:1
-constexpr int kSlimIconCX = kGearCX - kGearR - kSlimToGearGap - kSlimIconW / 2; // 938
-constexpr int kSlimIconCY = kGearCY;
-static_assert(kSlimIconCX + kSlimIconW / 2 < kGearCX - kGearR - 4,
-              "the Slim icon has reached the gear's click target");
+constexpr int kSlimIconCX = kSettingsButtonX - kSlimToButtonGap - kSlimIconW / 2; // 751
+constexpr int kSlimIconCY = kTopBandCY;
+static_assert(kSlimIconCX + kSlimIconW / 2 + 4 < kSettingsButtonX,
+              "the Slim icon has reached the settings button's click target");
+// The corner's leftmost ink. The band it sits in is the wordmark's, and the
+// wordmark is drawn as measured text, so this is the clearance that says the two
+// do not meet — the assert is the coarse half and panelrender's ink audit, which
+// measures "Rations" at kTitleSize, is the one that decides.
+static_assert(kSlimIconCX - kSlimIconW / 2 - 4 > kWordmarkInkRight,
+              "the Slim icon has reached the wordmark");
 
 // The overlay: a card on the head page, centred on the faceplate, with one dial
 // on it. Sized to the dial plus its title and readout rather than to a fraction
@@ -669,6 +726,11 @@ constexpr MeterRect kInputMeter = {kInputMeterId, kSideCXL - kMeterW / 2, kMeter
                                    nullptr};
 constexpr MeterRect kOutputMeter = {
     kOutputMeterId, kSideCXR - kMeterW / 2, kMeterY, kMeterW, kMeterH, nullptr};
+// The settings button ends in the gap between the wordmark and this column, and
+// that gap is the whole of the room it has; asserted here because this is where
+// the number it has to clear is declared.
+static_assert(kSettingsButtonRight + 8 <= kOutputMeter.x,
+              "the settings button has reached the output meter");
 
 // The Input and Output dials sit UNDER their meters, which is what the author
 // asked for and what puts each level control beside the thing that reports it.
@@ -704,12 +766,11 @@ constexpr KnobSpec kIoKnobs[2] = {
 };
 
 // --- Page buttons, bottom-centre-right of the faceplate ---------------------
-struct ButtonSpec {
-    int x, y, w, h;
-    const char *label;
-    Page target;
-};
-constexpr int kPageButtonW = 147, kPageButtonH = 30, kPageButtonY = 277;
+// ButtonSpec and kPageButtonH are declared further up, with the settings button:
+// that one is drawn in the same style but has to be declared before the Slim
+// icon, which hangs off its left edge. The width and the row's y stay here,
+// where the row they describe is.
+constexpr int kPageButtonW = 147, kPageButtonY = 277;
 constexpr int kPageButtonCount = 2;
 // The seam between the two buttons is CENTRED ON A DIAL rather than left where
 // the mock happened to put it (x 803/813, a 7 px near-miss on Middle, which is

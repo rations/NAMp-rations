@@ -24,8 +24,8 @@ continuously on a worker thread so the one you stomp to is already exact when yo
 **Around them:** a shared Threshold / Bass / Middle / Treble section, Input and Output, and BYPASS
 / EQ / GATE. A cabinet page that loads one or two impulse responses with a blend between them. A
 pedalboard of five pedals — Boost and Chorus before the amp, Flanger, Delay and Reverb after it.
-A settings page behind the gear icon carrying the capture loaders, a trim per channel, the MIDI-learn
-rows and the output section.
+A settings page behind the "Captures, MIDI, Settings" button, top right, carrying the capture
+loaders, a trim per channel, the MIDI-learn rows and the output section.
 
 **You load your own captures.** Nothing ships in the bundle — a fresh instance comes up with four
 empty channels, which is an ordinary state rather than an error. Point each loader at a folder of

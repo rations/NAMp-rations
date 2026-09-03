@@ -152,9 +152,12 @@ fi
 # installBuiltinResources() is deliberately absent from the header. So a bundle
 # that reaches a user without Contents/Resources draws flat rectangles and says
 # so only on stderr, which nobody reads. This assertion is the entire safety net.
+# The SVG in the list is File.svg, which the IR and capture loader rows draw; it
+# was Gear.svg until the settings control became a labelled button and stopped
+# drawing the gear at all.
 for _res in Contents/Resources/img/head.png \
             Contents/Resources/img/pedal-boost.png \
-            Contents/Resources/img/Gear.svg \
+            Contents/Resources/img/File.svg \
             Contents/Resources/fonts/Michroma-Regular.ttf \
             Contents/Resources/fonts/Roboto-Regular.ttf; do
   if [ ! -f "$PKGBUNDLE/$_res" ]; then
@@ -441,7 +444,8 @@ Captures
 --------
 Rations ships NO captures - it plays yours, and it wants four sets of them.
 
-Click the gear to open the settings page. The top section has one loader per
+Click the "Captures, MIDI, Settings" button, top right, to open the settings
+page. The top section has one loader per
 channel: point each at a DIRECTORY of .nam files, or at a single .nam. That
 folder's name becomes the channel's name on the front panel, and you can type
 over it if you would rather call it something else.
@@ -486,7 +490,7 @@ The rest of the panel
 ---------------------
 Shared Threshold / Bass / Middle / Treble, Input and Output, each reading its
 value under the dial. BYPASS, EQ and GATE switch out the whole chain, the tone
-stack and the noise gate. The icon left of the gear is Slim, which trades model
+stack and the noise gate. The icon left of the settings button is Slim, which trades model
 size for CPU - it appears only when your captures can actually use it.
 
 Two more pages, reached by the buttons at the bottom: a cabinet page that loads

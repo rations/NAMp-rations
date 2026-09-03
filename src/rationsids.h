@@ -44,8 +44,8 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     kToneStackOnId = 114, // toggle, default on
 
     // Slim: which variant of a SlimmableContainer capture gets built, 0 = smallest, 1 = whole.
-    // Reached from the icon left of the gear rather than from a page, because it is a hardware
-    // accommodation set once and then forgotten, not a control anyone plays.
+    // Reached from the icon left of the settings button rather than from a page, because it is a
+    // hardware accommodation set once and then forgotten, not a control anyone plays.
     //
     // 115 and NOT NAMp's 110, which stays retired below, for the third time this file has had to
     // make the same point: retiring an ID is a promise about a NUMBER and the control coming back

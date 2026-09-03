@@ -76,6 +76,9 @@ magick "$ART_DIR/led-off-base.png" -strip -depth 8 "PNG32:$OUT_DIR/led_off.png"
 
 # ---- vector icons (optional refresh) --------------------------------------
 if [ -n "${NAM_UPSTREAM:-}" ]; then
+    # Gear.svg is still refreshed with the set even though nothing draws it any
+    # more: the settings control is a labelled button now, and keeping the
+    # upstream icon set whole costs nothing and leaves it there if it is wanted.
     for i in Gear File Cross ArrowLeft ArrowRight; do
         src="$NAM_UPSTREAM/NeuralAmpModeler/resources/img/$i.svg"
         [ -f "$src" ] || { echo "make_assets: missing $src" >&2; exit 1; }

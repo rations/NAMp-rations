@@ -2,7 +2,8 @@
 //
 // Four pages, each on its own window: the amp head (a photographic faceplate, eight rotated-bitmap
 // dials, five bat toggles and their LEDs, a bypass toggle, level meters on both edges, Input and
-// Output dials under the meters, two page buttons and a gear), the cabinet (the cab, a blend dial
+// Output dials under the meters, and three buttons — two for the other pages and one for the
+// settings page), the cabinet (the cab, a blend dial
 // drawn over the knob painted into the art, and two impulse-response loader rows), a pedalboard
 // placeholder, and the MIDI settings page. Every art load is checked with a flat-colour fallback,
 // so a missing Resources directory degrades rather than crashes.
@@ -577,7 +578,9 @@ void RationsEditorView::composeHead(Canvas &c)
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);
     drawSlimIcon(c);
-    drawGear(c);
+    // The settings button. Drawn in the page buttons' own style at its own smaller size, because
+    // it says what is behind it rather than naming one page — see geometry.h.
+    drawButton(c, geo::kSettingsButton, true, geo::kSettingsButtonTextSize);
 }
 
 //------------------------------------------------------------------------
@@ -1602,7 +1605,7 @@ void RationsEditorView::drawMeter(Canvas &c, const geo::MeterRect &m, float leve
 }
 
 //------------------------------------------------------------------------
-void RationsEditorView::drawButton(Canvas &c, const geo::ButtonSpec &b, bool enabled)
+void RationsEditorView::drawButton(Canvas &c, const geo::ButtonSpec &b, bool enabled, int textSize)
 {
     const Rect r = buttonRect(b);
     c.setColor(0x0C0B0A);
@@ -1613,10 +1616,10 @@ void RationsEditorView::drawButton(Canvas &c, const geo::ButtonSpec &b, bool ena
     // Baseline from the button's centre rather than its bottom: the cap height is about 0.72 em in
     // Michroma, so half of that below the centre puts the legend optically centred at any size.
     c.setFont(Font::Title);
-    c.setFontSize(geo::kPageButtonTextSize);
+    c.setFontSize(static_cast<float>(textSize));
     c.setColor(enabled ? geo::kTextColor : geo::kDimColor);
     c.drawString(b.label, r.centerX() - c.stringWidth(b.label) * 0.5f,
-                 r.centerY() + geo::kPageButtonTextSize * 0.36f);
+                 r.centerY() + textSize * 0.36f);
 }
 
 //------------------------------------------------------------------------
@@ -1687,7 +1690,7 @@ bool RationsEditorView::slimAvailable() const
 }
 
 //------------------------------------------------------------------------
-// The Slim icon, immediately left of the gear, drawn only while it is available.
+// The Slim icon, immediately left of the settings button, drawn only while it is available.
 void RationsEditorView::drawSlimIcon(Canvas &c)
 {
     if (!slimAvailable())
@@ -1697,8 +1700,8 @@ void RationsEditorView::drawSlimIcon(Canvas &c)
                             static_cast<float>(geo::kSlimIconCY));
         return;
     }
-    // Degradation path, as the gear has: the icon's own shape in two strokes, so a missing asset
-    // still leaves something clickable that looks like what it opens.
+    // Degradation path: the icon's own shape in two strokes, so a missing asset still leaves
+    // something clickable that looks like what it opens.
     const float cx = static_cast<float>(geo::kSlimIconCX);
     const float cy = static_cast<float>(geo::kSlimIconCY);
     const float half = geo::kSlimIconW * 0.5f;
@@ -1764,21 +1767,6 @@ void RationsEditorView::closeSlim()
         mController->applySlim();
     mSlimDirty = false;
     invalidate();
-}
-
-//------------------------------------------------------------------------
-void RationsEditorView::drawGear(Canvas &c)
-{
-    if (cairo_surface_t *gear = mSvgs.getByHeight("Gear", 2 * geo::kGearR)) {
-        c.drawImageCentered(gear, static_cast<float>(geo::kGearCX),
-                            static_cast<float>(geo::kGearCY));
-    } else {
-        c.setColor(geo::kDimColor);
-        c.setPenSize(1.5f);
-        c.strokeEllipse(static_cast<float>(geo::kGearCX), static_cast<float>(geo::kGearCY),
-                        geo::kGearR, geo::kGearR);
-        c.setPenSize(1.0f);
-    }
 }
 
 //------------------------------------------------------------------------
@@ -2081,14 +2069,14 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
 //------------------------------------------------------------------------
 bool RationsEditorView::handleHeadClick(float x, float y)
 {
-    if (hitCircle(x, y, geo::kGearCX, geo::kGearCY, geo::kGearR + 4)) {
-        setPage(geo::Page::Settings);
+    if (buttonRect(geo::kSettingsButton).contains(x, y)) {
+        setPage(geo::kSettingsButton.target);
         return true;
     }
     // Slim opens an overlay rather than a page: it is one knob, and a page for one knob would be a
     // window change and a back button to reach something most users set once. Tested against the
     // same availability the icon is drawn from, so there is never an invisible hot spot beside the
-    // gear.
+    // settings button.
     if (slimAvailable() &&
         Rect(geo::kSlimIconCX - geo::kSlimIconW * 0.5f, geo::kSlimIconCY - geo::kSlimIconH * 0.5f,
              geo::kSlimIconW, geo::kSlimIconH)

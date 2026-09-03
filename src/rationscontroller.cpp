@@ -111,8 +111,9 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     parameters.addParameter(STR16("EQ On"), nullptr, 1, 1.0, Vst::ParameterInfo::kCanAutomate,
                             kToneStackOnId);
 
-    // Slim, behind the icon left of the gear. Flags 0 — visible to the host, saved with the
-    // project, and NOT automatable, which is the one place this differs from the sibling plug-ins.
+    // Slim, behind the icon left of the settings button. Flags 0 — visible to the host, saved
+    // with the project, and NOT automatable, which is the one place this differs from the sibling
+    // plug-ins.
     // Applying a value here rebuilds every model in every loaded bank (ChannelRack::setSlim), so a
     // host sweeping this lane would ask for a full rebuild per automation point and the amp would
     // sit at ramped silence for the length of the sweep. Flags 0 and not kIsHidden: the SDK

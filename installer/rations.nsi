@@ -111,9 +111,18 @@ Var OtherDir ; the standard location we are NOT installing into, checked for a s
 !define MUI_FINISHPAGE_TITLE "${APPNAME} is installed"
 ; Kept short deliberately: the finish page's text area is fixed, and MUI clips
 ; rather than scrolls — a longer version ran under the "show readme" checkbox.
-!define MUI_FINISHPAGE_TEXT "Rescan plug-ins in your DAW to pick it up.$\r$\n$\r$\nClick the gear and load a bank of .nam captures into each of the four channels. A channel with nothing loaded is silent."
+; MEASURED, twice: the area is two lines of about 53 characters after the first
+; paragraph, and naming the settings button here overran it at 149 characters
+; and had to come back to 98. Anything longer belongs in INSTALL.txt, which the
+; checkbox under this text opens.
+!define MUI_FINISHPAGE_TEXT "Rescan plug-ins in your DAW to pick it up.$\r$\n$\r$\nClick $\"Captures, MIDI, Settings$\", top right, to load .nam captures. An empty channel is silent."
 !define MUI_FINISHPAGE_SHOWREADME "$AppDir\INSTALL.txt"
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open the notes on captures, channels and file naming"
+; The checkbox's own label is ONE line of a control MUI sizes for one line, and
+; it is narrower than the text above it because the box and its margin come out
+; of the same width: 51 characters wrapped and the second line was cut in half,
+; which is how this shipped until it was looked at under Wine. Measured, the
+; wrap fell after 44, so this is kept well under it.
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open the notes on captures"
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
 

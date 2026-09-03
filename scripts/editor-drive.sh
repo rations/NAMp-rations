@@ -45,7 +45,7 @@
 # The settings figure is the odd one out and is NOT its page size: that page is 1166 units tall and
 # scrolls, so it OPENS at kSettingsDefaultViewH and can then be dragged to any height between
 # kSettingsMinViewH and the whole page. 524 is the height to look for after a fresh click on the
-# gear; after a `resize`, pass whatever you resized it to.
+# settings button; after a `resize`, pass whatever you resized it to.
 #
 # Usage:
 #   scripts/editor-drive.sh shot out.png
@@ -54,7 +54,7 @@
 #   scripts/editor-drive.sh drag 251 226 0 -70 shot out.png     # photographed mid-drag
 #   scripts/editor-drive.sh click 140 110 type "JCM800" key Return shot out.png
 #   scripts/editor-drive.sh --size 640x460 click 320 200 shot cab.png
-#   scripts/editor-drive.sh click 981 106 resize 640 420 shot short.png   # the settings page,
+#   scripts/editor-drive.sh click 886 106 resize 640 420 shot short.png   # the settings page,
 #                                                                        # short enough to scroll
 #   scripts/editor-drive.sh --size 640x420 wheel 320 300 -4 shot down.png
 #

@@ -167,9 +167,9 @@ private:
     void drawPedal(Canvas &c, int pedal);
     void drawPedalSwitch(Canvas &c, float cx, float cy);
     void drawMeter(Canvas &c, const geo::MeterRect &m, float level, float peak);
-    void drawButton(Canvas &c, const geo::ButtonSpec &b, bool enabled = true);
+    void drawButton(Canvas &c, const geo::ButtonSpec &b, bool enabled = true,
+                    int textSize = geo::kPageButtonTextSize);
     void drawIrRow(Canvas &c, int slot);
-    void drawGear(Canvas &c);
 
     //--- interaction -----------------------------------------------------
     void editParam(Steinberg::Vst::ParamID id, double norm);
