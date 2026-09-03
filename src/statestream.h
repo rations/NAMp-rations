@@ -37,9 +37,10 @@ namespace Rations
 // slot or an unnamed channel writes. Returns false, with `out` left untouched, for anything a
 // well-formed blob could not have produced: a negative or implausible length (the same 262144
 // ceiling FStreamer::readStr8() itself applies, so a blob that trips one trips the other
-// identically), or a stream that ran out before delivering the bytes the length promised. The
-// caller's job on false is the same as for every other field in these functions: propagate
-// kResultFalse rather than adopt a value nothing actually read.
+// identically), a stream that ran out before delivering the bytes the length promised, or a field
+// whose final byte is not the NUL writeStr8() always writes. The caller's job on false is the
+// same as for every other field in these functions: propagate kResultFalse rather than adopt a
+// value nothing actually read.
 inline bool readStr8Checked(Steinberg::IBStreamer &streamer, std::string &out)
 {
     using Steinberg::int32;
@@ -60,7 +61,19 @@ inline bool readStr8Checked(Steinberg::IBStreamer &streamer, std::string &out)
     if (got != static_cast<TSize>(length))
         return false;
 
-    // `length` counted the trailing NUL writeStr8() wrote; that byte is not part of the value.
+    // The last byte is the NUL writeStr8() always writes, so its value is known before the read
+    // and is free to check — a one-byte checksum on every string field. It earns its place on
+    // DESYNC: a reader that has lost its place reads a garbage length, and while most garbage
+    // fails the bound above, a value that lands inside it would consume that many bytes and carry
+    // on, feeding nonsense into the trims, bindings and pedal values that follow — all of which
+    // are plausible-looking doubles that nothing downstream can reject. This is the second,
+    // independent gate on the same read. Without it the failure is silent rather than loud: a
+    // corrupt "/caps/JCM800" becomes "/caps/JCM80", a path that resolves to nothing and looks to
+    // the user like a folder that moved rather than a project file that is damaged.
+    if (buf[static_cast<size_t>(length - 1)] != '\0')
+        return false;
+
+    // That NUL is not part of the value.
     out.assign(buf.data(), static_cast<size_t>(length - 1));
     return true;
 }

@@ -465,6 +465,8 @@ set(RATIONS_PLUGIN_SOURCES
     src/rationsprocessor.cpp
     src/rationscontroller.h
     src/rationscontroller.cpp
+    # The state blob's string reads, shared by the two functions above that decode one.
+    src/statestream.h
     src/rationsfactory.cpp
     src/rationsview.h
     src/rationsview.cpp
