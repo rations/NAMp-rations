@@ -326,7 +326,7 @@ bool readTrims(MemoryStream &s, double out[kChannelCount], std::vector<double> *
         char8 *p = streamer.readStr8();
         if (!p)
             return false;
-        delete[] p;
+        free(p); // NEWSTR8 is ::malloc (base/source/fstring.h) — delete[] here is UB
     }
     // The MIDI table, from version 2 - four rows until version 6 gave the block its own count.
     // Spelled out here rather than shared with the plug-in, because walking a blob by a layout
@@ -383,7 +383,7 @@ bool readTrims(MemoryStream &s, double out[kChannelCount], std::vector<double> *
             char8 *p = streamer.readStr8();
             if (!p)
                 return false;
-            delete[] p;
+            free(p); // NEWSTR8 is ::malloc (base/source/fstring.h) — delete[] here is UB
         }
     }
     if (version < 5)
@@ -448,7 +448,7 @@ bool rewriteMidiBlock(MemoryStream &src, int32 version, int32 rows, std::vector<
         char8 *p = streamer.readStr8();
         if (!p)
             return false;
-        delete[] p;
+        free(p); // NEWSTR8 is ::malloc (base/source/fstring.h) — delete[] here is UB
     }
     const int64 midiStart = streamer.tell();
     int32 srcRows = 0;

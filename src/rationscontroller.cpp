@@ -5,6 +5,7 @@
 #include "rationsview.h"
 
 #include "platform/respath.h" // pathBaseName, for the channel-name fallback
+#include "statestream.h"
 
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
@@ -244,10 +245,9 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
                 break;
             }
             case PedalParamKind::Range: {
-                auto *range = new Vst::RangeParameter(title, spec.id, units, spec.min, spec.max,
-                                                      spec.def, 0,
-                                                      Vst::ParameterInfo::kCanAutomate,
-                                                      kPedalUnitId);
+                auto *range =
+                    new Vst::RangeParameter(title, spec.id, units, spec.min, spec.max, spec.def, 0,
+                                            Vst::ParameterInfo::kCanAutomate, kPedalUnitId);
                 range->setPrecision(spec.precision);
                 parameters.addParameter(range);
                 break;
@@ -387,11 +387,8 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
     // reading "no IR loaded" while the IRs are audibly playing — and, worse since the second slot
     // became real, leaves the blend dial drawn disabled over a blend that is actually running.
     for (int slot = 0; slot < kIrSlotCount; ++slot) {
-        mIrPath[slot].clear();
-        if (char8 *p = streamer.readStr8()) {
-            mIrPath[slot] = p;
-            delete[] p;
-        }
+        if (!readStr8Checked(streamer, mIrPath[slot]))
+            return kResultFalse;
     }
 
     // The MIDI learn table, added in state version 2. A version 1 blob simply has nothing here,
@@ -459,14 +456,10 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
         int32 isDir = 0;
         if (!streamer.readInt32(isDir))
             return kResultFalse;
-        if (char8 *p = streamer.readStr8()) {
-            mCapturePath[c] = p;
-            delete[] p;
-        }
-        if (char8 *p = streamer.readStr8()) {
-            mChannelNameOverride[c] = p;
-            delete[] p;
-        }
+        if (!readStr8Checked(streamer, mCapturePath[c]))
+            return kResultFalse;
+        if (!readStr8Checked(streamer, mChannelNameOverride[c]))
+            return kResultFalse;
         mCaptureIsDir[c] = !mCapturePath[c].empty() && isDir != 0;
     }
 

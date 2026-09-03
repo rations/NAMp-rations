@@ -2,6 +2,7 @@
 
 #include "rationsprocessor.h"
 #include "platform/respath.h"
+#include "statestream.h"
 
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
@@ -372,9 +373,10 @@ void RationsProcessor::handleParameterChanges(IParameterChanges *changes)
             // ever suppressed, and no wall clock is consulted.
             //
             // The one controller this does not fully serve is an ALTERNATING latching one, which
-            // sends 127, then 0, then 127, one message per press: its releases are indistinguishable
-            // from a momentary switch's, so it takes two stamps per change. That is a mode to avoid
-            // programming rather than a case to guess at; midilearn.h sets out all three kinds.
+            // sends 127, then 0, then 127, one message per press: its releases are
+            // indistinguishable from a momentary switch's, so it takes two stamps per change. That
+            // is a mode to avoid programming rather than a case to guess at; midilearn.h sets out
+            // all three kinds.
             //
             // LEARNING asks a different question, and gating it on the same edge is a bug that
             // only shows up in the most ordinary re-mapping there is: moving a pedal that is
@@ -567,8 +569,8 @@ void RationsProcessor::midiTrigger(MidiMsg msg, int channel, int data1)
             mChannelNorm.store(performed, std::memory_order_relaxed);
         } else if (const int pedalIndex = pedalParamIndex(target.param); pedalIndex >= 0) {
             const double now = mPedalNorm[pedalIndex].load(std::memory_order_relaxed);
-            performed = (target.action == MidiAction::Toggle) ? (now > 0.5 ? 0.0 : 1.0)
-                                                              : target.value;
+            performed =
+                (target.action == MidiAction::Toggle) ? (now > 0.5 ? 0.0 : 1.0) : target.value;
             mPedalNorm[pedalIndex].store(performed, std::memory_order_relaxed);
         } else {
             continue; // a row whose target this function does not know how to perform
@@ -663,8 +665,7 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
     // Every pedal control, denormalized once per block rather than once per sub-block: these are
     // controls, not signals, and the table lookup is the same work whichever loop it sits in.
     for (int i = 0; i < kPedalParamCount; ++i)
-        mPedalPlain[i] =
-            pedalPlain(kPedalParams[i], mPedalNorm[i].load(std::memory_order_relaxed));
+        mPedalPlain[i] = pedalPlain(kPedalParams[i], mPedalNorm[i].load(std::memory_order_relaxed));
 
     // The host's tempo, for the Delay's sync divisions. A host is not obliged to supply a
     // ProcessContext at all, and the ones that do are not obliged to have a valid tempo in it, so
@@ -1199,13 +1200,11 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
     mIrBlendNorm.store(std::clamp(blend, 0.0, 1.0), std::memory_order_relaxed);
 
     // IR paths (written with writeStr8: int32 length + bytes). A missing entry leaves the slot
-    // empty rather than failing the load.
+    // empty rather than failing the load; a blob that runs out mid-string is corrupt rather than
+    // missing, and fails the whole load — see statestream.h.
     for (int slot = 0; slot < kIrSlotCount; ++slot) {
-        mIrPath[slot].clear();
-        if (char8 *p = streamer.readStr8()) {
-            mIrPath[slot] = p;
-            delete[] p;
-        }
+        if (!readStr8Checked(streamer, mIrPath[slot]))
+            return kResultFalse;
     }
 
     // Recording the paths is not enough: they have to be LOADED. On a project open this is
@@ -1296,14 +1295,10 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
         if (version >= 4) {
             if (!streamer.readInt32(isDir))
                 return kResultFalse;
-            if (char8 *p = streamer.readStr8()) {
-                path = p;
-                delete[] p;
-            }
-            if (char8 *p = streamer.readStr8()) {
-                name = p;
-                delete[] p;
-            }
+            if (!readStr8Checked(streamer, path))
+                return kResultFalse;
+            if (!readStr8Checked(streamer, name))
+                return kResultFalse;
         }
         mChannelName[c] = name;
 
