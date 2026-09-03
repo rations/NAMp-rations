@@ -3,8 +3,9 @@
 #
 # rations_ircheck needs a pair of impulse responses to say anything, and cabinet IRs are not in
 # this repository — they are third-party files with their own licences, and the plug-in ships no
-# IRs at all (unlike the captures, which are the author's own). So the library lives outside the
-# tree and this script points the gate at it.
+# IRs at all. Captures are the same: third-party recordings under their own terms, which this
+# project neither ships nor redistributes. So both libraries live outside the tree and this script
+# points the gate at them.
 #
 # The eight pairs below are not arbitrary. They span the two regimes the blend has to handle and
 # which the correct curve differs between: mic positions on ONE cabinet, which are strongly

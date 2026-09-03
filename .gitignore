@@ -6,15 +6,16 @@ task.md
 PLAN.md
 .claude/
 
-# The author's own captures of the four channels. They are the product, not a
-# working set — the plug-in has no capture browser and loads these and only
-# these — and they are deliberately NOT published with the source: the code is
-# MIT, a capture is a recording rather than source, and the two are not the same
-# grant. Tracked source still names them by path, because the four channel banks
-# are resolved that way and there is nothing else they could be called.
+# A local set of captures for the offline proofs to run against. These are NOT
+# this project's to publish: a capture is a recording made by whoever trained
+# it, under their own terms, and the code's MIT grant does not reach it. The
+# plug-in ships none and resolves no bank by a tracked path — the four banks are
+# whatever the user loaded — so nothing here depends on this directory existing.
+# The proofs find it through --captures or $RATIONS_TEST_CAPTURES.
 #
-# A clone without them configures with an actionable error naming
-# RATIONS_CAPTURES_DIR; see CMakeLists.txt.
+# Keep it that way: a capture committed here is a capture republished to
+# everyone who clones, and deleting it later does not take it back out of the
+# history.
 captures/
 
 # Personal CMake configure presets (local reference-tree paths).
