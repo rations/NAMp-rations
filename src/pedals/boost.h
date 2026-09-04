@@ -22,6 +22,9 @@
 
 #include "pedal.h"
 
+// The non-finite test the Newton guard below uses. Not <cmath>'s: see the header for why.
+#include "finite.h"
+
 // Two vendored headers, and they do NOT share a namespace: Filters.h declares bbm, Oversampler.h
 // declares bbmh. Both are byte-identical to their originals (see NOTICE), so the inconsistency is
 // theirs and is left alone rather than tidied - a local edit there would be reverted by the next
@@ -320,7 +323,10 @@ private:
             if (std::fabs(step) < ts9::kNewtonTolVolts)
                 break;
         }
-        if (!std::isfinite(v))
+        // Bit test, not std::isfinite: this target is compiled with -ffast-math, under which
+        // std::isfinite folds to a constant true and this guard is removed from the build
+        // altogether — so it stood here inert rather than catching anything. See finite.h.
+        if (!isFinite(v))
             v = 0.0;
         // f at the accepted point becomes the trapezoid's past term for the next sample.
         double sh, ch;

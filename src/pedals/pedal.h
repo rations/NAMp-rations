@@ -18,6 +18,10 @@
 // NeuralAmpModelerCore has a dsp.h too and its include path is searched first.
 #include "dsp/dsp.h"
 
+// The non-finite test used to clear the input buffer below. Deliberately not <cmath>'s
+// std::isfinite, which this build's -ffast-math folds to a constant true; see the header.
+#include "finite.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -100,9 +104,33 @@ public:
         mNeedsReset = true;
 
         const size_t n = static_cast<size_t>(numSamples);
-        std::copy(l, l + n, mDryL.begin());
-        if (r)
-            std::copy(r, r + n, mDryR.begin());
+        // THE INPUT BUFFER IS UNTRUSTED, and this is the only place one test covers the whole
+        // pedal. A single non-finite sample from upstream — another plug-in, a corrupt file, a
+        // host handing over a buffer it never wrote — otherwise reaches every stateful element at
+        // once: the Boost's ODE state and its past-derivative term, the modulated delay lines,
+        // the reverb's comb and allpass loops, the oversamplers' half-band filters. Every one of
+        // those feeds itself, so the value never leaves. Measured here: ONE bad sample into the
+        // Boost leaves it emitting nothing but NaN for the rest of the session, and only a stomp
+        // off and back on clears it, because that is what triggers the reset.
+        //
+        // It is cleared at the door rather than caught deeper down because a guard inside the
+        // Newton solver only rescues the solver's own variable and leaves the past-derivative
+        // term, the filters and the delay lines still poisoned — measured, not assumed.
+        //
+        // Finite audio is copied through completely unchanged, so no sound moves; the cost is one
+        // integer compare per sample and no branch that a normal signal ever takes.
+        for (size_t k = 0; k < n; ++k) {
+            if (!isFinite(l[k]))
+                l[k] = 0.0;
+            mDryL[k] = l[k];
+        }
+        if (r) {
+            for (size_t k = 0; k < n; ++k) {
+                if (!isFinite(r[k]))
+                    r[k] = 0.0;
+                mDryR[k] = r[k];
+            }
+        }
 
         processImpl(l, r, numSamples);
 

@@ -546,6 +546,7 @@ set(RATIONS_PLUGIN_SOURCES
     src/midilearn.cpp
     # The pedalboard. Five pedals plus the two chains they sit in; the pedals themselves are
     # header-only until the phase that gives each one a body, so only the chain has a .cpp.
+    src/pedals/finite.h
     src/pedals/pedal.h
     src/pedals/boost.h
     src/pedals/chorus.h
