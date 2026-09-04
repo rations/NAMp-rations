@@ -34,17 +34,25 @@ FONT="$REPO/resources/fonts/Michroma-Regular.ttf"
 OUT="$REPO/packaging/icons"
 TEXT="${RATIONS_ICON_TEXT:-Rations}"
 
-# THE SPLIT IS THE ICON'S OWN, and that is a measurement rather than a preference. The panel puts a
-# 72-unit badge over a word whose cap height is about 11 (kBadgeH and kTitleSize in src/geometry.h),
-# and this faceplate is 3.7:1 against that block's 2.6:1, so a block in the panel's proportions is
-# limited by HEIGHT here rather than by width and comes out small. Held to the panel's ratio the
-# word lands well under the 4 px floor below, and under the 4.25 px the previous icon achieved. So
-# the height is split directly instead: the badge stays the larger mark, and the word gets enough of
-# the panel to still be a word at the smallest size. Widths follow from each element's own ink
-# aspect. The panel can afford its ratio because it has 1133 units of faceplate to be read on; an
-# icon that is going to be 48 px in a taskbar cannot.
-BADGE_HEIGHT_SHARE=52 # of the usable faceplate height
-GAP_SHARE=7           # between the badge's ink and the word's cap top; the rest is the word
+# THE SPLIT IS THE ICON'S OWN, and it was settled by rendering four of them and looking at the
+# 48 px result rather than by arithmetic. The panel puts a 72-unit badge over a word whose cap
+# height is about 11 (kBadgeH and kTitleSize in src/geometry.h), a ratio of about 6:1 in a block of
+# 2.6:1 - and this faceplate is 3.7:1, so a block in the panel's proportions is limited by HEIGHT
+# here rather than by width and both elements come out small. The height is therefore split
+# directly, and 70/6/24 is what the comparison chose out of 52/7/41, 62/6/32, 70/6/24 and 76/5/19.
+# Widths follow from each element's own ink aspect.
+#
+# WHAT THE COMPARISON ACTUALLY SHOWED, and it is the opposite of what the first version of this
+# script assumed: giving the badge MORE of the height makes the icon more identifiable at 48 px,
+# not less. At 52 the badge is 5.5 px and does not read as "NAMp" - it is a gold smear with a word
+# under it. At 70 it is 7.5 px and reads. The word is what pays, dropping from 4.4 px to 2.5, and
+# that is the right trade because THE BADGE IS THE IDENTITY: no seven-letter word inside a third of
+# a 48 px icon is readable at any split, so a word large enough to look readable there is only
+# taking room from the element that genuinely is. The word comes back at 64 px and up, which is
+# where it is worth having. 76 was rejected for that reason at the other end - the word stops being
+# a second line at all.
+BADGE_HEIGHT_SHARE=70 # of the usable faceplate height
+GAP_SHARE=6           # between the badge's ink and the word's cap top; the rest is the word
 MIN_MARGIN=4          # px of faceplate that must stay clear on every side, at the base art's scale
 
 for f in "$BASE" "$BADGE" "$FONT"; do
@@ -162,12 +170,22 @@ echo "make_icon.sh: badge ${BADGE_W}x${BADGE_H}, \"$TEXT\" ${TEXT_W}x${TEXT_H} a
 # to its width there. So what is checked is how tall each element ends up on that icon. The margin
 # check is kept beside it for the pixel or two that rounding can add.
 #
-# 4 px is where a word stops being a word and becomes a grey smudge, and it is measured at INK - not
-# at the font's box, which is what the previous version of this script compared against and which
-# is half again as tall. Re-measured at ink, the icon this replaces put "Rations Amp" at 4.25 px, so
-# the floor is where it always was rather than lowered to let this design through. Both elements are
-# checked, not just the smaller: the badge carries lettering of its own, and it is the new one.
-MIN_INK_PX=4
+# TWO FLOORS, BECAUSE THE TWO ELEMENTS DO DIFFERENT JOBS. Both are measured at INK - not at the
+# font's box or the PNG's canvas, which are half again as tall and which an earlier version of this
+# script compared against, reporting 6.6 px for a "Rations Amp" that was really 4.25.
+#
+# Neither number is a claim that the element is READABLE at that size; they are regression gates,
+# set below what this design achieves with margin, the same way the IR blend and the Windows panel
+# diff set theirs. What they catch is a future change that silently destroys an element - a new
+# base art with a shorter faceplate, a longer name, a share edited without looking at the result.
+#
+#   the badge carries the identity, so its floor is the higher one and it is where the previous
+#   design FAILED: at 5.5 px it did not read as "NAMp", and 7.5 px does.
+#   the word is a caption under that mark. It is not readable at 48 px at any split and is not
+#   asked to be; the floor only says it is still a distinguishable second line rather than part of
+#   the badge's shadow.
+MIN_BADGE_INK_PX=6
+MIN_WORD_INK_PX=2
 SMALLEST_ICON=48
 python3 -c "
 scale = $SMALLEST_ICON / float($BASE_W)
@@ -178,11 +196,12 @@ if widest > $PANEL_W - 2 * $MIN_MARGIN or $STACK_H > $PANEL_H - 2 * $MIN_MARGIN:
     raise SystemExit(
         'make_icon.sh: the stack lays out %dx${STACK_H}, which does not leave ${MIN_MARGIN}px '
         'inside a ${PANEL_W}x${PANEL_H} faceplate' % widest)
-for name, ink in (('the badge', badge_ink), ('\"$TEXT\"', text_ink)):
-    if ink < $MIN_INK_PX:
+for name, ink, floor in (('the badge', badge_ink, $MIN_BADGE_INK_PX),
+                         ('\"$TEXT\"', text_ink, $MIN_WORD_INK_PX)):
+    if ink < floor:
         raise SystemExit(
-            'make_icon.sh: %s is only %.1f px tall on the ${SMALLEST_ICON}px icon and unreadable '
-            'there (%d px is the floor)' % (name, ink, $MIN_INK_PX))
+            'make_icon.sh: %s is only %.1f px tall on the ${SMALLEST_ICON}px icon, under its %d px '
+            'floor - look at the result before changing the shares' % (name, ink, floor))
 print('make_icon.sh: on the ${SMALLEST_ICON}px icon the badge is %.1f px tall and \"$TEXT\" is '
       '%.1f px' % (badge_ink, text_ink))
 "
