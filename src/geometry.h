@@ -262,7 +262,7 @@ constexpr int pageMaxH(Page p)
 // 15 logical px is 15*s device px, and an intermediate window size can still
 // land on a stepped value. Being even at the sizes the window actually rests at
 // is what is available; being even everywhere is not.
-constexpr int kTitleSize = 28; // "Rations", under the badge — see the wordmark block
+constexpr int kTitleSize = 15; // "Rations", under the badge — see the wordmark block
 // The dial legends and the utility row's, both one step down the cap-even list
 // (15 -> 12 and 11 -> 10; 13 and 14 are not available, see the note above).
 // They came down when the channel lamps moved out of the band above the dials
@@ -312,27 +312,46 @@ using pal::kTextColor;
 //
 // THE VERTICAL BAND IS THE BUDGET HERE, not the width — which is the reverse of
 // how this band has always worked, and is why nothing else on it had to move.
-// Stacked, the block is max(badge, text) wide rather than their sum: 162
-// against the 318 the wordmark had, so it is NARROWER than the text it
-// replaces and the utility row, the Slim icon and the settings button all keep
-// the positions they were measured into. What it spends instead is height,
-// between the faceplate's top edge (kFaceT, 62) and the dial legends' ink
-// (kKnobCY - kKnobLabelDY - kKnobLabelSize, 153). The asserts below hold both
-// ends, and panelrender measures the text for real.
-constexpr int kBadgeH = 48;
+// Stacked, the block is max(badge, text) wide rather than their sum, so what it
+// spends is height, between the faceplate's top edge (kFaceT, 62) and the dial
+// legends' ink (kKnobCY - kKnobLabelDY - kKnobLabelSize, 153). The asserts
+// below hold both ends, and panelrender measures the text for real.
+//
+// THE BADGE IS THE MARK AND THE WORD IS THE CAPTION, and the balance between
+// them is the author's, settled by looking at three renders rather than by
+// arithmetic. It first drew at 48 with the word at 28 — a badge and a word of
+// comparable weight, where the badge is what actually carries at a glance — and
+// then over-corrected to 88 with the word at 12, where the word was smaller than
+// the dial legends under it and read as a stray caption. 72 and 15 is the pair
+// that was kept: the badge dominates, and the word is a step LARGER than the
+// dial legends (kKnobLabelSize, 12) so that it reads as part of the mark rather
+// than as another legend. 15 is the next cap-even size above 12 — 13 and 14 are
+// stepped, see the note above kTitleSize.
+//
+// The band, not the width, is what bounds it: at this aspect 72 draws 242 wide
+// against the 316 the Slim icon's clearance (asserted below) would allow, while
+// the word's baseline is 13 clear of the dial legends' ink.
+constexpr int kBadgeH = 72;
 // The stored art is 512x152 (gui/geometry.sh BADGE_W/H, checked there against
 // what the source actually trims to), so the drawn width is that aspect at
 // kBadgeH. Written as the arithmetic rather than as 162 so that replacing the
 // art and updating geometry.sh cannot leave this silently stretched.
-constexpr int kBadgeW = kBadgeH * 512 / 152; // 161
-constexpr int kBadgeTop = 70;                // 8 below kFaceT, the meters' own margin
+constexpr int kBadgeW = kBadgeH * 512 / 152; // 242
+// 6 below kFaceT, and the ink starts lower again: the art carries 6/152 of its
+// height as transparent margin above it, which is 2.8 units here, so the gold
+// begins 8.8 below the faceplate's edge — close to the meters' own 8.
+constexpr int kBadgeTop = 68;
 constexpr int kBadgeBottom = kBadgeTop + kBadgeH;
 constexpr int kBadgeCX = kFaceCX;
-// The word's baseline. Its cap top (kTitleBaselineY - the cap height, ~20 at
-// this size) sits ABOVE kBadgeBottom, which is the tuck that makes the two one
-// mark: "NAMp"'s p hangs into the space either side of which "Rations" is
-// narrow enough to clear.
-constexpr int kTitleBaselineY = 132;
+// The word's baseline. Its cap top (kTitleBaselineY - the cap height, ~11 at
+// this size) sits level with where the badge's ink ends UNDER ITS CENTRE, which
+// is 0.836 of the art's height rather than the 0.961 its full ink box gives:
+// the difference is "NAMp"'s p, which hangs lower than the rest and does so off
+// to the right, either side of which "Rations" is narrow enough to clear. That
+// is what makes the two read as one mark rather than as two things stacked, and
+// it is measured off the art (magick -crop the centre third, then %@) rather
+// than eyeballed.
+constexpr int kTitleBaselineY = 140;
 constexpr int kWordmarkBottom = kTitleBaselineY; // "Rations" has no descender
 static_assert(kBadgeTop > kFaceT, "the badge has reached the top of the faceplate");
 // The other end of the band is asserted where the dial legends are defined —
@@ -622,16 +641,16 @@ static_assert(kBypassToggleCY + kTopToggleH / 2 <
 // The title's leftmost ink. This used to be a hand-measured number — the width
 // of "Rations" at 56 — because the title was text and text is only measurable at
 // draw time. It is DERIVED now: the badge is the wider of the two things stacked
-// here (161 against the word's 141 at kTitleSize), so the block's edge is the
+// here (242 against the word's 72 at kTitleSize), so the block's edge is the
 // badge's edge and arithmetic can say where it is. panelrender still measures
 // the text for real, which is what catches the case where a larger kTitleSize
 // makes the word the wider one and this stops being the block's edge.
-constexpr int kWordmarkInkLeft = kFaceCX - kBadgeW / 2; // 486
+constexpr int kWordmarkInkLeft = kFaceCX - kBadgeW / 2; // 445
 static_assert(kGateToggleCX + kTopToggleHitW / 2 < kWordmarkInkLeft,
               "the utility row has grown into the wordmark");
 // The wordmark's ink ends the same distance the other side of the faceplate
 // centre, and the corner cluster is measured against it below.
-constexpr int kWordmarkInkRight = 2 * kFaceCX - kWordmarkInkLeft; // 646
+constexpr int kWordmarkInkRight = 2 * kFaceCX - kWordmarkInkLeft; // 687
 
 // --- The settings button, top-right of the faceplate ------------------------
 // A LABELLED BUTTON, NOT AN ICON, and that is the whole of this decision. It was

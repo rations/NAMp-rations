@@ -8,12 +8,11 @@
 # NAMp badge over "Rations" onto its faceplate, exactly as src/rationsview.cpp draws them, then
 # cuts the icon sizes from the result.
 #
-# THE STACK IS THE PANEL'S, IN THE PANEL'S PROPORTIONS. The badge sits above the word and is the
-# wider of the two, and the ratio between them here is read off geometry.h rather than invented:
-# kBadgeW is 161 units against the word's ~135 at kTitleSize, so the word is TEXT_WIDTH_OF_BADGE
-# per cent of the badge's width. What the icon does NOT copy is the panel's tuck — there the cap
-# top rises slightly INTO the badge's box to bind the two together, which at 48 px would smear
-# them into one mark, so here they are separated by a small positive gap.
+# THE STACK IS THE PANEL'S; ITS PROPORTIONS ARE NOT, and the reason is measured below. Two other
+# things the icon does not copy: the panel's tuck, where the word's cap top rises to meet the
+# badge's ink so the two bind into one mark — at 48 px that would smear them together, so here
+# they are separated by a small positive gap — and the panel's own badge-to-word ratio, which is
+# far too lopsided to survive the smallest icon size.
 #
 # NOTHING HERE IS A GUESSED COORDINATE. The faceplate is found by looking for the gold piping that
 # frames it, both elements are measured at their own ink rather than at their canvas or their font
@@ -35,16 +34,18 @@ FONT="$REPO/resources/fonts/Michroma-Regular.ttf"
 OUT="$REPO/packaging/icons"
 TEXT="${RATIONS_ICON_TEXT:-Rations}"
 
-# THE SPLIT IS THE ICON'S OWN, and that is a measurement rather than a preference. On the panel the
-# badge is 161 units wide against the word's ~135 at kTitleSize (src/geometry.h), a block of about
-# 2.6:1 - and this faceplate is 3.7:1, so a block in the panel's proportions is limited by HEIGHT
-# here and comes out small. Held to the panel's ratio the word lands 3.2 px tall on the 48 px icon,
-# under the 4 px floor below and under the 4.25 px the previous icon achieved. So the height is
-# split directly instead: the badge stays the larger mark, and the word gets enough of the panel to
-# still be a word at the smallest size. Widths follow from each element's own ink aspect.
+# THE SPLIT IS THE ICON'S OWN, and that is a measurement rather than a preference. The panel puts a
+# 72-unit badge over a word whose cap height is about 11 (kBadgeH and kTitleSize in src/geometry.h),
+# and this faceplate is 3.7:1 against that block's 2.6:1, so a block in the panel's proportions is
+# limited by HEIGHT here rather than by width and comes out small. Held to the panel's ratio the
+# word lands well under the 4 px floor below, and under the 4.25 px the previous icon achieved. So
+# the height is split directly instead: the badge stays the larger mark, and the word gets enough of
+# the panel to still be a word at the smallest size. Widths follow from each element's own ink
+# aspect. The panel can afford its ratio because it has 1133 units of faceplate to be read on; an
+# icon that is going to be 48 px in a taskbar cannot.
 BADGE_HEIGHT_SHARE=52 # of the usable faceplate height
 GAP_SHARE=7           # between the badge's ink and the word's cap top; the rest is the word
-MIN_MARGIN=4          # px of faceplate that must remain clear on every side, at the base art's scale
+MIN_MARGIN=4          # px of faceplate that must stay clear on every side, at the base art's scale
 
 for f in "$BASE" "$BADGE" "$FONT"; do
   [ -f "$f" ] || { echo "make_icon.sh: $f is missing" >&2; exit 1; }
