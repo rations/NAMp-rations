@@ -63,6 +63,43 @@ trim_checked "$ART_DIR/head-base.png" "$OUT_DIR/head.png" "$HEAD_W" "$HEAD_H" "h
 # then have to be regenerated to move a row.
 trim_checked "$ART_DIR/cabinet-base.png" "$OUT_DIR/cabinet.png" "$CAB_W" "$CAB_H" "cabinet art"
 
+# ---- namp-badge.png: the NAMp wordmark above "Rations" on the head --------
+# The head's title is a BADGE over text rather than text alone. The badge is the
+# parent project's own gold NAMp mark, and it arrives with a real alpha channel
+# and a very wide, very faint bloom around the ink -- a plain -trim keeps almost
+# the whole 1536x1024 canvas, because that bloom never quite reaches zero.
+#
+# So the crop is taken from the alpha channel at a THRESHOLD rather than from
+# -trim: everything at 5% opacity or more is ink or its hard shadow, and what is
+# below that is bloom nobody can see on a dark faceplate. A small margin is put
+# back so the shadow does not end on a hard edge. Derived rather than hard-coded,
+# so replacing the source art re-derives the crop instead of silently cutting it
+# in the wrong place.
+#
+# Stored at 512 wide against the 162 it is drawn at (src/geometry.h kBadgeW), so
+# it stays clean at kScaleMax on a HiDPI display, where the static layer is
+# composited at device resolution.
+need "$ART_DIR/namp-badge-base.png"
+# %@ is the bounding box of the non-zero region; %wx%h would be the canvas,
+# which is the whole 1536x1024 and would crop nothing at all.
+BADGE_BOX="$(magick "$ART_DIR/namp-badge-base.png" -alpha extract -threshold 5% \
+             -format "%@" info:)"
+if [ -z "$BADGE_BOX" ]; then
+    echo "make_assets: could not find any ink in namp-badge-base.png" >&2
+    exit 1
+fi
+magick "$ART_DIR/namp-badge-base.png" -crop "$BADGE_BOX" +repage \
+       -bordercolor none -border 12 \
+       -resize "${BADGE_W}x" -strip -depth 8 "PNG32:$OUT_DIR/namp-badge.png"
+badge_size="$(magick identify -format "%w %h" "$OUT_DIR/namp-badge.png")"
+badge_h="${badge_size#* }"
+if [ "$badge_h" != "$BADGE_H" ]; then
+    echo "make_assets: the badge stores as ${badge_size% *}x${badge_h}, but geometry.sh says" >&2
+    echo "             ${BADGE_W}x${BADGE_H}. The source art's proportions have changed, so the" >&2
+    echo "             drawn size in src/geometry.h (kBadgeW/kBadgeH) needs re-deriving too." >&2
+    exit 1
+fi
+
 # ---- LEDs: already 128x128 and centred, so only re-encoded -----------------
 need "$ART_DIR/led-on-base.png"
 need "$ART_DIR/led-off-base.png"

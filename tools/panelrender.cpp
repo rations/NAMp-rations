@@ -61,6 +61,9 @@ namespace
 const char *const kRequiredImages[] = {
     "head",         "cabinet",       "dial",          "led_on",        "led_off",
     "switch_up_ring", "switch_down_ring", "meter_track",
+    // The head's title badge. It is art rather than text now, so a missing badge
+    // is a head page with no name on it — worth failing for, like the head itself.
+    "namp-badge",
     // The pedalboard. The five enclosures and the footswitch cap; the pedals'
     // knobs and LEDs are the very same dial/led_on/led_off named above, which is
     // why there are no pedal-specific entries for them.
@@ -278,7 +281,11 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
     c.fillRect(c.bounds());
     c.drawImage(images.get("head"), Rect(0, 0, geo::kWinW, geo::kWinH));
 
-    // The wordmark: text in Michroma, centred on the faceplate by measurement.
+    // The wordmark: the NAMp badge with "Rations" under it. The same two draws as
+    // RationsEditorView::drawStaticLayer, in the same order — this render is what the
+    // Windows panel diff compares against, so a difference here is a false regression.
+    c.drawImage(images.get("namp-badge"), Rect(geo::kBadgeCX - geo::kBadgeW * 0.5f, geo::kBadgeTop,
+                                               geo::kBadgeW, geo::kBadgeH));
     drawCenteredText(c, Font::Title, geo::kTitleSize, geo::kTextColor, "Rations", geo::kFaceCX,
                      geo::kTitleBaselineY);
 
@@ -1486,6 +1493,36 @@ bool auditText(FontStack &fonts)
                     "panelrender: the utility row's legends stop at y=%.1f and the dial legends "
                     "start at y=%.1f, %.0f units wanted — see kKnobLabelDY\n",
                     utilInk, legendInk, kUtilityLegendGap);
+            ++bad;
+        }
+
+        // The title's VERTICAL band. Stacking the badge over the word made height the budget on
+        // this row rather than width — the block is narrower than the text it replaced, but it
+        // now runs from near the faceplate's top edge down towards the dial legends. Both ends
+        // are held by static_asserts in geometry.h, which are exact because kBadgeTop and
+        // kTitleBaselineY are; what they cannot know is where the word's INK actually falls at
+        // kTitleSize, which is what this measures.
+        c.setFont(Font::Title);
+        c.setFontSize(static_cast<float>(geo::kTitleSize));
+        const float titleInkTop =
+            static_cast<float>(geo::kTitleBaselineY) - c.stringAscent("Rations");
+        const float titleInkBottom =
+            static_cast<float>(geo::kTitleBaselineY) + c.stringDescent("Rations");
+        if (titleInkBottom >= legendInk) {
+            fprintf(stderr,
+                    "panelrender: \"Rations\" ink reaches y=%.1f and the dial legends start at "
+                    "y=%.1f — lower kTitleSize or raise kTitleBaselineY\n",
+                    titleInkBottom, legendInk);
+            ++bad;
+        }
+        // The word sits UNDER the badge, and the tuck that makes the two read as one mark means
+        // its cap top is meant to rise past kBadgeBottom. What must not happen is the word
+        // growing until it reaches the badge's top, at which point it is no longer a stack.
+        if (titleInkTop <= static_cast<float>(geo::kBadgeTop)) {
+            fprintf(stderr,
+                    "panelrender: \"Rations\" ink starts at y=%.1f, at or above the badge's top "
+                    "y=%d — the two no longer read as a stack\n",
+                    titleInkTop, geo::kBadgeTop);
             ++bad;
         }
 

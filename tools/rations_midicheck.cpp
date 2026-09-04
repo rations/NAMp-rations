@@ -34,7 +34,7 @@
 //      that is actually sounding, not just the parameter.
 //
 // Usage:
-//   rations_midicheck <Rations.vst3> [--rate 48000] [--block 128] [--settle-ms 6000]
+//   rations_midicheck <NAMp-rations.vst3> [--rate 48000] [--block 128] [--settle-ms 6000]
 
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/vst/hosting/module.h"
@@ -147,7 +147,7 @@ bool parseArgs(int argc, char **argv, Options &opt)
         }
     }
     if (opt.bundle.empty()) {
-        fprintf(stderr, "usage: rations_midicheck <Rations.vst3> [--captures <dir>] "
+        fprintf(stderr, "usage: rations_midicheck <NAMp-rations.vst3> [--captures <dir>] "
                         "[--rate R] [--block N] [--settle-ms MS]\n");
         return false;
     }

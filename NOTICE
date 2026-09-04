@@ -1,4 +1,4 @@
-Rations — a four-channel Neural Amp Modeler amp head, a VST3 plug-in for Linux
+NAMp Rations — a four-channel Neural Amp Modeler amp head, a VST3 plug-in for Linux
 and Windows
 Copyright (c) 2026 rations
 
@@ -6,7 +6,7 @@ This project builds on NeuralAmpModelerPlugin by Steven Atkinson, and directly
 on the author's own NAMp. The original upstream project is available at:
   https://github.com/sdatkinson/NeuralAmpModelerPlugin
 
-Rations itself (the VST3 integration, the crossfade and channel-switch engines
+NAMp Rations itself (the VST3 integration, the crossfade and channel-switch engines
 and the editor under src/) is released under the MIT Licence; see LICENSE. The
 third-party components it links, vendors and redistributes are covered by the
 licences below.
@@ -71,7 +71,7 @@ The following component is the author's own work, used under the MIT Licence:
   framework-free by construction -- it is described in its own comments as "the
   Linux engine with the framework taken out" -- and includes nothing GPL, so the
   GPLv3 at the repository root is the licence of the JUCE-linked aggregate, not
-  of these files. The author of Rations is also the rights-holder of that work
+  of these files. The author of NAMp Rations is also the rights-holder of that work
   and has confirmed this reading. This is the same relicensing-of-own-work
   situation already recorded below for the art scripts.
 
@@ -138,7 +138,7 @@ A note on AudioDSPTools' Lanczos resampler
   library is GPL-3.0-or-later. That file, however, carries an explicit licence
   exception from its sole author granting use "in an MIT/BSD context as well as
   a GPL3 context"; the exception is reproduced verbatim at the top of the file.
-  Rations relies on that exception, so no GPL-licensed code enters this
+  NAMp Rations relies on that exception, so no GPL-licensed code enters this
   distribution. This is the one dependency whose licence status must be
   re-checked whenever AudioDSPTools is updated.
 
@@ -152,13 +152,13 @@ run time, and NOT redistributed by this project. They are Cairo (LGPL 2.1 /
 MPL 1.1), FreeType (FTL / GPLv2 dual licence, used under the FTL), fontconfig
 (MIT-style) and libX11 (MIT).
 
-The Linux release also carries rations-standalone, which additionally links
+The Linux release also carries namp-rations-standalone, which additionally links
 JACK's client library (LGPL 2.1, dynamically linked, and likewise not
 redistributed here). The VST3 bundle does NOT link it, and the release script
 checks that rather than asserting it; nothing on Windows links it at all.
 
 On Windows there is no system copy of any of them, so the Windows release
-STATICALLY LINKS and therefore redistributes them inside Rations.vst3. That changes
+STATICALLY LINKS and therefore redistributes them inside NAMp-rations.vst3. That changes
 the licence character of the shipped binary, so they are named here in full,
 with the versions scripts/build-win-deps.sh pins:
 
@@ -186,10 +186,10 @@ with the versions scripts/build-win-deps.sh pins:
   FreeType API from whatever links it. The build script removes that define. No
   FreeType source file is changed.
 
-  cairo and the LGPL: cairo is linked statically into Rations.vst3, which
+  cairo and the LGPL: cairo is linked statically into NAMp-rations.vst3, which
   LGPL 2.1 section 6 permits provided the recipient can relink the work against a
   modified cairo. That condition is met by publication rather than by a written
-  offer: Rations' complete corresponding source is published under the MIT
+  offer: NAMp Rations' complete corresponding source is published under the MIT
   Licence, the exact cairo version and the exact configuration used to build it
   are in scripts/build-win-deps.sh in this same repository, and the whole
   plug-in rebuilds from that source with one cmake invocation. Anyone may
@@ -199,7 +199,7 @@ with the versions scripts/build-win-deps.sh pins:
 
 -------------------------------------------------------------------------------
 
-NSIS — the Windows installer (installer/rations.nsi, Rations-install.exe)
+NSIS — the Windows installer (installer/namp-rations.nsi, NAMp-rations-install.exe)
 
   NSIS 3.11, https://nsis.sourceforge.io/
 
@@ -211,7 +211,7 @@ NSIS — the Windows installer (installer/rations.nsi, Rations-install.exe)
       "expressly permit[s] you to statically or dynamically link your code (or
       bind by name) to the files from the LZMA compression module for NSIS
       without subjecting your linked code to the terms of the Common Public
-      license version 1.0". Rations uses the module unmodified, via
+      license version 1.0". NAMp Rations uses the module unmodified, via
       `SetCompressor /SOLID lzma`, so the exception applies and no CPL
       obligation attaches to anything else here.
 
@@ -220,7 +220,7 @@ NSIS — the Windows installer (installer/rations.nsi, Rations-install.exe)
   NSIS is a BUILD tool: nothing from it enters the plug-in's include graph, and
   the Linux release does not involve it at all. It is named here because the
   Windows release redistributes one piece of it — makensis links a prebuilt NSIS
-  installer stub into Rations-install.exe and appends the compressed bundle, which
+  installer stub into NAMp-rations-install.exe and appends the compressed bundle, which
   is what lets the installer be produced on Linux without Wine and without the
   cross compiler.
 
@@ -235,8 +235,12 @@ Editor art and the scripts that generate it (gui/, resources/img/):
   toggle switches (switch_up_ring.png, switch_down_ring.png) and the meter track
   are generated procedurally by gui/make_switch.sh and gui/make_meter.sh
   (ImageMagick 7) rather than authored as raster files, and Folder.svg is the
-  author's own, drawn to match the icon set below. There is no badge image: the
-  "Rations" wordmark is drawn as text in Michroma at run time.
+  author's own, drawn to match the icon set below. The wordmark is two things
+  together: the NAMp badge (namp-badge-base.png, the author's own artwork,
+  trimmed to its ink by gui/make_assets.sh into the shipped namp-badge.png) with
+  the word "Rations" drawn as text in Michroma beneath it at run time. The
+  application icon for the Linux standalone (packaging/icons/) is that same pair
+  composed onto the head by gui/make_icon.sh.
 
   gui/make_knob.sh, and gui/make_switch.sh's ancestor make_footswitch.sh, were
   originally written by the same author for a sibling project that is licensed

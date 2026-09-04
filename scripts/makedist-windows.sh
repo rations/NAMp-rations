@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Cross-build Rations for 64-bit Windows and package the release ZIP into dist/.
+# Cross-build NAMp Rations for 64-bit Windows and package the release ZIP into dist/.
 #
 # ONE PRODUCT ON WINDOWS. This archive is the VST3 bundle and nothing else. The
 # standalone is a JACK application and therefore a Linux product - it ships with
 # that release (scripts/makedist-linux.sh) - and there is no rack and no plug-in
 # host on either platform, so there is no second binary to package here.
 #
-# TWO WAYS TO INSTALL IT, both in the ZIP. Rations-install.exe puts the bundle
-# where hosts look and registers an uninstall entry; the Rations.vst3 folder
+# TWO WAYS TO INSTALL IT, both in the ZIP. NAMp-rations-install.exe puts the bundle
+# where hosts look and registers an uninstall entry; the NAMp-rations.vst3 folder
 # beside it is the same bundle for anyone who would rather copy it themselves —
 # which is not a stylistic preference, it is the fallback for a machine whose
 # SmartScreen or antivirus refuses an unsigned installer. See
-# installer/rations.nsi.
+# installer/namp-rations.nsi.
 #
 # NO WINDOWS MACHINE IS INVOLVED. The compiler is MinGW-w64 running here; the
 # verification runs the cross-built binaries under Wine, which is enough to
@@ -31,7 +31,7 @@
 #                       and share/nsis/). A makensis on PATH is used if absent.
 #   RATIONS_SKIP_INSTALLER
 #                       set to 1 to package the bundle without
-#                       Rations-install.exe.
+#                       NAMp-rations-install.exe.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,7 +52,7 @@ if [ ! -d "${RATIONS_WIN_SYSROOT:-$HOME/third_party/win-deps/sysroot}/lib/pkgcon
 fi
 
 # makensis is a NATIVE Linux binary: it links one of NSIS's prebuilt PE stubs
-# and appends the compressed payload, so Rations-install.exe is produced without
+# and appends the compressed payload, so NAMp-rations-install.exe is produced without
 # Wine and without the cross compiler. Prefer an unpacked prefix (bin/ +
 # share/nsis/, which is what `apt-get download nsis nsis-common` + `dpkg-deb -x`
 # gives without root); fall back to a system install.
@@ -65,7 +65,7 @@ elif command -v makensis >/dev/null; then
   MAKENSIS="makensis"
 fi
 if [ "${RATIONS_SKIP_INSTALLER:-0}" != "1" ] && [ -z "$MAKENSIS" ]; then
-  echo "error: makensis not found, so Rations-install.exe cannot be built." >&2
+  echo "error: makensis not found, so NAMp-rations-install.exe cannot be built." >&2
   echo "  sudo apt install nsis" >&2
   echo "or unpack it without root into \$RATIONS_NSIS_DIR (default" >&2
   echo "$NSIS_PREFIX) as bin/makensis and share/nsis/:" >&2
@@ -89,18 +89,18 @@ if [ -z "$VERSION" ]; then
 fi
 
 STAGEDIR="$(mktemp -d)"
-PKGDIR="$STAGEDIR/Rations-${VERSION}"
+PKGDIR="$STAGEDIR/NAMp-rations-${VERSION}"
 mkdir -p "$PKGDIR"
 trap 'rm -rf "$STAGEDIR"' EXIT
 
 # --- the plug-in ------------------------------------------------------------
-BUNDLE="$BUILD/VST3/Release/Rations.vst3"
+BUNDLE="$BUILD/VST3/Release/NAMp-rations.vst3"
 if [ ! -d "$BUNDLE" ]; then
   echo "VST3 bundle not found at $BUNDLE" >&2
   exit 1
 fi
 cp -r "$BUNDLE" "$PKGDIR/"
-PKGBUNDLE="$PKGDIR/Rations.vst3"
+PKGBUNDLE="$PKGDIR/NAMp-rations.vst3"
 
 # ONE ARCHITECTURE FOLDER, AND IT IS THE WINDOWS ONE.
 #
@@ -129,18 +129,18 @@ done
 # The art and fonts in Contents/Resources are copied as they are: they are
 # looked up at run time, not embedded, which is what lets a user replace them
 # without a rebuild.
-DLL="$PKGBUNDLE/Contents/x86_64-win/Rations.vst3"
+DLL="$PKGBUNDLE/Contents/x86_64-win/NAMp-rations.vst3"
 
 # SHAPE. Module::validateBundleStructure in the SDK's module_win32.cpp requires
-# the inner DLL to be named exactly like the bundle folder — Rations.vst3 inside
-# Rations.vst3/Contents/<arch>/. A DLL called Rations.dll in the right folder
+# the inner DLL to be named exactly like the bundle folder — NAMp-rations.vst3 inside
+# NAMp-rations.vst3/Contents/<arch>/. A DLL called NAMp-rations.dll in the right folder
 # does not load, and nothing before this point would have said so: the CMake
 # bundle machinery places the binary with a foreach over
 # CMAKE_CONFIGURATION_TYPES, which is EMPTY under every single-config generator,
 # so getting this wrong produces a complete-looking bundle with the binary
 # somewhere else entirely.
 if [ ! -f "$DLL" ]; then
-  echo "no Rations.vst3 binary inside $PKGBUNDLE/Contents/x86_64-win/" >&2
+  echo "no NAMp-rations.vst3 binary inside $PKGBUNDLE/Contents/x86_64-win/" >&2
   echo "The bundle layout is wrong; see the LIBRARY_OUTPUT_DIRECTORY block in" >&2
   echo "CMakeLists.txt. No host can load this." >&2
   find "$PKGBUNDLE" -type f >&2
@@ -377,17 +377,18 @@ fi
 cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
 cat > "$PKGDIR/INSTALL.txt" <<EOF
-Rations ${VERSION} - a four-channel Neural Amp Modeler amp head, VST3 for Windows
+NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head,
+VST3 for Windows
 
 This archive holds the plug-in, twice over - an installer, and the same bundle
 loose so you can install it by hand instead:
 
-    Rations-install.exe  the installer
-    Rations.vst3         a folder, not a file. Copy the WHOLE folder.
+    NAMp-rations-install.exe  the installer
+    NAMp-rations.vst3         a folder, not a file. Copy the WHOLE folder.
 
 Install, the easy way
 ---------------------
-Run Rations-install.exe.
+Run NAMp-rations-install.exe.
 
 It is not code-signed, so Windows SmartScreen will show a blue "Windows
 protected your PC" box. Click "More info", then "Run anyway" - or install by
@@ -417,18 +418,18 @@ are two such places, and hosts search them in this order:
 
          C:\\Program Files\\Common Files\\VST3\\
 
-Copy Rations.vst3 into one of them, then rescan plug-ins in your DAW.
+Copy NAMp-rations.vst3 into one of them, then rescan plug-ins in your DAW.
 
 Do not rename anything inside the folder. The bundle carries its own art and
-fonts in Rations.vst3\\Contents\\Resources, and the binary in
-Rations.vst3\\Contents\\x86_64-win must keep the name Rations.vst3 or no host
-will load it.
+fonts in NAMp-rations.vst3\\Contents\\Resources, and the binary in
+NAMp-rations.vst3\\Contents\\x86_64-win must keep the name
+NAMp-rations.vst3 or no host will load it.
 
-To uninstall a hand-installed copy, delete the Rations.vst3 folder.
+To uninstall a hand-installed copy, delete the NAMp-rations.vst3 folder.
 
 Whichever way you install, make sure you only have ONE copy. Hosts scan both
-folders, so a copy left in each shows up as two Rations entries in the plug-in
-list. The installer offers to remove the other one for you.
+folders, so a copy left in each shows up as two NAMp Rations entries in the
+plug-in list. The installer offers to remove the other one for you.
 
 Requirements
 ------------
@@ -442,7 +443,8 @@ download, and the only place anything here is built for Linux.
 
 Captures
 --------
-Rations ships NO captures - it plays yours, and it wants four sets of them.
+NAMp Rations ships NO captures - it plays yours, and it wants four sets
+of them.
 
 Click the "Captures, MIDI, Settings" button, top right, to open the settings
 page. The top section has one loader per channel: point each at a DIRECTORY of
@@ -511,13 +513,13 @@ them.
 EOF
 
 # --- the installer ----------------------------------------------------------
-# Built LAST, from the staged tree, so Rations-install.exe carries exactly the
-# bundle that is also loose in the ZIP - the same stripped binary and the same
+# Built LAST, from the staged tree, so NAMp-rations-install.exe carries exactly
+# the bundle that is also loose in the ZIP - the same stripped binary and the same
 # moduleinfo.json. Building it from build-win instead would quietly ship an
 # unstripped, unverified copy the moment either step above changed.
 if [ "${RATIONS_SKIP_INSTALLER:-0}" = "1" ]; then
   echo
-  echo "WARNING: RATIONS_SKIP_INSTALLER=1 - the ZIP has no Rations-install.exe." >&2
+  echo "WARNING: RATIONS_SKIP_INSTALLER=1 - the ZIP has no NAMp-rations-install.exe." >&2
   echo
 else
   # VIProductVersion wants exactly four components; project() gives three.
@@ -526,32 +528,32 @@ else
     VERSION4="$VERSION4.0"
   done
 
-  echo "building Rations-install.exe with $MAKENSIS"
+  echo "building NAMp-rations-install.exe with $MAKENSIS"
   "$MAKENSIS" -V2 -NOCD \
     "-DVERSION=$VERSION" "-DVERSION4=$VERSION4" \
     "-DBUNDLE_DIR=$PKGBUNDLE" "-DDOC_DIR=$PKGDIR" \
-    "-DOUTFILE=$PKGDIR/Rations-install.exe" \
-    "$REPO/installer/rations.nsi"
+    "-DOUTFILE=$PKGDIR/NAMp-rations-install.exe" \
+    "$REPO/installer/namp-rations.nsi"
 
-  if [ ! -s "$PKGDIR/Rations-install.exe" ]; then
-    echo "makensis produced no Rations-install.exe" >&2
+  if [ ! -s "$PKGDIR/NAMp-rations-install.exe" ]; then
+    echo "makensis produced no NAMp-rations-install.exe" >&2
     exit 1
   fi
   # It must be a PE executable, not whatever else ended up at that path. file(1)
   # is not guaranteed to be installed, so check the magic directly.
-  if [ "$(head -c2 "$PKGDIR/Rations-install.exe")" != "MZ" ]; then
-    echo "Rations-install.exe is not a PE executable" >&2
+  if [ "$(head -c2 "$PKGDIR/NAMp-rations-install.exe")" != "MZ" ]; then
+    echo "NAMp-rations-install.exe is not a PE executable" >&2
     exit 1
   fi
 fi
 
 mkdir -p "$REPO/dist"
-ZIP="$REPO/dist/Rations-${VERSION}-windows-x86_64.zip"
+ZIP="$REPO/dist/NAMp-rations-${VERSION}-windows-x86_64.zip"
 rm -f "$ZIP"
 # python3 rather than zip(1): zip is not installed everywhere and this needs no
 # extra package. -c takes the directory and stores it with its own name at the
 # archive root, which is what an extract-anywhere release wants.
-( cd "$STAGEDIR" && python3 -m zipfile -c "$ZIP" "Rations-${VERSION}" )
+( cd "$STAGEDIR" && python3 -m zipfile -c "$ZIP" "NAMp-rations-${VERSION}" )
 
 echo ""
 echo "Packaged: $ZIP"

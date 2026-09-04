@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Build Rations for 64-bit Linux and package the release tarball into dist/.
+# Build NAMp Rations for 64-bit Linux and package the release tarball into dist/.
 #
 # TWO PRODUCTS, ONE TARBALL, AND NEITHER NEEDS THE OTHER TO BE INSTALLED.
 #
-#   Rations.vst3        the plug-in, for a DAW. It links cairo, FreeType, fontconfig and libX11
+#   NAMp-rations.vst3        the plug-in, for a DAW. It links cairo, FreeType, fontconfig and libX11
 #                       and NOTHING else - in particular it does not link JACK, which is checked
 #                       below rather than assumed.
-#   rations-standalone  the amp without a DAW: the same bundle, hosted on JACK in a window of its
+#   namp-rations-standalone  the amp without a DAW: the same bundle, hosted on JACK in a window of its
 #                       own, with a MIDI port for the footswitch. It is a HOST - it loads
-#                       Rations.vst3 rather than containing a second copy of it - so the two files
+#                       NAMp-rations.vst3 rather than containing a second copy of it - so the two files
 #                       in this archive are not independent of each other the way the parent
 #                       project's are. That is deliberate: the editor finds its art through
 #                       dladdr() relative to the loaded module, so a standalone that linked the
@@ -43,18 +43,18 @@ if [ -z "$VERSION" ]; then
 fi
 
 STAGEDIR="$(mktemp -d)"
-PKGDIR="$STAGEDIR/Rations-${VERSION}"
+PKGDIR="$STAGEDIR/NAMp-rations-${VERSION}"
 mkdir -p "$PKGDIR"
 trap 'rm -rf "$STAGEDIR"' EXIT
 
 # --- the plug-in ------------------------------------------------------------
-BUNDLE="$BUILD/VST3/Release/Rations.vst3"
+BUNDLE="$BUILD/VST3/Release/NAMp-rations.vst3"
 if [ ! -d "$BUNDLE" ]; then
   echo "VST3 bundle not found at $BUNDLE" >&2
   exit 1
 fi
 cp -r "$BUNDLE" "$PKGDIR/"
-PKGBUNDLE="$PKGDIR/Rations.vst3"
+PKGBUNDLE="$PKGDIR/NAMp-rations.vst3"
 
 # ONE ARCHITECTURE FOLDER, AND IT IS THE LINUX ONE.
 #
@@ -78,9 +78,9 @@ for _arch in "$PKGBUNDLE/Contents"/*/; do
   esac
 done
 
-PLUGIN_SO="$PKGBUNDLE/Contents/${ARCH}-linux/Rations.so"
+PLUGIN_SO="$PKGBUNDLE/Contents/${ARCH}-linux/NAMp-rations.so"
 if [ ! -f "$PLUGIN_SO" ]; then
-  echo "no Rations.so inside $PKGBUNDLE/Contents/${ARCH}-linux/" >&2
+  echo "no NAMp-rations.so inside $PKGBUNDLE/Contents/${ARCH}-linux/" >&2
   echo "The bundle layout is wrong; no host can load this." >&2
   find "$PKGBUNDLE" -type f >&2
   exit 1
@@ -108,30 +108,30 @@ strip --strip-unneeded "$PLUGIN_SO"
 # --- the standalone ---------------------------------------------------------
 # A shipped component, so a build that skipped it (JACK development files absent) must not quietly
 # produce a half release - the tarball would then be the Windows release with a Linux binary in it.
-STANDALONE="$BUILD/rations-standalone"
+STANDALONE="$BUILD/namp-rations-standalone"
 if [ ! -f "$STANDALONE" ]; then
-  echo "rations-standalone was not built - install the JACK development files" >&2
+  echo "namp-rations-standalone was not built - install the JACK development files" >&2
   echo "(libjack-jackd2-dev, or libjack-dev) and re-run, or the release would" >&2
   echo "ship the plug-in only." >&2
   exit 1
 fi
 cp "$STANDALONE" "$PKGDIR/"
-strip --strip-unneeded "$PKGDIR/rations-standalone"
+strip --strip-unneeded "$PKGDIR/namp-rations-standalone"
 
 # --- gates ------------------------------------------------------------------
 # THE PLUG-IN MUST NOT LINK THE AUDIO BACKEND. Only the standalone hosts JACK; a bundle that
 # linked it would refuse to load on every machine without libjack installed, which is most of
 # them, and would do it silently - the host simply reports no such plug-in.
 if ldd "$PLUGIN_SO" | grep -qi 'libjack'; then
-  echo "the VST3 bundle links libjack. Only rations-standalone may." >&2
+  echo "the VST3 bundle links libjack. Only namp-rations-standalone may." >&2
   ldd "$PLUGIN_SO" | grep -i jack >&2
   exit 1
 fi
 
 # ...AND THE STANDALONE MUST. The other direction is worth checking too: a standalone that somehow
 # came out without it is one that cannot make a sound, and it would not say so until it ran.
-if ! ldd "$PKGDIR/rations-standalone" | grep -qi 'libjack'; then
-  echo "rations-standalone does not link libjack; it could not open an audio device." >&2
+if ! ldd "$PKGDIR/namp-rations-standalone" | grep -qi 'libjack'; then
+  echo "namp-rations-standalone does not link libjack; it could not open an audio device." >&2
   exit 1
 fi
 
@@ -162,9 +162,9 @@ fi
 
 # THE STANDALONE RUNS. --help touches the argument parser and the settings-path logic and returns
 # 0, which is as far as anything can be driven without a display and a JACK server.
-STANDALONE_HELP="$("$PKGDIR/rations-standalone" --help 2>&1 || true)"
-if ! printf '%s' "$STANDALONE_HELP" | grep -q "usage: rations-standalone"; then
-  echo "rations-standalone --help did not print its usage:" >&2
+STANDALONE_HELP="$("$PKGDIR/namp-rations-standalone" --help 2>&1 || true)"
+if ! printf '%s' "$STANDALONE_HELP" | grep -q "usage: namp-rations-standalone"; then
+  echo "namp-rations-standalone --help did not print its usage:" >&2
   printf '%s\n' "$STANDALONE_HELP" | head -10 >&2
   exit 1
 fi
@@ -172,23 +172,23 @@ fi
 # --- licence, attribution, launcher -----------------------------------------
 cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
-if [ ! -f "$REPO/packaging/icons/rations-256.png" ]; then
+if [ ! -f "$REPO/packaging/icons/namp-rations-256.png" ]; then
   echo "the application icons are missing - run gui/make_icon.sh" >&2
   exit 1
 fi
 mkdir -p "$PKGDIR/desktop"
-cp "$REPO/packaging/rations.desktop" "$PKGDIR/desktop/"
-cp "$REPO"/packaging/icons/rations-*.png "$PKGDIR/desktop/"
+cp "$REPO/packaging/namp-rations.desktop" "$PKGDIR/desktop/"
+cp "$REPO"/packaging/icons/namp-rations-*.png "$PKGDIR/desktop/"
 
 cat > "$PKGDIR/install.sh" <<'EOF'
 #!/usr/bin/env bash
-# Install (or remove) Rations for the current user. Nothing here needs root, and nothing is
+# Install (or remove) NAMp Rations for the current user. Nothing here needs root, and nothing is
 # installed outside your home directory.
 #
-#   Rations.vst3         -> ~/.vst3                                   (the plug-in, for a DAW)
-#   rations-standalone   -> ~/.local/bin                              (the amp, on JACK)
-#   rations.desktop      -> ~/.local/share/applications               (the launcher entry)
-#   rations-<size>.png   -> ~/.local/share/icons/hicolor/<size>/apps  (its icon)
+#   NAMp-rations.vst3         -> ~/.vst3                                   (the plug-in, for a DAW)
+#   namp-rations-standalone   -> ~/.local/bin                              (the amp, on JACK)
+#   namp-rations.desktop      -> ~/.local/share/applications               (the launcher entry)
+#   namp-rations-<size>.png   -> ~/.local/share/icons/hicolor/<size>/apps  (its icon)
 #
 # The standalone LOADS the plug-in rather than containing it, and ~/.vst3 is one of the places it
 # looks, so installing the two together is what makes the menu entry work from anywhere.
@@ -206,39 +206,39 @@ refresh() {
 }
 
 if [ "${1:-}" = "--uninstall" ]; then
-  rm -rf "$VST3_DIR/Rations.vst3"
-  rm -f "$BIN_DIR/rations-standalone"
-  rm -f "$APP_DIR/rations.desktop"
+  rm -rf "$VST3_DIR/NAMp-rations.vst3"
+  rm -f "$BIN_DIR/namp-rations-standalone"
+  rm -f "$APP_DIR/namp-rations.desktop"
   for SIZE in 256 128 64 48; do
-    rm -f "$ICON_ROOT/${SIZE}x${SIZE}/apps/rations.png"
+    rm -f "$ICON_ROOT/${SIZE}x${SIZE}/apps/namp-rations.png"
   done
   refresh
-  echo "Rations removed."
-  echo "Your settings are NOT removed: ~/.config/Rations/standalone.state holds which"
+  echo "NAMp Rations removed."
+  echo "Your settings are NOT removed: ~/.config/NAMp-rations/standalone.state holds which"
   echo "captures the standalone was playing. Delete it by hand if you want it gone."
   exit 0
 fi
 
 mkdir -p "$VST3_DIR" "$BIN_DIR" "$APP_DIR"
-rm -rf "$VST3_DIR/Rations.vst3"
-cp -r "$HERE/Rations.vst3" "$VST3_DIR/"
-install -m 755 "$HERE/rations-standalone" "$BIN_DIR/rations-standalone"
-install -m 644 "$HERE/desktop/rations.desktop" "$APP_DIR/rations.desktop"
+rm -rf "$VST3_DIR/NAMp-rations.vst3"
+cp -r "$HERE/NAMp-rations.vst3" "$VST3_DIR/"
+install -m 755 "$HERE/namp-rations-standalone" "$BIN_DIR/namp-rations-standalone"
+install -m 644 "$HERE/desktop/namp-rations.desktop" "$APP_DIR/namp-rations.desktop"
 for SIZE in 256 128 64 48; do
   mkdir -p "$ICON_ROOT/${SIZE}x${SIZE}/apps"
-  install -m 644 "$HERE/desktop/rations-${SIZE}.png" "$ICON_ROOT/${SIZE}x${SIZE}/apps/rations.png"
+  install -m 644 "$HERE/desktop/namp-rations-${SIZE}.png" "$ICON_ROOT/${SIZE}x${SIZE}/apps/namp-rations.png"
 done
 refresh
 
 echo "Installed:"
-echo "  plug-in     $VST3_DIR/Rations.vst3"
-echo "  standalone  $BIN_DIR/rations-standalone"
-echo "  launcher    $APP_DIR/rations.desktop"
+echo "  plug-in     $VST3_DIR/NAMp-rations.vst3"
+echo "  standalone  $BIN_DIR/namp-rations-standalone"
+echo "  launcher    $APP_DIR/namp-rations.desktop"
 echo
 echo "Rescan plug-ins in your DAW to pick up the VST3."
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "Note: $BIN_DIR is not on your PATH, so 'rations-standalone' will not be"
+  *) echo "Note: $BIN_DIR is not on your PATH, so 'namp-rations-standalone' will not be"
      echo "found by name from a shell. The menu entry works either way." ;;
 esac
 echo
@@ -247,15 +247,16 @@ EOF
 chmod +x "$PKGDIR/install.sh"
 
 cat > "$PKGDIR/INSTALL.txt" <<EOF
-Rations ${VERSION} - a four-channel Neural Amp Modeler amp head for Linux
+NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head for Linux
 
 This archive holds two things, and they are the same amp twice:
 
-    Rations.vst3        the plug-in, for your DAW
-    rations-standalone  the amp on its own, on JACK, with its own window
+    NAMp-rations.vst3        the plug-in, for your DAW
+    namp-rations-standalone  the amp on its own, on JACK, with its own window
 
-The standalone is a HOST rather than a second copy: it loads Rations.vst3. Keep
-the two together, or install both with the script below.
+The standalone is a HOST rather than a second copy: it loads
+NAMp-rations.vst3. Keep the two together, or install both with the script
+below.
 
 Install
 -------
@@ -263,22 +264,22 @@ Install
 
 Everything goes under your home directory and nothing needs root:
 
-    ~/.vst3/Rations.vst3                   the plug-in
-    ~/.local/bin/rations-standalone        the standalone
+    ~/.vst3/NAMp-rations.vst3                   the plug-in
+    ~/.local/bin/namp-rations-standalone        the standalone
     ~/.local/share/applications/           a menu entry, with an icon
 
 Then rescan plug-ins in your DAW. To remove it all again: ./install.sh --uninstall
 
 You can also just run it where you extracted it, with no installation at all:
 
-    ./rations-standalone
+    ./namp-rations-standalone
 
-and copy Rations.vst3 into ~/.vst3 by hand if you only want the plug-in. The
-standalone looks for the bundle in \$RATIONS_VST3, then beside itself, then
+and copy NAMp-rations.vst3 into ~/.vst3 by hand if you only want the plug-in.
+The standalone looks for the bundle in \$RATIONS_VST3, then beside itself, then
 ~/.vst3, then /usr/local/lib/vst3 and /usr/lib/vst3, and you can also pass the
 path to it:
 
-    ./rations-standalone /path/to/Rations.vst3
+    ./namp-rations-standalone /path/to/NAMp-rations.vst3
 
 The standalone
 --------------
@@ -289,10 +290,10 @@ makes no sound and says so.
 
 It registers these ports:
 
-    Rations:in       your guitar
-    Rations:out_l    \\ the amp, in stereo from the pedalboard's
-    Rations:out_r    / flanger onwards
-    Rations:midi_in  a MIDI footswitch
+    NAMp-rations:in       your guitar
+    NAMp-rations:out_l    \\ the amp, in stereo from the pedalboard's
+    NAMp-rations:out_r    / flanger onwards
+    NAMp-rations:midi_in  a MIDI footswitch
 
 The audio ports are connected to the first physical capture and playback ports
 it finds. The MIDI port is left UNCONNECTED on purpose: which of your MIDI
@@ -302,14 +303,15 @@ a keyboard changing amp channels. Connect it in your patchbay.
 What it was playing - the four capture banks, the impulse responses, the
 pedalboard, the MIDI bindings, every knob - is written to
 
-    ~/.config/Rations/standalone.state
+    ~/.config/NAMp-rations/standalone.state
 
 when you close it, and read back when you start it. Run it with --no-state to
 skip both ends and come up empty.
 
 Captures
 --------
-Rations ships NO captures - it plays yours, and it wants four sets of them.
+NAMp Rations ships NO captures - it plays yours, and it wants four sets
+of them.
 
 Click the "Captures, MIDI, Settings" button, top right, to open the settings
 page. The top section has one loader per channel: point each at a DIRECTORY of
@@ -395,9 +397,9 @@ MIT. See LICENSE, and NOTICE for third-party attribution.
 EOF
 
 mkdir -p "$REPO/dist"
-TARBALL="$REPO/dist/Rations-${VERSION}-linux-${ARCH}.tar.gz"
+TARBALL="$REPO/dist/NAMp-rations-${VERSION}-linux-${ARCH}.tar.gz"
 rm -f "$TARBALL"
-tar -czf "$TARBALL" -C "$STAGEDIR" "Rations-${VERSION}"
+tar -czf "$TARBALL" -C "$STAGEDIR" "NAMp-rations-${VERSION}"
 
 echo ""
 echo "Packaged: $TARBALL"

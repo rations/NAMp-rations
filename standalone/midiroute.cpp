@@ -125,11 +125,13 @@ void MidiRoute::resolve(Vst::IEditController *controller)
     }
 
     if (!mHasCc)
-        fprintf(stderr, "rations-standalone: no CC mapping - a footswitch sending Control Change "
-                        "will not be heard\n");
+        fprintf(stderr,
+                "namp-rations-standalone: no CC mapping - a footswitch sending Control Change "
+                "will not be heard\n");
     if (!mHasProgram)
-        fprintf(stderr, "rations-standalone: no Program Change parameter - a footswitch sending "
-                        "Program Change will not be heard\n");
+        fprintf(stderr,
+                "namp-rations-standalone: no Program Change parameter - a footswitch sending "
+                "Program Change will not be heard\n");
 }
 
 } // namespace Rations

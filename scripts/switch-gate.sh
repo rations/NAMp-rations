@@ -86,7 +86,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-bundle="$build/VST3/Release/Rations.vst3"
+bundle="$build/VST3/Release/NAMp-rations.vst3"
 jackcheck="$build/rations_jackcheck"
 for f in "$bundle" "$jackcheck"; do
     [ -e "$f" ] || { echo "switch-gate: $f is missing — build first" >&2; exit 1; }

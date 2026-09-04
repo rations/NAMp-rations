@@ -1,4 +1,4 @@
-; Rations Windows installer — built by makensis running natively on Linux.
+; NAMp Rations Windows installer — built by makensis running natively on Linux.
 ;
 ; WHY AN INSTALLER AT ALL. A VST3 plug-in is installed by copying a folder, and
 ; the ZIP still contains that folder for anyone who would rather do it by hand.
@@ -6,18 +6,18 @@
 ; the bundle somewhere a host actually looks, and taking it away again. Windows
 ; has no equivalent of ~/.vst3 that everyone knows, the per-user path is buried
 ; four levels inside %LOCALAPPDATA%, and an old copy left in the other location
-; shows up as a second Rations in the plug-in list.
+; shows up as a second NAMp Rations in the plug-in list.
 ;
 ; NO WINDOWS MACHINE IS INVOLVED IN BUILDING THIS. makensis is a native Linux
 ; binary; it links one of NSIS's prebuilt PE stubs and appends the compressed
-; payload, so producing Rations-install.exe needs neither Wine nor a cross
+; payload, so producing NAMp-rations-install.exe needs neither Wine nor a cross
 ; compiler. Wine is used afterwards, to run it — a smoke test, not the gate.
 ;
 ; INVOKED BY scripts/makedist-windows.sh, which supplies every path:
 ;
 ;   makensis -DVERSION=0.1.0 -DVERSION4=0.1.0.0 \
-;            -DBUNDLE_DIR=<staged>/Rations.vst3 -DDOC_DIR=<staged> \
-;            -DOUTFILE=<staged>/Rations-install.exe installer/rations.nsi
+;            -DBUNDLE_DIR=<staged>/NAMp-rations.vst3 -DDOC_DIR=<staged> \
+;            -DOUTFILE=<staged>/NAMp-rations-install.exe installer/namp-rations.nsi
 ;
 ; THIS IS A 32-BIT INSTALLER INSTALLING A 64-BIT PLUG-IN, deliberately. NSIS
 ; 3.11 does ship amd64-unicode stubs, but the 32-bit stub is the path every
@@ -47,19 +47,27 @@ Target x86-unicode
   !error "VERSION4 is not defined - pass -DVERSION4=x.y.z.0 (VIProductVersion needs four parts)"
 !endif
 !ifndef BUNDLE_DIR
-  !error "BUNDLE_DIR is not defined - pass -DBUNDLE_DIR=<path to the staged Rations.vst3>"
+  !error "BUNDLE_DIR is not defined - pass -DBUNDLE_DIR=<path to the staged NAMp-rations.vst3>"
 !endif
 !ifndef DOC_DIR
   !error "DOC_DIR is not defined - pass -DDOC_DIR=<path holding LICENSE, NOTICE, INSTALL.txt>"
 !endif
 !ifndef OUTFILE
-  !define OUTFILE "Rations-install.exe"
+  !define OUTFILE "NAMp-rations-install.exe"
 !endif
 
-!define APPNAME "Rations"
+; Two names, deliberately. APPNAME is DISPLAY text - what the user reads on the
+; pages, in "Apps & features" and in their host's plug-in list. APPID is the
+; FILESYSTEM and REGISTRY identity - the bundle folder, the install directory,
+; the uninstaller's filename and both registry keys. They differ (a space
+; against a hyphen), so anything that becomes a path must use APPID: the bundle
+; folder name in particular has to match the DLL inside it exactly or no host
+; will load the plug-in.
+!define APPNAME "NAMp Rations"
+!define APPID "NAMp-rations"
 !define PUBLISHER "rations"
-!define ABOUTURL "https://github.com/rations/Rations"
-!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
+!define ABOUTURL "https://github.com/rations/NAMp-rations"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPID}"
 
 Name "${APPNAME} ${VERSION}"
 OutFile "${OUTFILE}"
@@ -82,7 +90,7 @@ VIAddVersionKey "FileDescription" "${APPNAME} ${VERSION} VST3 installer"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
 VIAddVersionKey "LegalCopyright" "MIT. See NOTICE for third-party attribution."
 
-Var Vst3Dir  ; the VST3 folder the user picks; $INSTDIR is always $Vst3Dir\Rations.vst3
+Var Vst3Dir  ; the VST3 folder the user picks; $INSTDIR is always $Vst3Dir\NAMp-rations.vst3
 Var AppDir   ; where the uninstaller and the licence files live, outside the bundle
 Var AllUsers ; 1 = machine-wide (elevated), 0 = this user only
 Var OtherDir ; the standard location we are NOT installing into, checked for a stale copy
@@ -99,7 +107,7 @@ Var OtherDir ; the standard location we are NOT installing into, checked for a s
 !insertmacro MUI_PAGE_LICENSE "${DOC_DIR}\LICENSE"
 
 !define MUI_PAGE_HEADER_TEXT "Choose the VST3 folder"
-!define MUI_PAGE_HEADER_SUBTEXT "A folder called Rations.vst3 is created inside it."
+!define MUI_PAGE_HEADER_SUBTEXT "A folder called ${APPID}.vst3 is created inside it."
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Hosts search these two folders, in this order:$\r$\n$\r$\n    %LOCALAPPDATA%\Programs\Common\VST3      (just you, no administrator rights)$\r$\n    C:\Program Files\Common Files\VST3      (every user, needs administrator rights)$\r$\n$\r$\nThe one below was chosen for you. Change it only if your host is set up to look somewhere else."
 !define MUI_DIRECTORYPAGE_TEXT_DESTINATION "VST3 folder"
 !define MUI_DIRECTORYPAGE_VARIABLE $Vst3Dir
@@ -162,30 +170,30 @@ Function .onInit
     ; catch. $COMMONFILES64 and $PROGRAMFILES64 do not depend on the context.
     SetShellVarContext current
     StrCpy $1 "$LOCALAPPDATA\Programs\Common\VST3"
-    StrCpy $2 "$LOCALAPPDATA\Programs\${APPNAME}"
+    StrCpy $2 "$LOCALAPPDATA\Programs\${APPID}"
 
     ${If} $0 == "Admin"
         StrCpy $AllUsers 1
         SetShellVarContext all
         StrCpy $Vst3Dir "$COMMONFILES64\VST3"
-        StrCpy $AppDir "$PROGRAMFILES64\${APPNAME}"
-        StrCpy $OtherDir "$1\${APPNAME}.vst3"
+        StrCpy $AppDir "$PROGRAMFILES64\${APPID}"
+        StrCpy $OtherDir "$1\${APPID}.vst3"
     ${Else}
         StrCpy $AllUsers 0
         StrCpy $Vst3Dir "$1"
         StrCpy $AppDir "$2"
-        StrCpy $OtherDir "$COMMONFILES64\VST3\${APPNAME}.vst3"
+        StrCpy $OtherDir "$COMMONFILES64\VST3\${APPID}.vst3"
     ${EndIf}
 
-    StrCpy $INSTDIR "$Vst3Dir\${APPNAME}.vst3"
+    StrCpy $INSTDIR "$Vst3Dir\${APPID}.vst3"
 FunctionEnd
 
 ; The directory page edits $Vst3Dir, not $INSTDIR. Deriving $INSTDIR here is
-; what guarantees the bundle is always created as <chosen folder>\Rations.vst3 —
+; what guarantees the bundle is always created as <chosen folder>\NAMp-rations.vst3 —
 ; if the page wrote $INSTDIR directly, a user who browsed to D:\Plugins would
 ; get Contents\ spilled loose into D:\Plugins and no host would load it.
 Function OnDirectoryLeave
-    StrCpy $INSTDIR "$Vst3Dir\${APPNAME}.vst3"
+    StrCpy $INSTDIR "$Vst3Dir\${APPID}.vst3"
 FunctionEnd
 
 ;--------------------------------------------------------------------------
@@ -193,7 +201,7 @@ Section "${APPNAME} VST3 plug-in" SecPlugin
     SectionIn RO
 
     ; A stale copy in the OTHER standard location is not harmless: hosts scan
-    ; both, so it comes back as a second "Rations" in the plug-in list, and
+    ; both, so it comes back as a second "NAMp Rations" in the plug-in list, and
     ; which of the two a project loads is not something the user controls.
     ; Offer to remove it. Both paths are fixed and known, which is the only
     ; reason a recursive delete is acceptable here at all.
@@ -217,25 +225,25 @@ Section "${APPNAME} VST3 plug-in" SecPlugin
     File /r "${BUNDLE_DIR}\*"
 
     ; Nothing goes inside the bundle that a hand-copied one does not also have,
-    ; so an installed Rations.vst3 and one dragged out of the ZIP are byte for
+    ; so an installed NAMp-rations.vst3 and one dragged out of the ZIP are byte for
     ; byte the same folder. The uninstaller and the licence files live beside it.
     SetOutPath "$AppDir"
     File "${DOC_DIR}\LICENSE"
     File "${DOC_DIR}\NOTICE"
     File "${DOC_DIR}\INSTALL.txt"
-    WriteUninstaller "$AppDir\Uninstall ${APPNAME}.exe"
+    WriteUninstaller "$AppDir\Uninstall ${APPID}.exe"
 
-    WriteRegStr SHCTX "Software\${APPNAME}" "BundlePath" "$INSTDIR"
-    WriteRegStr SHCTX "Software\${APPNAME}" "AppPath" "$AppDir"
-    WriteRegStr SHCTX "Software\${APPNAME}" "Version" "${VERSION}"
+    WriteRegStr SHCTX "Software\${APPID}" "BundlePath" "$INSTDIR"
+    WriteRegStr SHCTX "Software\${APPID}" "AppPath" "$AppDir"
+    WriteRegStr SHCTX "Software\${APPID}" "Version" "${VERSION}"
 
     WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${APPNAME} ${VERSION}"
     WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
     WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${PUBLISHER}"
     WriteRegStr SHCTX "${UNINSTKEY}" "URLInfoAbout" "${ABOUTURL}"
     WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
-    WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$AppDir\Uninstall ${APPNAME}.exe$\""
-    WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" "$\"$AppDir\Uninstall ${APPNAME}.exe$\" /S"
+    WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$AppDir\Uninstall ${APPID}.exe$\""
+    WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" "$\"$AppDir\Uninstall ${APPID}.exe$\" /S"
     WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" 1
     WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" 1
 
@@ -255,14 +263,14 @@ Function un.onInit
     SetRegView 64
 
     SetShellVarContext all
-    ReadRegStr $0 HKLM "Software\${APPNAME}" "BundlePath"
+    ReadRegStr $0 HKLM "Software\${APPID}" "BundlePath"
     ${If} $0 == ""
         SetShellVarContext current
-        ReadRegStr $0 HKCU "Software\${APPNAME}" "BundlePath"
+        ReadRegStr $0 HKCU "Software\${APPID}" "BundlePath"
     ${EndIf}
     StrCpy $INSTDIR $0
 
-    ReadRegStr $0 SHCTX "Software\${APPNAME}" "AppPath"
+    ReadRegStr $0 SHCTX "Software\${APPID}" "AppPath"
     StrCpy $AppDir $0
 FunctionEnd
 
@@ -271,21 +279,21 @@ Section "Uninstall"
     ; this script built would be: only remove it if it still looks like our
     ; bundle. A corrupted or hand-edited value must not turn this into rm -rf.
     ${If} $INSTDIR != ""
-    ${AndIf} ${FileExists} "$INSTDIR\Contents\x86_64-win\${APPNAME}.vst3"
+    ${AndIf} ${FileExists} "$INSTDIR\Contents\x86_64-win\${APPID}.vst3"
         RMDir /r "$INSTDIR"
         DetailPrint "Removed $INSTDIR"
     ${Else}
-        DetailPrint "No ${APPNAME}.vst3 bundle found at $INSTDIR - nothing to remove there"
+        DetailPrint "No ${APPID}.vst3 bundle found at $INSTDIR - nothing to remove there"
     ${EndIf}
 
     ${If} $AppDir != ""
         Delete "$AppDir\LICENSE"
         Delete "$AppDir\NOTICE"
         Delete "$AppDir\INSTALL.txt"
-        Delete "$AppDir\Uninstall ${APPNAME}.exe"
+        Delete "$AppDir\Uninstall ${APPID}.exe"
         RMDir "$AppDir"
     ${EndIf}
 
     DeleteRegKey SHCTX "${UNINSTKEY}"
-    DeleteRegKey SHCTX "Software\${APPNAME}"
+    DeleteRegKey SHCTX "Software\${APPID}"
 SectionEnd

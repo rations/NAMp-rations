@@ -1,6 +1,6 @@
-# Rations
+# NAMp Rations
 
-![The Rations amp head](docs/amp-head.png)
+![The NAMp Rations amp head](docs/amp-head.png)
 
 ![The pedalboard page](docs/pedalboard.png)
 
@@ -9,7 +9,7 @@ captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Lin
 a JACK standalone on Linux for playing it without a DAW.
 
 A `.nam` capture freezes an amp at one knob position on one channel. A real amp head has several
-channels, each with its own gain range, and you change channel with your foot mid-song. Rations
+channels, each with its own gain range, and you change channel with your foot mid-song. NAMp Rations
 gives you that back.
 
 ## What it is
@@ -43,7 +43,7 @@ bounded input window, and an LSTM's cell state has unbounded memory.
 
 ## Installing
 
-Release archives are on the [releases page](https://github.com/rations/rations-amp/releases) — a
+Release archives are on the [releases page](https://github.com/rations/NAMp-rations/releases) — a
 tarball for Linux and a ZIP for Windows. To build it yourself instead, see [Building](#building).
 
 Nothing ships with captures: a fresh instance comes up with four empty channels, and the first
@@ -52,11 +52,11 @@ thing to do after installing is load your own into them.
 ### Linux
 
 The tarball holds the plug-in and the standalone, which are the same amp twice — the standalone
-*hosts* `Rations.vst3` rather than duplicating it, so keep the two together.
+*hosts* `NAMp-rations.vst3` rather than duplicating it, so keep the two together.
 
 ```
-tar xf Rations-*-linux-x86_64.tar.gz
-cd Rations-*/
+tar xf NAMp-rations-*-linux-x86_64.tar.gz
+cd NAMp-rations-*/
 ./install.sh
 ```
 
@@ -64,20 +64,20 @@ Everything goes under your home directory and nothing needs root:
 
 | | |
 |---|---|
-| `~/.vst3/Rations.vst3` | the plug-in |
-| `~/.local/bin/rations-standalone` | the standalone |
+| `~/.vst3/NAMp-rations.vst3` | the plug-in |
+| `~/.local/bin/namp-rations-standalone` | the standalone |
 | `~/.local/share/applications/` | a menu entry, with an icon |
 
 Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all three again.
 
-You can also skip the script: copy `Rations.vst3` into `~/.vst3/` by hand if you only want the
-plug-in, and run `./rations-standalone` where you extracted it. cairo, FreeType and fontconfig come
+You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` by hand if you only want the
+plug-in, and run `./namp-rations-standalone` where you extracted it. cairo, FreeType and fontconfig come
 from your system; the standalone additionally wants a JACK server (jackd, or a PipeWire desktop,
 which provides one).
 
 ### Windows
 
-The ZIP holds `Rations-install.exe` and the same bundle loose, so you can install it either way.
+The ZIP holds `NAMp-rations-install.exe` and the same bundle loose, so you can install it either way.
 
 **With the installer.** Run it. It is not code-signed, so SmartScreen shows a blue "Windows
 protected your PC" box — click *More info*, then *Run anyway*, or install by hand instead; the two
@@ -86,13 +86,13 @@ for everyone in `C:\Program Files\Common Files\VST3`; run it normally and it ins
 in `%LOCALAPPDATA%\Programs\Common\VST3`. It tells you which, and you can change the folder.
 Remove it later from *Apps & features*.
 
-**By hand.** Copy the whole `Rations.vst3` **folder** — not a file — into one of those same two
+**By hand.** Copy the whole `NAMp-rations.vst3` **folder** — not a file — into one of those same two
 directories, then rescan plug-ins in your DAW. Do not rename anything inside it: the bundle carries
 its own art and fonts in `Contents\Resources`, and the binary inside `Contents\x86_64-win` must
-keep the name `Rations.vst3` or no host will load it. To uninstall, delete the folder.
+keep the name `NAMp-rations.vst3` or no host will load it. To uninstall, delete the folder.
 
 Either way, keep only **one** copy: hosts scan both directories, so a copy in each shows up as two
-Rations entries. There is no runtime to install — cairo, FreeType, libpng and zlib are linked into
+NAMp Rations entries. There is no runtime to install — cairo, FreeType, libpng and zlib are linked into
 the bundle.
 
 ## Building
@@ -107,24 +107,24 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-That produces `build/VST3/Release/Rations.vst3`. Copy it into `~/.vst3/`.
+That produces `build/VST3/Release/NAMp-rations.vst3`. Copy it into `~/.vst3/`.
 
 ### The standalone (Linux)
 
-The same build also produces `build/rations-standalone` when JACK's development files are present
+The same build also produces `build/namp-rations-standalone` when JACK's development files are present
 (`libjack-jackd2-dev`): the amp without a DAW, in a window of its own, with the plug-in's own
 editor in it and a MIDI port for a footswitch.
 
 ```
-./build/rations-standalone
+./build/namp-rations-standalone
 ```
 
-It is a **host**, not a second copy of the plug-in: it loads `Rations.vst3` the way a DAW does —
+It is a **host**, not a second copy of the plug-in: it loads `NAMp-rations.vst3` the way a DAW does —
 which is what keeps the editor resolving its art and fonts by the same route in both — looking in
 `$RATIONS_VST3`, then beside itself, then the build tree, `~/.vst3`, `/usr/local/lib/vst3` and
-`/usr/lib/vst3`. It registers `Rations:in`, `Rations:out_l`, `Rations:out_r` and `Rations:midi_in`,
+`/usr/lib/vst3`. It registers `NAMp-rations:in`, `NAMp-rations:out_l`, `NAMp-rations:out_r` and `NAMp-rations:midi_in`,
 connects the audio to the first physical ports it finds, and leaves the MIDI port for you to patch.
-What it was playing is kept in `~/.config/Rations/standalone.state`; `--no-state` starts empty.
+What it was playing is kept in `~/.config/NAMp-rations/standalone.state`; `--no-state` starts empty.
 
 `scripts/makedist-linux.sh` packages the two into a tarball with a launcher entry and an
 `install.sh`. There is no standalone on Windows — that release is the plug-in only.

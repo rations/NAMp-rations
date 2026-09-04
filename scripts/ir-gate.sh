@@ -21,7 +21,7 @@ set -uo pipefail
 
 root="${RATIONS_IR_DIR:-$HOME/Impulse-Responses}"
 build="${RATIONS_BUILD_DIR:-build}"
-bundle="$build/VST3/Release/Rations.vst3"
+bundle="$build/VST3/Release/NAMp-rations.vst3"
 tool="$build/rations_ircheck"
 # The cabinet stage is measured through the whole chain, so the channels have to be sounding
 # something: with no captures loaded the rack outputs ramped silence and every blend measurement

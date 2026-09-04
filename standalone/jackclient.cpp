@@ -76,7 +76,7 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
     jack_status_t status = static_cast<jack_status_t>(0);
     mClient = jack_client_open(clientName, JackNoStartServer, &status);
     if (!mClient) {
-        fprintf(stderr, "rations-standalone: cannot connect to JACK (is jackd running?)\n");
+        fprintf(stderr, "namp-rations-standalone: cannot connect to JACK (is jackd running?)\n");
         return false;
     }
 
@@ -89,7 +89,7 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
     mOutPorts[1] =
         jack_port_register(mClient, "out_r", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
     if (!mInPort || !mOutPorts[0] || !mOutPorts[1]) {
-        fprintf(stderr, "rations-standalone: cannot register JACK ports\n");
+        fprintf(stderr, "namp-rations-standalone: cannot register JACK ports\n");
         close();
         return false;
     }
@@ -98,7 +98,7 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
     // switches still change channel.
     mMidiPort = jack_port_register(mClient, "midi_in", JACK_DEFAULT_MIDI_TYPE, JackPortIsInput, 0);
     if (!mMidiPort)
-        fprintf(stderr, "rations-standalone: cannot register the MIDI port - no footswitch\n");
+        fprintf(stderr, "namp-rations-standalone: cannot register the MIDI port - no footswitch\n");
 
     // All RT-side allocation happens here, before the process callback can run: the bus and
     // channel-pointer arrays, the parameter queues and the event list.
@@ -109,7 +109,7 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
     // channelBufferOwner - and then unprepare() runs delete[] on whatever the pointers hold at
     // close, which by then is JACK's memory, while the buffers it really allocated leak.
     if (!mProcessData.prepare(*component, 0, Vst::kSample32)) {
-        fprintf(stderr, "rations-standalone: cannot prepare the process buffers\n");
+        fprintf(stderr, "namp-rations-standalone: cannot prepare the process buffers\n");
         close();
         return false;
     }
@@ -125,17 +125,18 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
     mProcessData.inputEvents = &mEvents;
 
     if (jack_set_process_callback(mClient, processTrampoline, this) != 0) {
-        fprintf(stderr, "rations-standalone: cannot install the JACK process callback\n");
+        fprintf(stderr, "namp-rations-standalone: cannot install the JACK process callback\n");
         close();
         return false;
     }
     // Must be registered before jack_activate() (jack.h says so explicitly).
     if (jack_set_buffer_size_callback(mClient, bufferSizeTrampoline, this) != 0)
-        fprintf(stderr, "rations-standalone: cannot install the JACK buffer-size callback - the "
-                        "processor will stay set up for the size it started with\n");
+        fprintf(stderr,
+                "namp-rations-standalone: cannot install the JACK buffer-size callback - the "
+                "processor will stay set up for the size it started with\n");
 
     if (jack_activate(mClient) != 0) {
-        fprintf(stderr, "rations-standalone: cannot activate the JACK client\n");
+        fprintf(stderr, "namp-rations-standalone: cannot activate the JACK client\n");
         close();
         return false;
     }
@@ -159,7 +160,7 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
         jack_free(outs);
     }
 
-    printf("rations-standalone: JACK connected at %.0f Hz, %d frames\n", mSampleRate,
+    printf("namp-rations-standalone: JACK connected at %.0f Hz, %d frames\n", mSampleRate,
            mBlockSize.load(std::memory_order_relaxed));
     return true;
 }

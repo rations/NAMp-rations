@@ -85,7 +85,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ "$#" -gt 0 ] || { echo "editor-drive: nothing to do; see --help" >&2; exit 2; }
 
-bundle="$build/VST3/Release/Rations.vst3"
+bundle="$build/VST3/Release/NAMp-rations.vst3"
 host="$build/bin/Release/editorhost"
 for f in "$bundle" "$host"; do
     [ -e "$f" ] || { echo "editor-drive: $f is missing — build first" >&2; exit 1; }

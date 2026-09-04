@@ -15,15 +15,15 @@
     MAJOR_VERSION_STR "." SUB_VERSION_STR "." RELEASE_NUMBER_STR "." BUILD_NUMBER_STR
 #define VERSION_STR MAJOR_VERSION_STR "." SUB_VERSION_STR "." RELEASE_NUMBER_STR
 
-#define stringPluginName "Rations"
-#define stringOriginalFilename "Rations.vst3"
+#define stringPluginName "NAMp Rations"
+#define stringOriginalFilename "NAMp-rations.vst3"
 #if SMTG_PLATFORM_64
 #define stringFileDescription stringPluginName " (64Bit)"
 #else
 #define stringFileDescription stringPluginName
 #endif
 #define stringCompanyName "rations"
-#define stringCompanyWeb "https://github.com/rations"
+#define stringCompanyWeb "https://github.com/rations/NAMp-rations"
 #define stringCompanyEmail "mailto:ehqcar@proton.me"
 #define stringLegalCopyright "MIT licence; NAM DSP core (C) Steven Atkinson"
 #define stringLegalTrademarks "VST is a trademark of Steinberg Media Technologies GmbH"

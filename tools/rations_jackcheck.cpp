@@ -22,7 +22,7 @@
 // real interface's monitors while the test runs.
 //
 // Usage:
-//   rations_jackcheck <Rations.vst3> [--seconds S] [--stomp-ms N] [--restomp-ms N]
+//   rations_jackcheck <NAMp-rations.vst3> [--seconds S] [--stomp-ms N] [--restomp-ms N]
 //                     [--settle-ms N] [--connect] [--sweep-gain]
 
 #include "public.sdk/source/vst/hosting/hostclasses.h"
@@ -363,7 +363,7 @@ bool parseArgs(int argc, char **argv, Options &o)
         }
     }
     if (o.bundle.empty()) {
-        fprintf(stderr, "usage: rations_jackcheck <Rations.vst3> [--captures <dir>]\n"
+        fprintf(stderr, "usage: rations_jackcheck <NAMp-rations.vst3> [--captures <dir>]\n"
                         "       [--seconds S] [--stomp-ms N] [--restomp-ms N] [--settle-ms N]\n"
                         "       [--connect] [--sweep-gain]\n"
                         "       [--pedals all|none|boost,chorus,flanger,delay,reverb]\n");

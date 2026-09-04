@@ -262,7 +262,7 @@ constexpr int pageMaxH(Page p)
 // 15 logical px is 15*s device px, and an intermediate window size can still
 // land on a stepped value. Being even at the sizes the window actually rests at
 // is what is available; being even everywhere is not.
-constexpr int kTitleSize = 56; // the wordmark; fitted to the mock's cap height
+constexpr int kTitleSize = 28; // "Rations", under the badge — see the wordmark block
 // The dial legends and the utility row's, both one step down the cap-even list
 // (15 -> 12 and 11 -> 10; 13 and 14 are not available, see the note above).
 // They came down when the channel lamps moved out of the band above the dials
@@ -296,14 +296,47 @@ using pal::kGold;
 using pal::kPeakColor;
 using pal::kTextColor;
 
-// --- The wordmark -----------------------------------------------------------
-// Drawn as TEXT in Michroma, not blitted from a badge asset — the way the
-// author's other plug-in draws its own name. Centred on the faceplate by
-// measuring stringWidth at draw time, so the constant here is only the baseline.
-// The mock's wordmark occupies x 462..659, y 81..123 with a 43 px cap height;
-// kTitleSize is the Michroma size that reproduces that cap height and is checked
-// by the offline render rather than assumed.
-constexpr int kTitleBaselineY = 123;
+// --- The wordmark: the NAMp badge, with "Rations" under it ------------------
+// It was text alone — "Rations" in Michroma at 56, the way the author's other
+// plug-in draws its own name — and the project's public identity is now
+// NAMp-rations, so the head carries the parent's gold badge with the model name
+// beneath it. The badge is the mark; the word is what this amp is called, which
+// is why the text came DOWN from 56 to 28 rather than the badge being fitted
+// around it.
+//
+// The two are placed independently rather than as a block plus a gap. A gap
+// constant would have to be negative: "NAMp" has a descender and "Rations" does
+// not, so the two read as one lock-up only when the word's cap height rises
+// past the badge's lower edge. Two absolute positions say that plainly; a gap
+// of -6 would not.
+//
+// THE VERTICAL BAND IS THE BUDGET HERE, not the width — which is the reverse of
+// how this band has always worked, and is why nothing else on it had to move.
+// Stacked, the block is max(badge, text) wide rather than their sum: 162
+// against the 318 the wordmark had, so it is NARROWER than the text it
+// replaces and the utility row, the Slim icon and the settings button all keep
+// the positions they were measured into. What it spends instead is height,
+// between the faceplate's top edge (kFaceT, 62) and the dial legends' ink
+// (kKnobCY - kKnobLabelDY - kKnobLabelSize, 153). The asserts below hold both
+// ends, and panelrender measures the text for real.
+constexpr int kBadgeH = 48;
+// The stored art is 512x152 (gui/geometry.sh BADGE_W/H, checked there against
+// what the source actually trims to), so the drawn width is that aspect at
+// kBadgeH. Written as the arithmetic rather than as 162 so that replacing the
+// art and updating geometry.sh cannot leave this silently stretched.
+constexpr int kBadgeW = kBadgeH * 512 / 152; // 161
+constexpr int kBadgeTop = 70;                // 8 below kFaceT, the meters' own margin
+constexpr int kBadgeBottom = kBadgeTop + kBadgeH;
+constexpr int kBadgeCX = kFaceCX;
+// The word's baseline. Its cap top (kTitleBaselineY - the cap height, ~20 at
+// this size) sits ABOVE kBadgeBottom, which is the tuck that makes the two one
+// mark: "NAMp"'s p hangs into the space either side of which "Rations" is
+// narrow enough to clear.
+constexpr int kTitleBaselineY = 132;
+constexpr int kWordmarkBottom = kTitleBaselineY; // "Rations" has no descender
+static_assert(kBadgeTop > kFaceT, "the badge has reached the top of the faceplate");
+// The other end of the band is asserted where the dial legends are defined —
+// kKnobCY and kKnobLabelDY come later in this file.
 
 // --- The main dial row (8), evenly spaced -----------------------------------
 struct KnobSpec {
@@ -578,20 +611,27 @@ static_assert(kGateToggleCX - kTopToggleHitW / 2 > kEqToggleCX + kTopToggleHitW 
 // three quarters of it, so real ink has more clearance than this asks for.
 static_assert(kBypassToggleCY + kToggleLabelDY + 4 <= kKnobCY - kKnobLabelDY - kKnobLabelSize,
               "the utility row's legends have come down onto the dial legends");
+// The wordmark's other end, deferred from its own block above: "Rations" sits
+// under the badge and is the lowest ink the title carries, and the dial legends
+// are what it would reach first.
+static_assert(kWordmarkBottom < kKnobCY - kKnobLabelDY - kKnobLabelSize,
+              "the wordmark has come down onto the dial legends");
 static_assert(kBypassToggleCY + kTopToggleH / 2 <
                   kBypassToggleCY + kToggleLabelDY - kToggleLabelSize,
               "the utility row's legends are drawn on their own switches");
-// The wordmark is drawn as TEXT and its width is measured at draw time, so this
-// is the one clearance on this row a static_assert can only check against a
-// measured number: "Rations" in Michroma at kTitleSize is 279 units wide, so
-// centred on kFaceCX its ink begins at 426. panelrender's ink audit is what
-// checks this for real; the assert catches the gross case at compile time.
-constexpr int kWordmarkInkLeft = 426;
+// The title's leftmost ink. This used to be a hand-measured number — the width
+// of "Rations" at 56 — because the title was text and text is only measurable at
+// draw time. It is DERIVED now: the badge is the wider of the two things stacked
+// here (161 against the word's 141 at kTitleSize), so the block's edge is the
+// badge's edge and arithmetic can say where it is. panelrender still measures
+// the text for real, which is what catches the case where a larger kTitleSize
+// makes the word the wider one and this stops being the block's edge.
+constexpr int kWordmarkInkLeft = kFaceCX - kBadgeW / 2; // 486
 static_assert(kGateToggleCX + kTopToggleHitW / 2 < kWordmarkInkLeft,
               "the utility row has grown into the wordmark");
 // The wordmark's ink ends the same distance the other side of the faceplate
 // centre, and the corner cluster is measured against it below.
-constexpr int kWordmarkInkRight = 2 * kFaceCX - kWordmarkInkLeft; // 706
+constexpr int kWordmarkInkRight = 2 * kFaceCX - kWordmarkInkLeft; // 646
 
 // --- The settings button, top-right of the faceplate ------------------------
 // A LABELLED BUTTON, NOT AN ICON, and that is the whole of this decision. It was

@@ -316,8 +316,13 @@ void RationsEditorView::drawStaticLayer(Canvas &c)
         case geo::Page::Head:
             if (cairo_surface_t *head = mImages.get("head"))
                 c.drawImage(head, Rect(0, 0, geo::kWinW, geo::kWinH));
-            // The wordmark: text in Michroma, centred on the faceplate by measuring it, the way
-            // the author's other plug-ins draw their own names. There is no badge asset.
+            // The wordmark: the NAMp badge with "Rations" under it. The badge is art and the
+            // word is still text in Michroma, centred by measuring it at draw time — so this
+            // must stay in step with panelrender's renderHead(), which draws the same two
+            // things and is what audits them.
+            if (cairo_surface_t *badge = mImages.get("namp-badge"))
+                c.drawImage(badge, Rect(geo::kBadgeCX - geo::kBadgeW * 0.5f, geo::kBadgeTop,
+                                        geo::kBadgeW, geo::kBadgeH));
             c.setFont(Font::Title);
             c.setFontSize(geo::kTitleSize);
             c.setColor(geo::kTextColor);

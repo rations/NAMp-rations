@@ -39,7 +39,7 @@
 // instead of the noise floor of whichever IRs it was handed.
 //
 // Usage:
-//   rations_ircheck <Rations.vst3> --pair <irA.wav> <irB.wav> [--pair ...]
+//   rations_ircheck <NAMp-rations.vst3> --pair <irA.wav> <irB.wav> [--pair ...]
 //                   [--rate 48000] [--block 256] [--seconds 2.0] [--settle-ms 6000]
 //                   [--tolerance-db 0.75]
 
@@ -100,11 +100,12 @@ constexpr double kHalfPi = 1.5707963267948966192313216916398;
 bool parseArgs(int argc, char **argv, Options &opt)
 {
     if (argc < 2) {
-        fprintf(stderr,
-                "usage: rations_ircheck <Rations.vst3> --pair <irA.wav> <irB.wav> [--pair ...]\n"
-                "                       [--rate 48000] [--block 256] [--seconds 2.0]\n"
-                "                       [--captures <dir>] [--settle-ms 6000]\n"
-                "                       [--tolerance-db 0.75]\n");
+        fprintf(
+            stderr,
+            "usage: rations_ircheck <NAMp-rations.vst3> --pair <irA.wav> <irB.wav> [--pair ...]\n"
+            "                       [--rate 48000] [--block 256] [--seconds 2.0]\n"
+            "                       [--captures <dir>] [--settle-ms 6000]\n"
+            "                       [--tolerance-db 0.75]\n");
         return false;
     }
     opt.bundle = argv[1];

@@ -85,6 +85,14 @@ METER_W=80;  METER_H=408      # 4x of the 20x102 draw size
 # size for a 1:1 blit because it IS the window, while a pedal is drawn at 190x280
 # (a 2.46x downscale) and would be soft if it were stored that small and then
 # scaled back up at kScaleMax. ImageCache::getScaled caches the result per size.
+# ---- the head's title badge ------------------------------------------------
+# The NAMp wordmark that sits above "Rations" on the head page. BADGE_W/H is the
+# STORED size; the drawn size is kBadgeW/kBadgeH in src/geometry.h, which is a
+# third of it. make_assets.sh checks the stored height against BADGE_H, so a
+# change to the source art's proportions is a loud failure rather than a badge
+# that quietly draws squashed.
+BADGE_W=512; BADGE_H=152
+
 PEDAL_SRC_W=468; PEDAL_SRC_H=691
 PEDAL_W=190;     PEDAL_H=281   # logical draw size; mirrored in src/geometry.h
 PEDAL_NAMES="boost chorus flanger delay reverb"

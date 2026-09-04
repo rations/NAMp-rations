@@ -11,7 +11,7 @@
 # loads the plug-in with a plain LoadLibraryW of the full path
 # (public.sdk/source/vst/hosting/module_win32.cpp, loadAsPackage), and the
 # default DLL search order does not include the loaded module's own directory,
-# so a DLL next to Rations.vst3 would simply not be found. Everything is linked
+# so a DLL next to NAMp-rations.vst3 would simply not be found. Everything is linked
 # in instead, which is also why makedist-windows.sh can assert that the finished
 # plug-in imports nothing but system DLLs.
 #

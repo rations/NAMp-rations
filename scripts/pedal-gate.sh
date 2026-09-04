@@ -45,7 +45,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-bundle="$build/VST3/Release/Rations.vst3"
+bundle="$build/VST3/Release/NAMp-rations.vst3"
 pedalcheck="$build/rations_pedalcheck"
 for f in "$bundle" "$pedalcheck"; do
     [ -e "$f" ] || { echo "pedal-gate: $f is missing — build first" >&2; exit 1; }

@@ -1,4 +1,4 @@
-// rations-standalone - play the amp head without a DAW.
+// namp-rations-standalone - play the amp head without a DAW.
 //
 // A deliberately small host: one top-level X window, the plug-in's own editor embedded inside it,
 // a run loop the plug-in can register with, and a JACK client feeding the processor. It exists so
@@ -143,10 +143,11 @@ public:
             return;
 
         if (!mJack.suspendProcessing()) {
-            fprintf(stderr,
-                    "rations-standalone: the audio thread did not respond, so the processor was "
-                    "left set up for %d frames\n",
-                    mJack.blockSize());
+            fprintf(
+                stderr,
+                "namp-rations-standalone: the audio thread did not respond, so the processor was "
+                "left set up for %d frames\n",
+                mJack.blockSize());
             return;
         }
 
@@ -159,8 +160,8 @@ public:
         if (ok)
             mSetup = setup;
         else
-            fprintf(stderr, "rations-standalone: the plug-in refused %d frames; keeping %d\n", size,
-                    mSetup.maxSamplesPerBlock);
+            fprintf(stderr, "namp-rations-standalone: the plug-in refused %d frames; keeping %d\n",
+                    size, mSetup.maxSamplesPerBlock);
 
         mComponent->setActive(true);
         mProcessor->setProcessing(true);
@@ -168,7 +169,7 @@ public:
         // still what it is prepared for, and the chunk loop must keep honouring that.
         mJack.resumeProcessing(ok ? size : mSetup.maxSamplesPerBlock);
 
-        printf("rations-standalone: JACK buffer size is now %d frames\n", mJack.blockSize());
+        printf("namp-rations-standalone: JACK buffer size is now %d frames\n", mJack.blockSize());
         fflush(stdout);
     }
 
@@ -270,8 +271,8 @@ private:
 };
 
 //------------------------------------------------------------------------
-// Where to look for Rations.vst3 when no path is given on the command line. The standalone is a
-// host: it loads the same bundle a DAW would, rather than linking the plug-in in, so that
+// Where to look for NAMp-rations.vst3 when no path is given on the command line. The standalone is
+// a host: it loads the same bundle a DAW would, rather than linking the plug-in in, so that
 // dladdr-based resource lookup behaves identically in both. That means it has to be able to FIND
 // the bundle - covering the release tarball (bundle beside the binary), the build tree, and a
 // system or per-user VST3 install.
@@ -289,14 +290,14 @@ std::string findBundle()
         const size_t slash = dir.find_last_of('/');
         if (slash != std::string::npos)
             dir.resize(slash);
-        candidates.push_back(dir + "/Rations.vst3");              // release tarball
-        candidates.push_back(dir + "/VST3/Release/Rations.vst3"); // build tree
+        candidates.push_back(dir + "/NAMp-rations.vst3");              // release tarball
+        candidates.push_back(dir + "/VST3/Release/NAMp-rations.vst3"); // build tree
     }
 
     if (const char *home = getenv("HOME"))
-        candidates.push_back(std::string(home) + "/.vst3/Rations.vst3");
-    candidates.push_back("/usr/local/lib/vst3/Rations.vst3");
-    candidates.push_back("/usr/lib/vst3/Rations.vst3");
+        candidates.push_back(std::string(home) + "/.vst3/NAMp-rations.vst3");
+    candidates.push_back("/usr/local/lib/vst3/NAMp-rations.vst3");
+    candidates.push_back("/usr/lib/vst3/NAMp-rations.vst3");
 
     std::error_code ec;
     for (const auto &path : candidates)
@@ -319,7 +320,7 @@ std::string statePath()
         dir = std::string(home) + "/.config";
     else
         return {};
-    return dir + "/Rations/standalone.state";
+    return dir + "/NAMp-rations/standalone.state";
 }
 
 // Restores what the last session was playing. A truncated or foreign file is not an error worth
@@ -350,7 +351,8 @@ void loadState(Vst::IComponent *component, Vst::IEditController *controller)
     }
     fclose(file);
     if (tooLarge) {
-        fprintf(stderr, "rations-standalone: %s is implausibly large; ignoring it\n", path.c_str());
+        fprintf(stderr, "namp-rations-standalone: %s is implausibly large; ignoring it\n",
+                path.c_str());
         return;
     }
     if (bytes.empty())
@@ -358,7 +360,7 @@ void loadState(Vst::IComponent *component, Vst::IEditController *controller)
 
     MemoryStream stream(bytes.data(), static_cast<TSize>(bytes.size()));
     if (component->setState(&stream) != kResultOk) {
-        fprintf(stderr, "rations-standalone: %s was rejected; starting empty\n", path.c_str());
+        fprintf(stderr, "namp-rations-standalone: %s was rejected; starting empty\n", path.c_str());
         return;
     }
     // The controller reads the SAME blob from the start, which is what a host does. Its reader is
@@ -386,29 +388,30 @@ void saveState(Vst::IComponent *component)
 
     FILE *file = fopen(path.c_str(), "wb");
     if (!file) {
-        fprintf(stderr, "rations-standalone: cannot write %s\n", path.c_str());
+        fprintf(stderr, "namp-rations-standalone: cannot write %s\n", path.c_str());
         return;
     }
     const size_t size = static_cast<size_t>(stream.getSize());
     if (size > 0 && fwrite(stream.getData(), 1, size, file) != size)
-        fprintf(stderr, "rations-standalone: short write to %s\n", path.c_str());
+        fprintf(stderr, "namp-rations-standalone: short write to %s\n", path.c_str());
     fclose(file);
 }
 
 //------------------------------------------------------------------------
 void printUsage()
 {
-    printf("usage: rations-standalone [options] [path to Rations.vst3]\n"
+    printf("usage: namp-rations-standalone [options] [path to NAMp-rations.vst3]\n"
            "\n"
-           "  Rations as a JACK application: the plug-in's own editor in a window of its own,\n"
-           "  with the amp on JACK's ports. A JACK server must already be running.\n"
+           "  NAMp Rations as a JACK application: the plug-in's own editor in a window of its\n"
+           "  own, with the amp on JACK's ports. A JACK server must already be running.\n"
            "\n"
            "  --no-state    do not read or write %s\n"
            "  -h, --help    this message\n"
            "\n"
-           "  Ports: Rations:in, Rations:out_l, Rations:out_r (connected to the first physical\n"
-           "  ports found) and Rations:midi_in for a footswitch, which is left unconnected\n"
-           "  because guessing which MIDI source is the pedal would be worse than not trying.\n"
+           "  Ports: NAMp-rations:in, NAMp-rations:out_l, NAMp-rations:out_r (connected to the\n"
+           "  first physical ports found) and NAMp-rations:midi_in for a footswitch, which is\n"
+           "  left unconnected because guessing which MIDI source is the pedal would be worse\n"
+           "  than not trying.\n"
            "\n"
            "  The bundle is searched for in $RATIONS_VST3, then beside this binary, then the\n"
            "  build tree, ~/.vst3, /usr/local/lib/vst3 and /usr/lib/vst3.\n",
@@ -434,7 +437,7 @@ int main(int argc, char **argv)
             continue;
         }
         if (!arg.empty() && arg[0] == '-') {
-            fprintf(stderr, "rations-standalone: unknown option %s\n", arg.c_str());
+            fprintf(stderr, "namp-rations-standalone: unknown option %s\n", arg.c_str());
             printUsage();
             return 2;
         }
@@ -454,7 +457,7 @@ int main(int argc, char **argv)
     std::string error;
     auto module = VST3::Hosting::Module::create(modulePath, error);
     if (!module) {
-        fprintf(stderr, "rations-standalone: cannot load %s\n  %s\n", modulePath.c_str(),
+        fprintf(stderr, "namp-rations-standalone: cannot load %s\n  %s\n", modulePath.c_str(),
                 error.c_str());
         printUsage();
         return 1;
@@ -472,20 +475,21 @@ int main(int argc, char **argv)
         provider = nullptr;
     }
     if (!provider) {
-        fprintf(stderr, "rations-standalone: no audio effect class in %s\n", modulePath.c_str());
+        fprintf(stderr, "namp-rations-standalone: no audio effect class in %s\n",
+                modulePath.c_str());
         return 1;
     }
 
     Vst::IComponent *component = provider->getComponent();
     Vst::IEditController *controller = provider->getController();
     if (!component || !controller) {
-        fprintf(stderr, "rations-standalone: the plug-in did not provide both parts\n");
+        fprintf(stderr, "namp-rations-standalone: the plug-in did not provide both parts\n");
         return 1;
     }
 
     FUnknownPtr<Vst::IAudioProcessor> processor(component);
     if (!processor) {
-        fprintf(stderr, "rations-standalone: the plug-in has no IAudioProcessor\n");
+        fprintf(stderr, "namp-rations-standalone: the plug-in has no IAudioProcessor\n");
         return 1;
     }
 
@@ -505,7 +509,7 @@ int main(int argc, char **argv)
     // A first connection just to learn the server's rate and block size, so setupProcessing can be
     // told the truth before the component is activated.
     jack_status_t status = static_cast<jack_status_t>(0);
-    jack_client_t *probe = jack_client_open("Rations-probe", JackNoStartServer, &status);
+    jack_client_t *probe = jack_client_open("NAMp-rations-probe", JackNoStartServer, &status);
     double sampleRate = 48000.0;
     int blockSize = 1024;
     if (probe) {
@@ -513,7 +517,8 @@ int main(int argc, char **argv)
         blockSize = static_cast<int>(jack_get_buffer_size(probe));
         jack_client_close(probe);
     } else {
-        fprintf(stderr, "rations-standalone: no JACK server; continuing with the editor only\n");
+        fprintf(stderr,
+                "namp-rations-standalone: no JACK server; continuing with the editor only\n");
     }
 
     Vst::ProcessSetup setup = {};
@@ -522,7 +527,7 @@ int main(int argc, char **argv)
     setup.maxSamplesPerBlock = blockSize;
     setup.sampleRate = sampleRate;
     if (processor->setupProcessing(setup) != kResultOk) {
-        fprintf(stderr, "rations-standalone: the plug-in rejected the process setup\n");
+        fprintf(stderr, "namp-rations-standalone: the plug-in rejected the process setup\n");
         return 1;
     }
 
@@ -538,13 +543,13 @@ int main(int argc, char **argv)
     ComponentHandler handler(jack);
     controller->setComponentHandler(&handler);
 
-    if (probe && !jack.open("Rations", processor, component, &route))
-        fprintf(stderr, "rations-standalone: continuing without audio\n");
+    if (probe && !jack.open("NAMp-rations", processor, component, &route))
+        fprintf(stderr, "namp-rations-standalone: continuing without audio\n");
 
     // --- window and editor -------------------------------------------
     ::Display *display = XOpenDisplay(nullptr);
     if (!display) {
-        fprintf(stderr, "rations-standalone: cannot open the X display\n");
+        fprintf(stderr, "namp-rations-standalone: cannot open the X display\n");
         return 1;
     }
 
@@ -552,7 +557,7 @@ int main(int argc, char **argv)
     // actually wants rather than at a constant that would have to be kept in step with the panel.
     IPtr<IPlugView> view = owned(controller->createView(Vst::ViewType::kEditor));
     if (view && view->isPlatformTypeSupported(kPlatformTypeX11EmbedWindowID) != kResultTrue) {
-        fprintf(stderr, "rations-standalone: the plug-in has no X11 editor\n");
+        fprintf(stderr, "namp-rations-standalone: the plug-in has no X11 editor\n");
         view = nullptr;
     }
 
@@ -571,11 +576,11 @@ int main(int argc, char **argv)
     ::Window window = XCreateSimpleWindow(
         display, RootWindow(display, screen), 0, 0, static_cast<unsigned>(winW),
         static_cast<unsigned>(winH), 0, BlackPixel(display, screen), BlackPixel(display, screen));
-    XStoreName(display, window, "Rations");
+    XStoreName(display, window, "NAMp Rations");
     // So the desktop entry's StartupWMClass matches and the window gets the right icon.
     XClassHint classHint = {};
-    char resName[] = "rations-standalone";
-    char resClass[] = "Rations";
+    char resName[] = "namp-rations-standalone";
+    char resClass[] = "NAMp Rations";
     classHint.res_name = resName;
     classHint.res_class = resClass;
     XSetClassHint(display, window, &classHint);
@@ -595,7 +600,7 @@ int main(int argc, char **argv)
         view->setFrame(&runLoop);
         if (view->attached(reinterpret_cast<void *>(static_cast<uintptr_t>(window)),
                            kPlatformTypeX11EmbedWindowID) != kResultTrue) {
-            fprintf(stderr, "rations-standalone: the editor refused to attach\n");
+            fprintf(stderr, "namp-rations-standalone: the editor refused to attach\n");
             view = nullptr;
         }
     }

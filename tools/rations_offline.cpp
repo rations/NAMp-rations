@@ -17,7 +17,7 @@
 // that a zero now means the directory was wrong rather than that the build was.
 //
 // Usage:
-//   rations_offline <Rations.vst3> --captures <dir> [--rate 48000] [--block 256]
+//   rations_offline <NAMp-rations.vst3> --captures <dir> [--rate 48000] [--block 256]
 //                   [--seconds 2.0] [--gain 0.0] [--sweep] [--overrun N] [--settle-ms N]
 //                   [--dump <file>] [--save-state <file>] [--load-state <file>]
 //
@@ -164,7 +164,7 @@ bool parseArgs(int argc, char **argv, Options &o)
         }
     }
     if (o.bundle.empty()) {
-        fprintf(stderr, "usage: rations_offline <Rations.vst3> --captures <dir> [--rate N] "
+        fprintf(stderr, "usage: rations_offline <NAMp-rations.vst3> --captures <dir> [--rate N] "
                         "[--block N] [--seconds S] [--gain 0..1] [--sweep] [--overrun N] "
                         "[--settle-ms N]\n");
         return false;

@@ -30,7 +30,7 @@ void RunLoop::trace(const char *fmt, ...) const
         return;
     va_list args;
     va_start(args, fmt);
-    fputs("rations-standalone: ", stderr);
+    fputs("namp-rations-standalone: ", stderr);
     vfprintf(stderr, fmt, args);
     fputc('\n', stderr);
     va_end(args);

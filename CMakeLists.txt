@@ -6,7 +6,7 @@
 # the host's own window and painted with Cairo/FreeType — no plug-in or GUI framework.
 #
 # TWO products on Linux, ONE on Windows. The VST3 bundle is the plug-in and is all Windows ships;
-# Linux adds rations-standalone, which hosts that same bundle on JACK so the amp can be played
+# Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can be played
 # without a DAW. What is still absent, and is the real distinction from the parent NAMp, is the
 # RACK: nothing here hosts anyone else's plug-ins, scans for them or links LV2, because the
 # pedalboard is built into the plug-in rather than hosting other people's. The plug-in itself links
@@ -379,6 +379,8 @@ set(RATIONS_FONT_FILES
 # what the editor loads.
 set(RATIONS_IMG_FILES
     img/head.png
+    # The head's title badge, drawn above "Rations" — see kBadgeH in src/geometry.h.
+    img/namp-badge.png
     img/cabinet.png
     img/dial.png
     img/led_on.png
@@ -452,7 +454,7 @@ endif()
 #
 # The sources go straight into the bundle target rather than through an
 # intermediate static library. NAMp needed that library because its standalone
-# LINKS the plug-in's sources; rations-standalone LOADS the built bundle instead
+# LINKS the plug-in's sources; namp-rations-standalone LOADS the built bundle instead
 # — as a module, the way a DAW does, so the editor resolves its art through
 # dladdr by the same route in both — and therefore compiles none of this. A
 # library would only be a second name for one thing.
@@ -502,7 +504,15 @@ set(RATIONS_PLUGIN_SOURCES
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
 
-smtg_add_vst3plugin(Rations ${RATIONS_PLUGIN_SOURCES})
+# The TARGET stays "Rations" and the PACKAGE is what carries the product name, which is the
+# whole reason this is written with PACKAGE_NAME rather than by renaming the target. The target
+# name is threaded through every target_link_libraries, add_dependencies and get_target_property
+# in this file and through nothing a user ever sees; the package name is the bundle folder
+# NAMp-rations.vst3 and the binary inside it, which is all a user sees and none of what the build
+# refers to. SOURCES_LIST is mandatory once PACKAGE_NAME is given — without it the sources land in
+# PARAMS_UNPARSED_ARGUMENTS and the target is built with none
+# (vst3sdk/cmake/modules/SMTG_AddVST3Library.cmake).
+smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${RATIONS_PLUGIN_SOURCES})
 
 # ---------------------------------------------------------------------------
 # Put the Windows DLL inside its own bundle.
@@ -521,7 +531,7 @@ smtg_add_vst3plugin(Rations ${RATIONS_PLUGIN_SOURCES})
 #
 # NAME. module_win32.cpp's validateBundleStructure requires the inner DLL to be
 # named exactly like the bundle folder, i.e.
-# Rations.vst3/Contents/x86_64-win/Rations.vst3, which is what the SUFFIX/PREFIX
+# NAMp-rations.vst3/Contents/x86_64-win/NAMp-rations.vst3, which is what the SUFFIX/PREFIX
 # produce. A DLL called Rations.dll in the right folder does not load.
 if(RATIONS_WINDOWS)
     get_target_property(RATIONS_PKG_PATH Rations SMTG_PLUGIN_PACKAGE_PATH)
@@ -730,7 +740,7 @@ if(NOT RATIONS_WINDOWS)
         add_dependencies(rations_jackcheck Rations)
 
         # -------------------------------------------------------------------
-        # rations-standalone — the amp without a DAW: one X window, the plug-in's
+        # namp-rations-standalone — the amp without a DAW: one X window, the plug-in's
         # own editor embedded in it, a Linux::IRunLoop the editor registers with,
         # and a JACK client driving the processor. A footswitch reaches it on a
         # JACK MIDI port, and what the session was playing is kept in
@@ -747,7 +757,7 @@ if(NOT RATIONS_WINDOWS)
         # here", not two - and, like the gate, its absence must never stop the
         # plug-in from building.
         # -------------------------------------------------------------------
-        add_executable(rations-standalone
+        add_executable(namp-rations-standalone
             ${RATIONS_ROOT}/standalone/main.cpp
             ${RATIONS_ROOT}/standalone/runloop.h
             ${RATIONS_ROOT}/standalone/runloop.cpp
@@ -765,17 +775,17 @@ if(NOT RATIONS_WINDOWS)
             ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
             ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
         )
-        target_include_directories(rations-standalone
+        target_include_directories(namp-rations-standalone
             PRIVATE ${RATIONS_ROOT}/src ${RATIONS_JACK_INCLUDE_DIRS})
-        target_link_libraries(rations-standalone
+        target_link_libraries(namp-rations-standalone
             PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES} ${RATIONS_PLATFORM_GUI_LIBS})
-        target_link_directories(rations-standalone PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
-        target_compile_features(rations-standalone PRIVATE cxx_std_17)
-        target_compile_options(rations-standalone PRIVATE -Wall)
-        add_dependencies(rations-standalone Rations)
+        target_link_directories(namp-rations-standalone PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
+        target_compile_features(namp-rations-standalone PRIVATE cxx_std_17)
+        target_compile_options(namp-rations-standalone PRIVATE -Wall)
+        add_dependencies(namp-rations-standalone Rations)
     else()
         message(STATUS "jack not found - rations_jackcheck (the live switch gate) and "
-                       "rations-standalone will not be built")
+                       "namp-rations-standalone will not be built")
     endif()
 endif()
 
