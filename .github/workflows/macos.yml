@@ -1,0 +1,144 @@
+# macOS build and gates.
+#
+# WHY CI AND NOT A CROSS BUILD. The rest of this project is built on one Linux
+# box, Windows included: MinGW cross-compiles it and Wine runs every gate on it,
+# so a Windows regression is caught on the machine that caused it. macOS has no
+# equivalent to either half. Cross-compiling to Darwin is possible with osxcross,
+# but it needs a macOS SDK extracted from Xcode -- which Apple licenses for use
+# on Apple hardware only -- and, decisively, nothing built that way could be RUN:
+# there is no Wine for Darwin. A macOS runner gives a native toolchain, a
+# licensed SDK, and a place where the validator and panelrender actually execute.
+#
+# TWO RUNNERS, ONE SLICE EACH, JOINED BY LIPO LATER. A single arm64 runner can
+# compile an x86_64 slice, but it cannot run that slice's gates without assuming
+# Rosetta 2 is installed -- so every proof would silently only ever cover one
+# architecture. Each slice is therefore built and gated on a host of its own
+# architecture, and only already-proven binaries are joined.
+#
+# WHAT THIS DOES NOT COVER, and it is a large gap rather than a small one: every
+# capture-dependent proof (rations_offline, ir-gate.sh, rations_switchcheck, most
+# of rations_midicheck) needs .nam banks, and the plug-in ships none because the
+# captures are not ours to distribute. The macOS DSP path is therefore unmeasured.
+# See CLAUDE.md's flagged gap and the fixture-generator phase that closes it.
+name: macOS
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.arch }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both slices always run to completion: when one architecture fails and
+      # the other does not, that difference IS the finding, and cancelling the
+      # sibling would throw it away.
+      fail-fast: false
+      matrix:
+        include:
+          # macos-14 is Apple Silicon. The x86_64 label is the volatile one:
+          # GitHub retires macOS images on a rolling schedule and the Intel
+          # label has moved before (macos-12 went, macos-13 was put on a
+          # deprecation path, and macos-15-intel exists as a replacement). If
+          # the x86_64 job fails immediately with an unresolvable runner label,
+          # that is what happened -- change the label here, nothing else.
+          #
+          # fail-fast is off partly for this: a dead Intel label must not stop
+          # the arm64 slice from building and reporting.
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SDK is a superproject and only four of its submodules are needed;
+      # `submodules: recursive` on the checkout action would additionally pull
+      # vstgui4, doc and tutorials, none of which this project builds. Same
+      # sequence CLAUDE.md documents for a local clone.
+      - name: Submodules
+        run: |
+          git submodule update --init --recursive \
+              NeuralAmpModelerCore AudioDSPTools eigen
+          git submodule update --init vst3sdk
+          git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
+
+      # Installed one at a time and only when absent. GitHub's images already
+      # carry some of these, and `brew install` on a formula that is present but
+      # outdated can decide to upgrade it and fail on a linking conflict with
+      # something else preinstalled -- which would break the build for a reason
+      # having nothing to do with this project.
+      - name: Build tools
+        run: |
+          for f in meson ninja pkg-config; do
+            brew list --formula "$f" >/dev/null 2>&1 || brew install "$f"
+          done
+          cmake --version; meson --version; ninja --version
+
+      # Keyed on the script rather than on a version string: every pin lives in
+      # that file, so a changed pin is a changed hash and a rebuilt sysroot.
+      - name: Cache the dependency sysroot
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/third_party/mac-deps
+          key: macdeps-${{ matrix.arch }}-${{ hashFiles('scripts/build-mac-deps.sh') }}
+
+      # Run unconditionally, cache hit or not: the script is idempotent through
+      # per-module stamp files that live inside the cached tree, so on a hit it
+      # is a fast no-op that still prints the sysroot roll-call and still fails
+      # if a cached tree is incomplete or has acquired a dylib. Gating it on
+      # cache-miss would mean a corrupt cache is discovered at link time.
+      - name: Dependency sysroot (static cairo/freetype/pixman/png/zlib)
+        run: scripts/build-mac-deps.sh
+        env:
+          RATIONS_MAC_ARCH: ${{ matrix.arch }}
+
+      # PKG_CONFIG_LIBDIR points at our sysroot and NOTHING else, which is what
+      # keeps Homebrew's dylibs out of the link. Without it pkg_check_modules
+      # would happily find /opt/homebrew's cairo and produce a bundle that loads
+      # on this runner and on no user's machine.
+      #
+      # Set inside the script rather than in an `env:` block because it has to
+      # expand $HOME, and an `env:` value is an Actions expression in which
+      # $HOME is literal text.
+      - name: Configure
+        run: |
+          export PKG_CONFIG_LIBDIR="$HOME/third_party/mac-deps/${{ matrix.arch }}/sysroot/lib/pkgconfig"
+          export PKG_CONFIG_PATH=""
+          test -d "$PKG_CONFIG_LIBDIR" || { echo "no sysroot at $PKG_CONFIG_LIBDIR" >&2; exit 1; }
+          cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+
+      # PHASE M1 SCOPE. panelrender is the first gate on a new platform for the
+      # same reason it was on Windows: it proves cairo, FreeType, PNG decode,
+      # NanoSVG and the whole of src/gfx work here before a single line of window
+      # code exists, and it audits every art asset and every legend against
+      # geometry.h while it does so. The plug-in target itself is built by the
+      # next phase, which is also when src/platform/macplugview.mm arrives.
+      - name: Build panelrender
+        run: cmake --build build --target panelrender --parallel
+
+      - name: Render and audit the editor pages
+        run: |
+          mkdir -p panels
+          ./build/panelrender panels/mac resources 1.0
+
+      # Uploaded so the pages can be LOOKED AT. Three of the defects this
+      # project's art has produced were invisible to every audit and visible
+      # immediately in the render.
+      - name: Upload rendered pages
+        uses: actions/upload-artifact@v4
+        with:
+          name: panels-${{ matrix.arch }}
+          path: panels/*.png
+          if-no-files-found: error

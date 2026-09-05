@@ -9,6 +9,13 @@
 #else
 #include <dlfcn.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+// _NSGetExecutablePath, the macOS stand-in for /proc/self/exe, and PATH_MAX for
+// the realpath buffer it feeds.
+#include <climits>
+#include <mach-o/dyld.h>
+#include <stdlib.h>
+#endif
 #endif
 
 #include <cstdint>
@@ -130,6 +137,31 @@ std::string fromExecutablePath()
 
 #if defined(_WIN32)
     exePath = moduleFileName(nullptr); // nullptr = the running executable
+#elif defined(__APPLE__)
+    // There is no /proc on macOS. _NSGetExecutablePath is the documented
+    // replacement and has an unusual contract worth stating: it is called
+    // TWICE, first with a zero size to be told the length it needs (returning
+    // -1, which is success for that call), then with a buffer of that size.
+    //
+    // It may hand back a path containing symlinks or "..", which is why the
+    // result goes through realpath: parentOf() walks the string, and a path
+    // that has not been resolved can put the bundle's Resources directory two
+    // components from where it really is.
+    //
+    // The plug-in never reaches this function - a bundle resolves its art
+    // through fromModulePath()'s dladdr, which is correct on macOS as it
+    // stands. This path serves the offline tools, which run as bare
+    // executables outside any bundle, and it silently returned nothing on
+    // macOS while it read /proc/self/exe.
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    if (size == 0)
+        return std::string();
+    std::vector<char> buf(size);
+    if (_NSGetExecutablePath(buf.data(), &size) != 0)
+        return std::string();
+    char resolved[PATH_MAX];
+    exePath = realpath(buf.data(), resolved) ? std::string(resolved) : std::string(buf.data());
 #else
     char buf[4096];
     const ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);

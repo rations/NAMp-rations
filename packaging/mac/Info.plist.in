@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The VST3 bundle's Info.plist.
+
+  Supplied rather than left to CMake's default, and rather than to the SDK's
+  smtg_target_set_bundle(), because neither produces this file under Ninja: the
+  SDK's plist handling is entirely inside if(XCODE) branches, and CMake's own
+  template knows nothing about VST3. Configured by CMakeLists.txt with
+  configure_file(), so every value below comes from one place and the version
+  cannot drift from PROJECT_VERSION.
+
+  Two keys are load-bearing and are not boilerplate:
+
+  CFBundlePackageType must be BNDL. The host loads this with CFBundleCreate
+  (public.sdk/source/vst/hosting/module_mac.mm), and a bundle typed APPL is not
+  what a plug-in host is looking for.
+
+  NSHighResolutionCapable must be true, or AppKit renders the editor's view into
+  a 1x backing store and scales the result up -- the panel would be soft on every
+  Retina display, which is every Mac sold for a decade. The editor reads the real
+  backing scale from the window; this key is what lets there be one.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>@RATIONS_BUNDLE_EXECUTABLE@</string>
+	<key>CFBundleIdentifier</key>
+	<string>@RATIONS_BUNDLE_IDENTIFIER@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>@RATIONS_BUNDLE_DISPLAY_NAME@</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@RATIONS_BUNDLE_VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@RATIONS_BUNDLE_VERSION@</string>
+	<key>CFBundleGetInfoString</key>
+	<string>@RATIONS_BUNDLE_DISPLAY_NAME@ @RATIONS_BUNDLE_VERSION@</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>@RATIONS_BUNDLE_COPYRIGHT@</string>
+	<key>CSResourcesFileMapped</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
+</dict>
+</plist>
