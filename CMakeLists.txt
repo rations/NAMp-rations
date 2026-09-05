@@ -188,6 +188,34 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
+# The presets above cannot reach the standard library, and on GCC 12 that is not
+# hypothetical: libstdc++ declares `namespace std` with _GLIBCXX_VISIBILITY(default),
+# an explicit attribute, and an explicit attribute beats -fvisibility=hidden. So
+# std::__detail::__to_chars_10_impl<T>::__digits - a function-local static in an
+# inline template, i.e. exactly the shape described above - reaches the dynamic
+# table with STB_GNU_UNIQUE binding no matter what the presets say, and the
+# packaging script's unique-symbol gate rejects the bundle.
+#
+# -fno-gnu-unique makes GCC emit STB_GLOBAL for those statics instead. That
+# removes the binding itself rather than hiding one instance of it, which is the
+# property that actually matters: a unique symbol is resolved through a table
+# dlopen's RTLD_LOCAL does not scope, and STB_GLOBAL in a bundle whose symbols
+# are otherwise hidden and --exclude-libs'd is not.
+#
+# Note that these two symbols are libstdc++'s, not NAM's - a shared digit table
+# is harmless in a way a shared architecture registry is not. The gate is a
+# blanket "no unique symbols", though, and it is right to be: the safe cases
+# cannot be told from the dangerous ones by name, and whitelisting the first one
+# is how the check stops catching the second.
+#
+# GCC 13 reworked __to_chars_10_impl and the statics went away, so a newer
+# toolchain never produces them; the flag is a no-op there rather than a
+# behaviour change, and is left unconditional on GCC for that reason. Clang
+# never emits STB_GNU_UNIQUE at all and does not take the flag.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-fno-gnu-unique)
+endif()
+
 # ---------------------------------------------------------------------------
 # Platform split. One product on both platforms; the only OS-specific code is
 # the single window class in src/platform, which arrives with the editor.
@@ -355,6 +383,32 @@ target_include_directories(RationsDsp PUBLIC
 # C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20
 # library feature. The plug-in itself stays at the SDK's C++17 baseline.
 target_compile_features(RationsDsp PUBLIC cxx_std_20)
+
+# AudioDSPTools' ResamplingContainer.h declares, at class scope,
+#
+#     using LanczosResampler = LanczosResampler<T, NCHANS, A>;
+#
+# which redeclares a name already used in that scope to mean something else.
+# [basic.scope.class]p2 forbade that, and GCC enforces it as a permerror - an
+# error that only -fpermissive downgrades. GCC 14 implemented P1787R6, which
+# deleted the rule, so the same header compiles clean there and the diagnostic
+# is a pre-14 artefact rather than a defect in the code. It is why this tree
+# builds on excalibur (GCC 14) and stops on daedalus (GCC 12).
+#
+# This is PUBLIC because it belongs to the header, not to this library: the
+# AudioDSPTools include path above is PUBLIC, so every consumer that includes
+# the resampler (Rations, rations_fadecheck, rations_switchcheck,
+# rations_racecheck, rations_rtcheck, and anything added later) meets the same
+# permerror, and each would otherwise have to rediscover the flag. Whoever
+# publishes the header publishes what compiling it takes.
+#
+# Version-gated rather than unconditional so the loosened checking disappears on
+# a compiler that does not need it, instead of quietly outliving its reason. The
+# upstream tree is a pinned submodule, so patching the line there would be
+# undone by the next submodule update.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+    target_compile_options(RationsDsp PUBLIC -fpermissive)
+endif()
 # -fPIC has no meaning for PE and MinGW warns that it is being ignored; code in
 # a Windows DLL is relocated by the loader, not by position-independent codegen.
 if(RATIONS_WINDOWS)
