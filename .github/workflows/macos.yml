@@ -168,9 +168,15 @@ jobs:
       - name: Exports are exactly the three VST3 entry points
         run: |
           BIN=build/VST3/Release/NAMp-rations.vst3/Contents/MacOS/NAMp-rations
-          GOT="$(nm -gU "$BIN" | awk '{print $3}' | sort | tr '\n' ' ')"
-          echo "exports: $GOT"
-          test "$GOT" = "_GetPluginFactory _bundleEntry _bundleExit " \
+          # Both sides sorted the same way and under LC_ALL=C: a plain sort
+          # collates by locale, where _GetPluginFactory lands AFTER _bundleEntry
+          # because case is folded, so comparing against a hand-written order
+          # fails on a correct bundle. Found by dry-running the packaging script
+          # against stub tools rather than on a runner.
+          GOT="$(nm -gU "$BIN" | awk '{print $3}' | LC_ALL=C sort -u)"
+          WANT="$(printf '%s\n' _GetPluginFactory _bundleEntry _bundleExit | LC_ALL=C sort)"
+          echo "$GOT"
+          test "$GOT" = "$WANT" \
             || { echo "unexpected exported symbols" >&2; exit 1; }
 
       # The mirror of the imports gate, and the thing that proves the static
@@ -216,15 +222,71 @@ jobs:
           path: panels/*.png
           if-no-files-found: error
 
-      # The slice itself, for the universal join. Note what is NOT here: the SDK
-      # ad-hoc-signs only moduleinfo.json under a Ninja build -- smtg_target_codesign
-      # is entirely inside an if(XCODE) branch -- so the bundle carries no
-      # _CodeSignature of its own. The linker's own default ad-hoc signature is what
-      # makes the arm64 slice executable at all; signing the assembled bundle is the
-      # packaging phase's job.
-      - name: Upload the bundle
+      # AS A TARBALL, not as a directory, and both halves of that matter.
+      # upload-artifact does not preserve file permissions, and it re-roots a
+      # directory path at its contents -- so uploading the bundle directly would
+      # arrive as a bare Contents/ with the .vst3 wrapper name gone and the
+      # executable bit off. tar preserves both.
+      #
+      # Note what is NOT in here: the SDK ad-hoc-signs only moduleinfo.json under a
+      # Ninja build (smtg_target_codesign is entirely inside an if(XCODE) branch),
+      # so the bundle carries no _CodeSignature of its own yet. The linker's own
+      # default ad-hoc signature is what makes the arm64 slice executable at all;
+      # signing the assembled bundle is the packaging job's, and has to happen after
+      # lipo and strip have finished rewriting the binary.
+      - name: Pack the slice
+        run: tar -czf "bundle-${{ matrix.arch }}.tar.gz" -C build/VST3/Release NAMp-rations.vst3
+
+      - name: Upload the slice
         uses: actions/upload-artifact@v4
         with:
           name: bundle-${{ matrix.arch }}
-          path: build/VST3/Release/NAMp-rations.vst3
+          path: bundle-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # The universal binary. Runs only when BOTH slices have passed their own gates,
+  # which is the whole design: lipo joins binaries that have already been proved
+  # on a host of their own architecture, never two halves of one cross build.
+  # ---------------------------------------------------------------------------
+  universal:
+    name: universal binary
+    needs: build
+    runs-on: macos-14
+    steps:
+      # For scripts/makedist-mac.sh and for the version, which it reads out of
+      # CMakeLists.txt the same way the Linux and Windows scripts do so the three
+      # releases cannot be tagged differently. No submodules and no build here.
+      - uses: actions/checkout@v4
+
+      - name: Download both slices
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bundle-*
+          path: slices
+
+      - name: Unpack
+        run: |
+          for arch in arm64 x86_64; do
+            mkdir -p "slices/$arch"
+            tar -xzf "slices/bundle-$arch/bundle-$arch.tar.gz" -C "slices/$arch"
+            test -x "slices/$arch/NAMp-rations.vst3/Contents/MacOS/NAMp-rations" \
+              || { echo "slice $arch did not unpack with its executable bit" >&2; exit 1; }
+          done
+
+      # Joins, strips, gates (architectures, exports, dependencies, resources),
+      # ad-hoc signs, and archives with ditto -- then extracts the archive again and
+      # re-verifies the signature, which is the only thing that proves the archiver
+      # did not drop it.
+      - name: Package
+        run: |
+          scripts/makedist-mac.sh \
+            --bundle slices/arm64/NAMp-rations.vst3 \
+            --bundle slices/x86_64/NAMp-rations.vst3
+
+      - name: Upload the release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: NAMp-rations-macos-universal
+          path: dist/*.zip
           if-no-files-found: error
