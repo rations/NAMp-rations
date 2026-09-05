@@ -119,19 +119,92 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
 
-      # PHASE M1 SCOPE. panelrender is the first gate on a new platform for the
-      # same reason it was on Windows: it proves cairo, FreeType, PNG decode,
-      # NanoSVG and the whole of src/gfx work here before a single line of window
-      # code exists, and it audits every art asset and every legend against
-      # geometry.h while it does so. The plug-in target itself is built by the
-      # next phase, which is also when src/platform/macplugview.mm arrives.
-      - name: Build panelrender
-        run: cmake --build build --target panelrender --parallel
+      # Everything: the bundle, the SDK's validator and moduleinfotool, and every
+      # offline tool. rations_jackcheck and rations_rtcheck are Linux-gated in
+      # CMakeLists.txt and are simply absent here.
+      - name: Build
+        run: cmake --build build --parallel
 
+      # panelrender is the first gate on a new platform for the same reason it was
+      # on Windows: it proves cairo, FreeType, PNG decode, NanoSVG and the whole of
+      # src/gfx before any window code exists, and it audits every art asset and
+      # every legend against geometry.h while it does so.
       - name: Render and audit the editor pages
         run: |
           mkdir -p panels
           ./build/panelrender panels/mac resources 1.0
+
+      # moduleinfo.json is generated for us: SMTG_CREATE_MODULE_INFO defaults ON
+      # and its POST_BUILD step runs a natively-built moduleinfotool, which is why
+      # this needs none of the explicit generation makedist-windows.sh does under
+      # Wine. Asserted rather than assumed, because a silent failure there would
+      # leave the bundle valid and the file missing.
+      - name: moduleinfo.json
+        run: |
+          BUNDLE=build/VST3/Release/NAMp-rations.vst3
+          test -s "$BUNDLE/Contents/Resources/moduleinfo.json" \
+            || { echo "no moduleinfo.json in the bundle" >&2; exit 1; }
+          head -c 200 "$BUNDLE/Contents/Resources/moduleinfo.json"; echo
+
+      # A green validator is a FLOOR, never a gate -- three separate things in this
+      # project have been wrong while it passed all 47 tests. It is run because it
+      # is cheap and catches gross breakage, not because it settles anything.
+      - name: SDK validator
+        run: |
+          BUNDLE=build/VST3/Release/NAMp-rations.vst3
+          VALIDATOR=build/bin/Release/validator
+          test -x "$VALIDATOR" || VALIDATOR=build/bin/validator
+          OUT="$("$VALIDATOR" "$BUNDLE" 2>&1 || true)"
+          echo "$OUT"
+          echo "$OUT" | grep -qE '^Result: [0-9]+ tests passed, 0 tests failed' \
+            || { echo "the SDK validator did not pass" >&2; exit 1; }
+
+      # The mirror of makedist-windows.sh's objdump export gate. A VST3 bundle
+      # offers exactly three entry points; anything else in the dynamic table is a
+      # symbol two SDK versions in one host could interpose on each other.
+      #
+      # nm -gU: global (-g) and defined here (-U), so undefined imports are not
+      # counted. The leading underscore is the Mach-O C symbol prefix.
+      - name: Exports are exactly the three VST3 entry points
+        run: |
+          BIN=build/VST3/Release/NAMp-rations.vst3/Contents/MacOS/NAMp-rations
+          GOT="$(nm -gU "$BIN" | awk '{print $3}' | sort | tr '\n' ' ')"
+          echo "exports: $GOT"
+          test "$GOT" = "_GetPluginFactory _bundleEntry _bundleExit " \
+            || { echo "unexpected exported symbols" >&2; exit 1; }
+
+      # The mirror of the imports gate, and the thing that proves the static
+      # sysroot was actually linked: a bundle that names /opt/homebrew loads on
+      # this runner and on nobody else's machine.
+      - name: Links nothing but system libraries
+        run: |
+          BIN=build/VST3/Release/NAMp-rations.vst3/Contents/MacOS/NAMp-rations
+          otool -L "$BIN"
+          BAD="$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
+                 | grep -vE '^(/usr/lib/|/System/Library/Frameworks/)' || true)"
+          test -z "$BAD" || { echo "non-system dependencies:"; echo "$BAD"; exit 1; }
+
+      # The same four both makedist scripts assert. A bundle that loads and then
+      # draws flat rectangles is a worse failure than one that does not load.
+      - name: Load-bearing resources are in the bundle
+        run: |
+          RES=build/VST3/Release/NAMp-rations.vst3/Contents/Resources
+          for f in img/head.png img/File.svg \
+                   fonts/Michroma-Regular.ttf fonts/Roboto-Regular.ttf; do
+            test -s "$RES/$f" || { echo "missing $f" >&2; exit 1; }
+          done
+          echo "all four present"
+
+      # The one proof in this tree that needs no captures -- a pedal is the same
+      # arithmetic whatever is upstream of it -- and so the only DSP measurement
+      # macOS gets at all until the fixture generator exists. Every other offline
+      # proof takes .nam banks that are not ours to ship.
+      #
+      # rations_racecheck is NOT run here despite being listed in the port plan:
+      # it takes capture directories as positional arguments, so CI has nothing to
+      # give it. Corrected by reading the tool, not by running it.
+      - name: rations_pedalcheck
+        run: ./build/rations_pedalcheck
 
       # Uploaded so the pages can be LOOKED AT. Three of the defects this
       # project's art has produced were invisible to every audit and visible
@@ -141,4 +214,17 @@ jobs:
         with:
           name: panels-${{ matrix.arch }}
           path: panels/*.png
+          if-no-files-found: error
+
+      # The slice itself, for the universal join. Note what is NOT here: the SDK
+      # ad-hoc-signs only moduleinfo.json under a Ninja build -- smtg_target_codesign
+      # is entirely inside an if(XCODE) branch -- so the bundle carries no
+      # _CodeSignature of its own. The linker's own default ad-hoc signature is what
+      # makes the arm64 slice executable at all; signing the assembled bundle is the
+      # packaging phase's job.
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.arch }}
+          path: build/VST3/Release/NAMp-rations.vst3
           if-no-files-found: error

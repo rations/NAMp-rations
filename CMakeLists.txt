@@ -616,14 +616,30 @@ if(RATIONS_WINDOWS)
         src/platform/win32plugview.cpp
     )
 elseif(RATIONS_MACOS)
-    set(RATIONS_PLATFORM_VIEW_SOURCES
-        src/platform/macplugview.h
-        src/platform/macplugview.mm
-    )
+    # Nothing yet. macOS has no window class, so it has no editor: see the guarded
+    # block at the foot of src/rationscontroller.cpp, where createView returns null.
+    # When src/platform/macplugview.mm lands, it and its header go here and the
+    # editor sources below stop being conditional.
+    set(RATIONS_PLATFORM_VIEW_SOURCES "")
 else()
     set(RATIONS_PLATFORM_VIEW_SOURCES
         src/platform/x11plugview.h
         src/platform/x11plugview.cpp
+    )
+endif()
+
+# The editor itself, and the file browser it owns, follow the platform view for the
+# same reason: rationsview.h derives from the type platform/plugview.h declares, and
+# on macOS that type does not exist yet.
+if(RATIONS_MACOS)
+    set(RATIONS_EDITOR_SOURCES "")
+else()
+    set(RATIONS_EDITOR_SOURCES
+        src/rationsview.h
+        src/rationsview.cpp
+        src/filebrowser.h
+        src/filebrowser.cpp
+        src/platform/plugview.h
     )
 endif()
 
@@ -646,10 +662,6 @@ set(RATIONS_PLUGIN_SOURCES
     # The state blob's string reads, shared by the two functions above that decode one.
     src/statestream.h
     src/rationsfactory.cpp
-    src/rationsview.h
-    src/rationsview.cpp
-    src/filebrowser.h
-    src/filebrowser.cpp
     src/engineconfig.h
     src/spscqueue.h
     src/bank.h
@@ -677,7 +689,7 @@ set(RATIONS_PLUGIN_SOURCES
     src/pedals/reverb.h
     src/pedals/pedalchain.h
     src/pedals/pedalchain.cpp
-    src/platform/plugview.h
+    ${RATIONS_EDITOR_SOURCES}
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
 
@@ -856,6 +868,27 @@ else()
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
 endif()
 
+# Two things module_mac.mm needs that its Linux and Windows siblings do not, both
+# taken from the SDK's own validator target rather than guessed
+# (public.sdk/samples/vst-hosting/validator/CMakeLists.txt:96-115, 135-141):
+#
+#   -fobjc-arc  the file is written for Automatic Reference Counting. Without the
+#               flag it compiles under manual retain/release, where its ARC-managed
+#               NSBundle and NSString locals are simply leaked rather than rejected
+#               — a silent miscompilation, not an error.
+#   Cocoa       the framework the SDK links for exactly this file when the generator
+#               is not Xcode, which is our case.
+#
+# set_source_files_properties is directory-scoped, so this one call covers every
+# tool below that names ${RATIONS_MODULE_LOADER}. RATIONS_MODULE_LOADER_LIBS is
+# empty on the other two platforms and disappears from their link lines.
+set(RATIONS_MODULE_LOADER_LIBS "")
+if(RATIONS_MACOS)
+    set_source_files_properties(${RATIONS_MODULE_LOADER} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    find_library(RATIONS_COCOA_FRAMEWORK Cocoa REQUIRED)
+    set(RATIONS_MODULE_LOADER_LIBS ${RATIONS_COCOA_FRAMEWORK})
+endif()
+
 add_executable(rations_offline
     ${RATIONS_ROOT}/tools/rations_offline.cpp
     ${RATIONS_MODULE_LOADER}
@@ -870,7 +903,7 @@ add_executable(rations_offline
 # says it should. Header-only, and nothing else of the DSP is linked into this tool.
 target_include_directories(rations_offline PRIVATE ${RATIONS_ROOT}/src
     ${NAM_CORE_DIR}/Dependencies/nlohmann)
-target_link_libraries(rations_offline PRIVATE sdk_hosting)
+target_link_libraries(rations_offline PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_offline PRIVATE cxx_std_17)
 target_compile_options(rations_offline PRIVATE -Wall)
 add_dependencies(rations_offline Rations)
@@ -895,7 +928,7 @@ add_executable(rations_midicheck
     ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
 )
 target_include_directories(rations_midicheck PRIVATE ${RATIONS_ROOT}/src)
-target_link_libraries(rations_midicheck PRIVATE sdk_hosting)
+target_link_libraries(rations_midicheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_midicheck PRIVATE cxx_std_17)
 target_compile_options(rations_midicheck PRIVATE -Wall)
 add_dependencies(rations_midicheck Rations)
@@ -920,7 +953,7 @@ add_executable(rations_ircheck
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
 )
 target_include_directories(rations_ircheck PRIVATE ${RATIONS_ROOT}/src)
-target_link_libraries(rations_ircheck PRIVATE sdk_hosting)
+target_link_libraries(rations_ircheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_ircheck PRIVATE cxx_std_17)
 target_compile_options(rations_ircheck PRIVATE -Wall)
 add_dependencies(rations_ircheck Rations)
