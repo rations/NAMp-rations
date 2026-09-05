@@ -323,53 +323,12 @@ else
     wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
          "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
 
-    for _p in head cabinet pedalboard settings; do
-      magick "$PANELS/lin-$_p.png" -depth 8 "rgb:$PANELS/lin-$_p.raw"
-      magick "$PANELS/win-$_p.png" -depth 8 "rgb:$PANELS/win-$_p.raw"
-    done
-
-    PANELS="$PANELS" PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" \
-    PANEL_MAX_DELTA="$PANEL_MAX_DELTA" python3 - <<'PYEOF'
-import os, sys
-
-d          = os.environ["PANELS"]
-max_pixels = int(os.environ["PANEL_MAX_PIXELS"])
-max_delta  = int(os.environ["PANEL_MAX_DELTA"])
-
-fail, tot_d, tot_p = [], 0, 0
-for page in ("head", "cabinet", "pedalboard", "settings"):
-    a = open(f"{d}/lin-{page}.raw", "rb").read()
-    b = open(f"{d}/win-{page}.raw", "rb").read()
-    if len(a) != len(b):
-        fail.append(f"{page}: the two renders are different SIZES "
-                    f"({len(a)//3} vs {len(b)//3} px) - the layout itself diverged")
-        continue
-    npx, ndiff, worst = len(a) // 3, 0, 0
-    for i in range(0, len(a), 3):
-        if a[i:i+3] != b[i:i+3]:
-            ndiff += 1
-            w = max(abs(x - y) for x, y in zip(a[i:i+3], b[i:i+3]))
-            if w > worst:
-                worst = w
-    tot_d += ndiff
-    tot_p += npx
-    print(f"  {page:<11} {ndiff:>5} of {npx:>8} px differ, worst channel delta {worst}/255")
-    if ndiff > max_pixels:
-        fail.append(f"{page}: {ndiff} differing pixels, cap is {max_pixels}")
-    if worst > max_delta:
-        fail.append(f"{page}: worst channel delta {worst}/255, cap is {max_delta} - "
-                    f"that is ink moving, not rounding")
-print(f"  {'TOTAL':<11} {tot_d:>5} of {tot_p:>8} px")
-
-if fail:
-    print("\nthe Windows editor does not draw what the Linux one draws:", file=sys.stderr)
-    for f in fail:
-        print(f"  {f}", file=sys.stderr)
-    print("\nCheck that the sysroot's cairo/freetype/pixman/libpng/zlib still match", file=sys.stderr)
-    print("this machine's system versions - scripts/build-win-deps.sh pins them", file=sys.stderr)
-    print("to exactly that, and this comparison is why.", file=sys.stderr)
-    sys.exit(1)
-PYEOF
+    # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
+    # calls too -- one implementation, so the two platforms' figures are
+    # produced the same way and stay comparable. The thresholds stay HERE
+    # because they are this pair's measurement, not that script's.
+    PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
+      "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
   fi
 fi
 

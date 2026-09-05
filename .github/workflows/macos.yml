@@ -290,3 +290,57 @@ jobs:
           name: NAMp-rations-macos-universal
           path: dist/*.zip
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Does the arm64 editor DRAW what the x86_64 one draws?
+  #
+  # This is the only automated check of the macOS editor's appearance, and it
+  # asks a question the Windows panel diff cannot. That one compares two builds
+  # on ONE instruction set, so it measures a toolchain difference; this compares
+  # two instruction sets from one source tree with pinned-identical
+  # dependencies, so what is left is arithmetic -- above all whether arm64's
+  # fused multiply-add contracts the dial trigonometry differently from x86_64's.
+  # The two pages that differ at all on Windows are exactly the two that draw
+  # rotated dials, so that is where any difference here is expected too.
+  #
+  # IT NEEDS NO BASELINE FROM ANYONE'S MACHINE, which is why it can run on every
+  # push. Comparing against the LINUX render would need this repository to carry
+  # 1.5 MB of committed PNGs that go stale on every art edit; that comparison is
+  # run by hand instead -- download the panels-arm64 artifact and point
+  # scripts/panel-diff.sh at it and at a local `build/panelrender` render.
+  #
+  # THE THRESHOLDS BELOW ARE A PLACEHOLDER AND ARE FLAGGED AS ONE. Nothing has
+  # measured this pair yet, so they start at the Windows figures -- 256 pixels
+  # per page, worst channel delta 1 -- which is the only measured number this
+  # project has for a panel diff of any kind. D10's rule is to run it, record the
+  # worst case, and set the gate above it with margin; the first green run is
+  # what supplies that, and until then a failure here is a MEASUREMENT and not
+  # necessarily a regression. Whatever it says goes into CLAUDE.md beside the
+  # Windows table.
+  # ---------------------------------------------------------------------------
+  panel-diff:
+    name: panel diff (arm64 vs x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ImageMagick decodes the PNGs to raw RGB; nothing else here needs a Mac,
+      # which is why this job is not on one.
+      - name: ImageMagick
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+
+      - name: Download both renders
+        uses: actions/download-artifact@v4
+        with:
+          pattern: panels-*
+          path: panels
+
+      - name: Compare
+        env:
+          PANEL_MAX_PIXELS: 256
+          PANEL_MAX_DELTA: 1
+        run: |
+          ls -R panels
+          scripts/panel-diff.sh \
+            panels/panels-arm64 mac panels/panels-x86_64 mac arm64 x86_64
