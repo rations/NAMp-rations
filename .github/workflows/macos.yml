@@ -45,18 +45,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-14 is Apple Silicon. The x86_64 label is the volatile one:
-          # GitHub retires macOS images on a rolling schedule and the Intel
-          # label has moved before (macos-12 went, macos-13 was put on a
-          # deprecation path, and macos-15-intel exists as a replacement). If
-          # the x86_64 job fails immediately with an unresolvable runner label,
-          # that is what happened -- change the label here, nothing else.
+          # THESE LABELS ARE PERISHABLE AND ONE OF THEM ALREADY EXPIRED. GitHub
+          # retires macOS images on a rolling schedule, and the failure mode is
+          # the nastiest kind: a job asking for a label that no longer exists is
+          # not rejected, it QUEUES FOREVER. The first run of this workflow sat
+          # 12 hours on macos-13 before anyone thought to look, while the arm64
+          # half had long since run.
           #
-          # fail-fast is off partly for this: a dead Intel label must not stop
-          # the arm64 slice from building and reporting.
-          - runner: macos-14
+          # So: check the label against the source before changing it, which is
+          # the table in https://github.com/actions/runner-images (README.md).
+          # As of that table, macos-13 is gone entirely and macos-14 is marked
+          # deprecated in both its variants; macos-15 is the current standard
+          # arm64 image and macos-15-intel the current standard x64 one. The
+          # -large and -xlarge suffixes are LARGER RUNNERS and are billed even
+          # on a public repository, so they are not interchangeable with these.
+          #
+          # fail-fast is off partly for this: a label that dies on one
+          # architecture must not stop the other from building and reporting.
+          - runner: macos-15
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x86_64
 
     steps:
@@ -112,6 +120,33 @@ jobs:
       # Set inside the script rather than in an `env:` block because it has to
       # expand $HOME, and an `env:` value is an Actions expression in which
       # $HOME is literal text.
+      # PRINTED BEFORE CONFIGURING, because the log of this workflow cannot be read
+      # from the machine this project is developed on -- the GitHub API serves run
+      # and step status to anyone, and job logs only to a repository admin. So a
+      # failure here is copied out by hand, and everything needed to diagnose one
+      # should be in the same screenful as the error rather than three steps up.
+      #
+      # xcodebuild in particular: the SDK's smtg_detect_xcode_version() runs
+      # `xcodebuild -version` with ERROR_QUIET, and an empty result compares as 0,
+      # which trips its own "XCode 9 or newer is required" FATAL_ERROR. That
+      # failure names the wrong cause, so the real one is worth having above it.
+      - name: Toolchain and sysroot
+        run: |
+          echo "--- xcode ---"
+          xcode-select -p || true
+          xcodebuild -version || echo "xcodebuild FAILED - see the note in the workflow"
+          xcrun --sdk macosx --show-sdk-path || true
+          echo "--- cmake / ninja ---"
+          cmake --version | head -1
+          ninja --version
+          echo "--- sysroot ---"
+          SYSROOT="$HOME/third_party/mac-deps/${{ matrix.arch }}/sysroot"
+          ls -la "$SYSROOT/lib/pkgconfig" || true
+          PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig" PKG_CONFIG_PATH="" \
+            pkg-config --modversion cairo cairo-ft freetype2 libpng zlib || true
+          echo "--- any dylib in the sysroot (there must be none) ---"
+          find "$SYSROOT" -name '*.dylib' || true
+
       - name: Configure
         run: |
           export PKG_CONFIG_LIBDIR="$HOME/third_party/mac-deps/${{ matrix.arch }}/sysroot/lib/pkgconfig"
@@ -254,7 +289,9 @@ jobs:
   universal:
     name: universal binary
     needs: build
-    runs-on: macos-14
+    # Only lipo, codesign and ditto run here, so the architecture does not
+    # matter -- but the label still has to be one that exists. See the matrix.
+    runs-on: macos-15
     steps:
       # For scripts/makedist-mac.sh and for the version, which it reads out of
       # CMakeLists.txt the same way the Linux and Windows scripts do so the three
