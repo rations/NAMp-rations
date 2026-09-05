@@ -1,13 +1,14 @@
-# Rations — a four-channel Neural Amp Modeler amp head, a raw VST3 plug-in for Linux and Windows
-# (no framework).
+# Rations — a four-channel Neural Amp Modeler amp head, a raw VST3 plug-in for Linux, Windows and
+# macOS (no framework).
 #
 # The DSP core is the MIT-licensed NeuralAmpModelerCore + AudioDSPTools by Steven Atkinson, with
 # Eigen (MPL2) as the linear-algebra backend. The editor is a Steinberg IPlugView embedded into
 # the host's own window and painted with Cairo/FreeType — no plug-in or GUI framework.
 #
-# TWO products on Linux, ONE on Windows. The VST3 bundle is the plug-in and is all Windows ships;
-# Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can be played
-# without a DAW. What is still absent, and is the real distinction from the parent NAMp, is the
+# TWO products on Linux, ONE on Windows and macOS. The VST3 bundle is the plug-in and is all those
+# two ship; Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can
+# be played without a DAW. standalone/ is X11, Linux::IRunLoop and JACK throughout, so a macOS or
+# Windows version of it would be a different program rather than the same one rebuilt. What is still absent, and is the real distinction from the parent NAMp, is the
 # RACK: nothing here hosts anyone else's plug-ins, scans for them or links LV2, because the
 # pedalboard is built into the plug-in rather than hosting other people's. The plug-in itself links
 # neither JACK nor the SDK's hosting layer — only the standalone and the offline tools do.

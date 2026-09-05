@@ -27,7 +27,9 @@
 # WHAT THIS GATES ON. Everything is measured on the built bundle: what it links,
 # what it exports, what is inside it, that both architectures are present, and
 # that the signature verifies. The capture-dependent proofs are NOT run here and
-# cannot be -- see the flagged gap in CLAUDE.md.
+# CANNOT be: they need .nam banks, and this plug-in ships none because the
+# captures are not ours to distribute. docs/macos-testing.md is what stands in
+# for them, and it is a person listening.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

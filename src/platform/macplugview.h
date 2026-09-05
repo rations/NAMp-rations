@@ -248,10 +248,10 @@ protected:
     }
 
 public:
-    // Read by the Objective-C view's -acceptsFirstResponder, which is how RULES.md section 4's
-    // "outside that window the view holds no focus and claims no keys" is actually enforced:
-    // while this is false AppKit will not even offer the focus on a click, so the host's own key
-    // commands are untouched. Public for the same reason the mac* hooks above are.
+    // Read by the Objective-C view's -acceptsFirstResponder, and that is how "this view holds no
+    // focus and claims no keys except while a text field is open" is actually enforced rather than
+    // merely intended: while this is false AppKit will not even offer the focus on a click, so the
+    // host's own key commands are untouched. Public for the same reason the mac* hooks above are.
     bool hasKeyboardFocus() const
     {
         return mKeyFocus;

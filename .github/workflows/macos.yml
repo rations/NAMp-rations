@@ -18,8 +18,10 @@
 # WHAT THIS DOES NOT COVER, and it is a large gap rather than a small one: every
 # capture-dependent proof (rations_offline, ir-gate.sh, rations_switchcheck, most
 # of rations_midicheck) needs .nam banks, and the plug-in ships none because the
-# captures are not ours to distribute. The macOS DSP path is therefore unmeasured.
-# See CLAUDE.md's flagged gap and the fixture-generator phase that closes it.
+# captures are not ours to distribute. The macOS DSP path is therefore unmeasured,
+# and docs/macos-testing.md is what stands in for it -- a person listening. The
+# thing that would close it properly is a synthetic .nam fixture generator, which
+# would close it for Linux and Windows at the same time.
 name: macOS
 
 on:
@@ -63,7 +65,7 @@ jobs:
       # The SDK is a superproject and only four of its submodules are needed;
       # `submodules: recursive` on the checkout action would additionally pull
       # vstgui4, doc and tutorials, none of which this project builds. Same
-      # sequence CLAUDE.md documents for a local clone.
+      # sequence a local clone uses, and the same reason.
       - name: Submodules
         run: |
           git submodule update --init --recursive \
@@ -310,13 +312,14 @@ jobs:
   # scripts/panel-diff.sh at it and at a local `build/panelrender` render.
   #
   # THE THRESHOLDS BELOW ARE A PLACEHOLDER AND ARE FLAGGED AS ONE. Nothing has
-  # measured this pair yet, so they start at the Windows figures -- 256 pixels
-  # per page, worst channel delta 1 -- which is the only measured number this
-  # project has for a panel diff of any kind. D10's rule is to run it, record the
-  # worst case, and set the gate above it with margin; the first green run is
-  # what supplies that, and until then a failure here is a MEASUREMENT and not
-  # necessarily a regression. Whatever it says goes into CLAUDE.md beside the
-  # Windows table.
+  # measured this pair yet, so they start at the figures the Linux-versus-Windows
+  # diff measured -- 256 pixels per page, worst channel delta 1 -- which is the
+  # only measured number this project has for a panel diff of any kind. The rule
+  # this project applies to every threshold is to run it, record the worst case,
+  # and set the gate ABOVE that with margin, so it reports a regression rather
+  # than its own noise floor. The first green run is what supplies that, and
+  # until then a failure here is a MEASUREMENT rather than necessarily a
+  # regression.
   # ---------------------------------------------------------------------------
   panel-diff:
     name: panel diff (arm64 vs x86_64)

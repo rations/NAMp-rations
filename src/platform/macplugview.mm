@@ -190,11 +190,12 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
 }
 
 //------------------------------------------------------------------------
-// ONLY while a text field is open, which is RULES.md section 4's requirement
-// spelled as one method. Returning YES unconditionally — which is what VSTGUI
-// and iPlug2 both do — would let AppKit make this view the first responder on
-// any click in it, and the host's own key commands (the space bar in a DAW
-// above all) would stop working the moment a user touched a knob.
+// ONLY while a text field is open, which is the whole of what keeps the platform
+// keyboard route below from taking anything away from the host. Returning YES
+// unconditionally — which is what VSTGUI and iPlug2 both do — would let AppKit
+// make this view the first responder on any click in it, and the host's own key
+// commands (the space bar in a DAW above all) would stop working the moment a
+// user touched a knob.
 //
 // setKeyboardFocus() sets the flag BEFORE it calls makeFirstResponder:, because
 // that call consults this method and would otherwise be refused.
