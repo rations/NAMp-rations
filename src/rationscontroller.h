@@ -167,11 +167,10 @@ private:
     // UI thread only — restartComponent is documented that way.
     void refreshParamTitles();
 
-    // The three things the controller ever tells the editor. Named rather than written out as
-    // `if (mView) mView->...` at each of the nine call sites, because that idiom put a reference
-    // to the view's class into nine places, and macOS has no view yet (see the guarded block at
-    // the foot of rationscontroller.cpp). All three are no-ops while no editor is attached, which
-    // is the ordinary state for a plug-in a host has loaded but not opened.
+    // The three things the controller ever tells the editor, in one place each rather than
+    // written out as `if (mView) mView->...` at each of the nine call sites. All three are
+    // no-ops while no editor is attached, which is the ordinary state for a plug-in a host has
+    // loaded but not opened.
     void notifyViewFiles();
     void notifyViewCaps();
     void notifyViewParam(Steinberg::Vst::ParamID tag, Steinberg::Vst::ParamValue value);

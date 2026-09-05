@@ -2,11 +2,7 @@
 
 #include "rationscontroller.h"
 #include "rationsids.h"
-
-#include "pluginterfaces/base/fplatform.h" // SMTG_OS_MACOS, for the guard below
-#if !SMTG_OS_MACOS
 #include "rationsview.h"
-#endif
 
 #include "platform/respath.h" // pathBaseName, for the channel-name fallback
 #include "statestream.h"
@@ -577,44 +573,6 @@ tresult PLUGIN_API RationsController::notify(Vst::IMessage *message)
 }
 
 //------------------------------------------------------------------------
-// Everything that names the editor's class, in one block, because macOS does not have one yet.
-//
-// FLAGGED, and it is a phase boundary rather than a design: the macOS window class
-// (src/platform/macplugview.mm) is not written, so on that platform the plug-in loads, validates
-// and processes audio with NO editor. A VST3 plug-in without an editor is legal — createView is
-// documented to return null for a view type it does not offer, and a host then draws its own
-// generic panel — so this is a plug-in that is missing a feature, not one that is broken. The
-// mac arm below is deleted when that file lands, and nothing outside this block changes when it
-// does: the three notifiers stay, and the nine call sites that use them never learn about it.
-#if SMTG_OS_MACOS
-
-IPlugView *PLUGIN_API RationsController::createView(FIDString)
-{
-    return nullptr;
-}
-
-void RationsController::editorAttached(Vst::EditorView *)
-{
-}
-
-void RationsController::editorRemoved(Vst::EditorView *)
-{
-}
-
-void RationsController::notifyViewFiles()
-{
-}
-
-void RationsController::notifyViewCaps()
-{
-}
-
-void RationsController::notifyViewParam(Vst::ParamID, Vst::ParamValue)
-{
-}
-
-#else
-
 IPlugView *PLUGIN_API RationsController::createView(FIDString name)
 {
     if (name && strcmp(name, Vst::ViewType::kEditor) == 0)
@@ -663,8 +621,6 @@ void RationsController::notifyViewParam(Vst::ParamID tag, Vst::ParamValue value)
     if (mView)
         mView->ParamChanged(tag, value);
 }
-
-#endif // SMTG_OS_MACOS
 
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsController::setParamNormalized(Vst::ParamID tag, Vst::ParamValue value)

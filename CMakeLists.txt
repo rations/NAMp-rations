@@ -217,6 +217,11 @@ endif()
 # ---------------------------------------------------------------------------
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
+# Objective-C++ is a fourth language as far as CMake is concerned, and the C and
+# C++ presets do not reach it: src/platform/macplugview.mm would otherwise be the
+# one translation unit in the bundle compiled at default visibility. Set even
+# where OBJCXX is not enabled, which costs nothing -- an unused variable.
+set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 # The presets above cannot reach the standard library, and on GCC 12 that is not
@@ -616,30 +621,14 @@ if(RATIONS_WINDOWS)
         src/platform/win32plugview.cpp
     )
 elseif(RATIONS_MACOS)
-    # Nothing yet. macOS has no window class, so it has no editor: see the guarded
-    # block at the foot of src/rationscontroller.cpp, where createView returns null.
-    # When src/platform/macplugview.mm lands, it and its header go here and the
-    # editor sources below stop being conditional.
-    set(RATIONS_PLATFORM_VIEW_SOURCES "")
+    set(RATIONS_PLATFORM_VIEW_SOURCES
+        src/platform/macplugview.h
+        src/platform/macplugview.mm
+    )
 else()
     set(RATIONS_PLATFORM_VIEW_SOURCES
         src/platform/x11plugview.h
         src/platform/x11plugview.cpp
-    )
-endif()
-
-# The editor itself, and the file browser it owns, follow the platform view for the
-# same reason: rationsview.h derives from the type platform/plugview.h declares, and
-# on macOS that type does not exist yet.
-if(RATIONS_MACOS)
-    set(RATIONS_EDITOR_SOURCES "")
-else()
-    set(RATIONS_EDITOR_SOURCES
-        src/rationsview.h
-        src/rationsview.cpp
-        src/filebrowser.h
-        src/filebrowser.cpp
-        src/platform/plugview.h
     )
 endif()
 
@@ -689,7 +678,11 @@ set(RATIONS_PLUGIN_SOURCES
     src/pedals/reverb.h
     src/pedals/pedalchain.h
     src/pedals/pedalchain.cpp
-    ${RATIONS_EDITOR_SOURCES}
+    src/rationsview.h
+    src/rationsview.cpp
+    src/filebrowser.h
+    src/filebrowser.cpp
+    src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
 
@@ -702,6 +695,13 @@ set(RATIONS_PLUGIN_SOURCES
 # PARAMS_UNPARSED_ARGUMENTS and the target is built with none
 # (vst3sdk/cmake/modules/SMTG_AddVST3Library.cmake).
 smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${RATIONS_PLUGIN_SOURCES})
+
+# macplugview.mm is Objective-C++ and is deliberately built WITHOUT -fobjc-arc,
+# unlike the SDK's module_mac.mm above. It owns its NSView the way its Win32
+# sibling owns its HWND -- an explicit create/destroy pair in a C++ object -- so
+# manual retain/release is what makes the two files read alike, and ARC would
+# additionally constrain how an Objective-C pointer may be held in a C++ member.
+# Stated here because the absence of a flag is not visible at the file itself.
 
 # ---------------------------------------------------------------------------
 # Put the Windows DLL inside its own bundle.
@@ -800,6 +800,15 @@ smtg_target_add_plugin_resources(Rations
 
 target_compile_features(Rations PUBLIC cxx_std_17)
 target_compile_options(Rations PRIVATE -ffast-math -Wall)
+if(RATIONS_MACOS)
+    # target_compile_features' cxx_std_17 sets CXX_STANDARD and nothing else, so
+    # macplugview.mm would compile at whatever the compiler's default Objective-C++
+    # dialect happens to be. It uses C++17 (constexpr, nullptr-typed members,
+    # if-with-initialiser), and a toolchain whose default moved would either fail
+    # to build it or silently build it under different rules from the rest of the
+    # bundle.
+    set_target_properties(Rations PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+endif()
 target_include_directories(Rations PRIVATE ${RATIONS_ROOT}/src)
 
 target_link_libraries(Rations
