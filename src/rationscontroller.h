@@ -167,6 +167,14 @@ private:
     // UI thread only — restartComponent is documented that way.
     void refreshParamTitles();
 
+    // The three things the controller ever tells the editor, in one place each rather than
+    // written out as `if (mView) mView->...` at each of the nine call sites. All three are
+    // no-ops while no editor is attached, which is the ordinary state for a plug-in a host has
+    // loaded but not opened.
+    void notifyViewFiles();
+    void notifyViewCaps();
+    void notifyViewParam(Steinberg::Vst::ParamID tag, Steinberg::Vst::ParamValue value);
+
     std::string mIrPath[kIrSlotCount];
     std::string mCapturePath[kChannelCount];
     bool mCaptureIsDir[kChannelCount] = {false, false, false, false};

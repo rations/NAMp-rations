@@ -6,7 +6,9 @@
 
 A four-channel amp head built on [Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
 captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**, plus
-a JACK standalone on Linux for playing it without a DAW.
+a JACK standalone on Linux for playing it without a DAW. There is also an
+**[experimental macOS build](#macos-experimental)**, which nobody involved has been able to play
+yet — read that section before downloading it.
 
 A `.nam` capture freezes an amp at one knob position on one channel. A real amp head has several
 channels, each with its own gain range, and you change channel with your foot mid-song. NAMp Rations
@@ -44,7 +46,8 @@ bounded input window, and an LSTM's cell state has unbounded memory.
 ## Installing
 
 Release archives are on the [releases page](https://github.com/rations/NAMp-rations/releases) — a
-tarball for Linux and a ZIP for Windows. To build it yourself instead, see [Building](#building).
+tarball for Linux, a ZIP for Windows, and a ZIP for macOS which is
+[experimental](#macos-experimental). To build it yourself instead, see [Building](#building).
 
 Nothing ships with captures: a fresh instance comes up with four empty channels, and the first
 thing to do after installing is load your own into them.
@@ -95,6 +98,58 @@ Either way, keep only **one** copy: hosts scan both directories, so a copy in ea
 NAMp Rations entries. There is no runtime to install — cairo, FreeType, libpng and zlib are linked into
 the bundle.
 
+### macOS (experimental)
+
+**Read this part before the instructions.** The macOS build is offered as an experiment, and the
+honest summary is that it may not work:
+
+- **Nobody who works on this has a Mac.** Linux and Windows are both built and *proved* on one
+  Linux machine — Windows works because Wine runs every check on it there. There is no equivalent
+  for macOS, so the build is made by GitHub's macOS runners and has never been played by anyone
+  who could fix it.
+- **The sound is unmeasured on macOS.** On Linux and Windows a set of offline proofs asserts exact
+  figures — the channel switch converging on a continuously-running reference to within 1e-6, the
+  output modes to three decimal places. Those proofs need capture files, captures are their
+  authors' work rather than ours, and so they cannot run on a hosted build machine. What *is*
+  checked on both Mac architectures is that the plug-in builds, loads, passes Steinberg's own
+  validator, exports exactly the three entry points a host calls, links nothing outside the system,
+  and renders all four editor pages, with the Apple Silicon and Intel renders compared against each
+  other pixel for pixel. That is a floor, not a guarantee.
+- **There is no standalone** — the macOS release is the plug-in only. The Linux standalone is a
+  JACK client, so the macOS equivalent would be a different program rather than the same one
+  rebuilt.
+
+If it misbehaves, [an issue](https://github.com/rations/NAMp-rations/issues) with your Mac, your
+DAW and what happened is genuinely useful — it is the only way any of this gets found.
+
+The bundle is **universal**: one file carrying both Apple Silicon and Intel, macOS 11 (Big Sur) or
+later. Nothing else to install — cairo, FreeType, libpng, pixman and zlib are built into it.
+
+**Installing needs Terminal once, for about thirty seconds, and you do not have to type any file
+names.** It cannot be done entirely in Finder because the plug-in is not notarized by Apple (that
+needs a paid developer account); macOS marks anything downloaded as quarantined and refuses to load
+quarantined code that Apple has not signed off, so the flag has to be cleared. `install.sh` does
+that for you.
+
+1. **Double-click the .zip** you downloaded. A folder appears beside it.
+2. **Open Terminal:** hold **Command** and press the **space bar**, type `terminal`, press
+   **Return**.
+3. In that window type the four letters `bash` and then **one space**. Do not press Return yet.
+4. **Drag the file `install.sh`** out of the folder and drop it onto the Terminal window — its
+   location appears after what you typed, so there is nothing to spell.
+5. Press **Return**.
+
+It prints `Installed:` and a location. Rescan plug-ins in your DAW and NAMp Rations is there. The
+plug-in goes to `~/Library/Audio/Plug-Ins/VST3`; nothing needs an administrator password and
+nothing is put outside your home folder.
+
+To remove it, repeat those steps and type one space and `--uninstall` before pressing Return.
+
+If you would rather copy it by hand: drag `NAMp-rations.vst3` into
+`~/Library/Audio/Plug-Ins/VST3`, then run `xattr -cr ~/Library/Audio/Plug-Ins/VST3/NAMp-rations.vst3`
+in Terminal once. That last step is not optional — without it the DAW finds the plug-in, fails to
+load it, and usually does not say why.
+
 ## Building
 
 Dependencies are pinned git submodules. cairo, FreeType and fontconfig come from the system.
@@ -128,6 +183,21 @@ What it was playing is kept in `~/.config/NAMp-rations/standalone.state`; `--no-
 
 `scripts/makedist-linux.sh` packages the two into a tarball with a launcher entry and an
 `install.sh`. There is no standalone on Windows — that release is the plug-in only.
+
+### macOS, built on GitHub Actions
+
+There is no macOS build on this repository's own machine and there is not meant to be one: Apple
+licenses its SDK for use on Apple hardware, and — decisively — nothing cross-compiled here could be
+*run*, because there is no Wine for macOS. So `.github/workflows/macos.yml` builds it on GitHub's
+macOS runners, one per architecture, each running its own checks natively before `lipo` joins the
+two slices. `scripts/makedist-mac.sh` packages, ad-hoc signs and verifies the result; that signature
+is a functional requirement rather than a nicety, since an unsigned arm64 binary is refused by the
+kernel.
+
+Building it on a Mac directly is the ordinary CMake sequence above with
+`scripts/build-mac-deps.sh` first, which builds the same five graphics libraries at the same pinned
+versions into a static sysroot — Homebrew's dylibs would name `/opt/homebrew` and load nowhere
+else.
 
 ### Windows, cross-built from Linux
 
@@ -163,6 +233,16 @@ host does, and `scripts/` holds the gates that run them:
 The offline proofs need capture banks to run against, since the plug-in ships none: pass
 `--captures <dir>` (a directory holding one subdirectory per channel) or set
 `$RATIONS_TEST_CAPTURES`. `rations_pedalcheck` needs none.
+
+**That last sentence is why macOS is experimental.** Every proof in the table above except
+`rations_pedalcheck` and `panelrender` needs captures, a hosted build machine has none, and so none
+of them has ever run on macOS. What CI does check there, on both architectures natively, is the
+build, the SDK validator, the exported symbols, the linked libraries, the bundled resources, the
+pedals, and a pixel-for-pixel comparison of the two architectures' editor renders — which agree on
+three of four pages exactly and differ on 35 pixels of the fourth, each by one part in 255, the
+dial arcs rounding differently under Apple Silicon's fused multiply-add. Closing the rest means
+generating synthetic `.nam` fixtures so the capture-dependent proofs can run anywhere, and that
+would close it for all three platforms at once.
 
 ## Licence
 

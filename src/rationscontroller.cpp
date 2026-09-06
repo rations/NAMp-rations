@@ -499,8 +499,7 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
     setParamNormalized(kSlimId, std::clamp(slim, 0.0, 1.0));
 
     refreshParamTitles();
-    if (mView)
-        mView->FilesChanged();
+    notifyViewFiles();
     return kResultOk;
 }
 
@@ -569,8 +568,7 @@ tresult PLUGIN_API RationsController::notify(Vst::IMessage *message)
     }
 
     refreshParamTitles();
-    if (mView)
-        mView->ModelCapsChanged(mEntryCount, mCaptureNames);
+    notifyViewCaps();
     return kResultOk;
 }
 
@@ -606,12 +604,30 @@ void RationsController::editorRemoved(Vst::EditorView *editor)
         mView = nullptr;
 }
 
+void RationsController::notifyViewFiles()
+{
+    if (mView)
+        mView->FilesChanged();
+}
+
+void RationsController::notifyViewCaps()
+{
+    if (mView)
+        mView->ModelCapsChanged(mEntryCount, mCaptureNames);
+}
+
+void RationsController::notifyViewParam(Vst::ParamID tag, Vst::ParamValue value)
+{
+    if (mView)
+        mView->ParamChanged(tag, value);
+}
+
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsController::setParamNormalized(Vst::ParamID tag, Vst::ParamValue value)
 {
     const tresult result = EditController::setParamNormalized(tag, value);
-    if (mView && result == kResultOk)
-        mView->ParamChanged(tag, value);
+    if (result == kResultOk)
+        notifyViewParam(tag, value);
     return result;
 }
 
@@ -657,8 +673,7 @@ tresult RationsController::setIrFile(int slot, const char8 *path)
     if (result != kResultOk && getPeer())
         return result;
     mIrPath[slot] = path ? path : "";
-    if (mView)
-        mView->FilesChanged();
+    notifyViewFiles();
     return result;
 }
 
@@ -714,8 +729,7 @@ tresult RationsController::setCaptureSource(int channel, const char8 *path, bool
     mBankLevels[channel] = CaptureLevels();
     mCaptureNames[channel].clear();
     refreshParamTitles();
-    if (mView)
-        mView->FilesChanged();
+    notifyViewFiles();
     return result;
 }
 
@@ -750,8 +764,7 @@ tresult RationsController::setChannelName(int channel, const char8 *name)
     // Updated whatever the processor said. A name is not a load: there is nothing for the other
     // half to refuse, and it holds a copy only because it is the half that writes the state blob.
     mChannelNameOverride[channel] = n;
-    if (mView)
-        mView->FilesChanged();
+    notifyViewFiles();
     return result;
 }
 
@@ -949,8 +962,7 @@ void RationsController::armMidiLearn(int row)
     // one that did not register the click. The processor's reply corrects it either way.
     mArmedRow = row;
     sendMidiRow(kMsgMidiLearn, row);
-    if (mView)
-        mView->FilesChanged();
+    notifyViewFiles();
 }
 
 void RationsController::clearMidiLearn(int row)
@@ -1001,8 +1013,7 @@ tresult RationsController::receiveMidiTable(Vst::IMessage *message)
         armed = -1;
     mArmedRow = (armed >= 0 && armed < kMidiLearnRowCount) ? static_cast<int>(armed) : -1;
 
-    if (mView)
-        mView->FilesChanged();
+    notifyViewFiles();
     return kResultOk;
 }
 

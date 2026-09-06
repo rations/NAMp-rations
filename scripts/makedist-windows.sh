@@ -81,7 +81,7 @@ cmake --build "$BUILD" --parallel "$(nproc)"
 # The project() version, which is the first VERSION line in the top-level lists
 # file. Read rather than duplicated, so a release cannot be tagged one thing and
 # packaged as another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
+VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
   "$REPO/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2
@@ -296,81 +296,36 @@ else
   PANEL_MAX_PIXELS=256     # per page
   PANEL_MAX_DELTA=1        # per channel, any page
 
-  if ! command -v magick >/dev/null; then
-    echo >&2
-    echo "WARNING: ImageMagick (magick) not found, so the Linux-vs-Windows panel" >&2
-    echo "comparison was SKIPPED. Nothing has checked that the Windows editor" >&2
-    echo "draws what the Linux one draws. Install ImageMagick 7 and re-run." >&2
-    echo >&2
-  else
-    echo "comparing the editor pages against the Linux render"
-    PANELS="$STAGEDIR/panels"
-    mkdir -p "$PANELS"
+  # This used to be skipped with a warning when ImageMagick was absent, which is
+  # a gate that can quietly not run. panel-diff.sh decodes the PNGs with the
+  # Python standard library now, so there is nothing left to be missing and
+  # nothing left to skip.
+  echo "comparing the editor pages against the Linux render"
+  PANELS="$STAGEDIR/panels"
+  mkdir -p "$PANELS"
 
-    # The Linux reference has to come from a Linux build of the same tree.
-    LINUX_PANELRENDER="${RATIONS_BUILD_DIR:-$REPO/build}/panelrender"
-    if [ ! -x "$LINUX_PANELRENDER" ]; then
-      echo "no Linux panelrender at $LINUX_PANELRENDER - build the native tree first:" >&2
-      echo "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
-      echo "or set RATIONS_BUILD_DIR to a native build directory." >&2
-      exit 1
-    fi
-
-    "$LINUX_PANELRENDER" "$PANELS/lin" "$REPO/resources" 1.0 >/dev/null
-    # The resource directory is passed explicitly rather than left to
-    # respath.cpp's module-relative fallback, which resolves to nothing for a
-    # bare .exe sitting outside a bundle.
-    wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
-         "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
-
-    for _p in head cabinet pedalboard settings; do
-      magick "$PANELS/lin-$_p.png" -depth 8 "rgb:$PANELS/lin-$_p.raw"
-      magick "$PANELS/win-$_p.png" -depth 8 "rgb:$PANELS/win-$_p.raw"
-    done
-
-    PANELS="$PANELS" PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" \
-    PANEL_MAX_DELTA="$PANEL_MAX_DELTA" python3 - <<'PYEOF'
-import os, sys
-
-d          = os.environ["PANELS"]
-max_pixels = int(os.environ["PANEL_MAX_PIXELS"])
-max_delta  = int(os.environ["PANEL_MAX_DELTA"])
-
-fail, tot_d, tot_p = [], 0, 0
-for page in ("head", "cabinet", "pedalboard", "settings"):
-    a = open(f"{d}/lin-{page}.raw", "rb").read()
-    b = open(f"{d}/win-{page}.raw", "rb").read()
-    if len(a) != len(b):
-        fail.append(f"{page}: the two renders are different SIZES "
-                    f"({len(a)//3} vs {len(b)//3} px) - the layout itself diverged")
-        continue
-    npx, ndiff, worst = len(a) // 3, 0, 0
-    for i in range(0, len(a), 3):
-        if a[i:i+3] != b[i:i+3]:
-            ndiff += 1
-            w = max(abs(x - y) for x, y in zip(a[i:i+3], b[i:i+3]))
-            if w > worst:
-                worst = w
-    tot_d += ndiff
-    tot_p += npx
-    print(f"  {page:<11} {ndiff:>5} of {npx:>8} px differ, worst channel delta {worst}/255")
-    if ndiff > max_pixels:
-        fail.append(f"{page}: {ndiff} differing pixels, cap is {max_pixels}")
-    if worst > max_delta:
-        fail.append(f"{page}: worst channel delta {worst}/255, cap is {max_delta} - "
-                    f"that is ink moving, not rounding")
-print(f"  {'TOTAL':<11} {tot_d:>5} of {tot_p:>8} px")
-
-if fail:
-    print("\nthe Windows editor does not draw what the Linux one draws:", file=sys.stderr)
-    for f in fail:
-        print(f"  {f}", file=sys.stderr)
-    print("\nCheck that the sysroot's cairo/freetype/pixman/libpng/zlib still match", file=sys.stderr)
-    print("this machine's system versions - scripts/build-win-deps.sh pins them", file=sys.stderr)
-    print("to exactly that, and this comparison is why.", file=sys.stderr)
-    sys.exit(1)
-PYEOF
+  # The Linux reference has to come from a Linux build of the same tree.
+  LINUX_PANELRENDER="${RATIONS_BUILD_DIR:-$REPO/build}/panelrender"
+  if [ ! -x "$LINUX_PANELRENDER" ]; then
+    echo "no Linux panelrender at $LINUX_PANELRENDER - build the native tree first:" >&2
+    echo "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
+    echo "or set RATIONS_BUILD_DIR to a native build directory." >&2
+    exit 1
   fi
+
+  "$LINUX_PANELRENDER" "$PANELS/lin" "$REPO/resources" 1.0 >/dev/null
+  # The resource directory is passed explicitly rather than left to
+  # respath.cpp's module-relative fallback, which resolves to nothing for a
+  # bare .exe sitting outside a bundle.
+  wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
+       "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
+
+  # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
+  # calls too -- one implementation, so the two platforms' figures are
+  # produced the same way and stay comparable. The thresholds stay HERE
+  # because they are this pair's measurement, not that script's.
+  PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
+    "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
 fi
 
 # --- licence, attribution and instructions ----------------------------------

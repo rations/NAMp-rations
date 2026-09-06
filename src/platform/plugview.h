@@ -7,8 +7,8 @@
 // implements that hook set over its own native window, and this header picks
 // one. Nothing else in the plug-in includes a platform header.
 //
-// The two are genuinely different shapes, which is why this is a seam and not a
-// set of #ifdefs inside one class:
+// The three are genuinely different shapes, which is why this is a seam and not
+// a set of #ifdefs inside one class:
 //
 //   X11PlugView   embeds an X window and owns NO thread. It has to borrow the
 //                 host's Linux::IRunLoop, registering an IEventHandler on the X
@@ -22,9 +22,18 @@
 //                 repaint tick is a plain SetTimer. There is no IRunLoop, no
 //                 IEventHandler and no ITimerHandler on this platform at all.
 //
-// What both guarantee, and what the editor depends on, is the deferred-paint
-// discipline: input handlers only ever set a dirty flag, and the actual draw
-// happens on the timer tick. See either implementation's header for why.
+//   MacPlugView   adds a child NSView. AppKit is the run loop, as on Windows,
+//                 and the tick is an NSTimer. What is unique to this one is
+//                 that its coordinates are LOGICAL POINTS rather than pixels —
+//                 the SDK says so of kPlatformTypeNSView specifically — so it
+//                 converts at its four boundaries and hands the editor device
+//                 pixels like the other two. That is also what gets a Retina
+//                 Mac drawn at 2x for nothing.
+//
+// What all three guarantee, and what the editor depends on, is the
+// deferred-paint discipline: input handlers only ever set a dirty flag, and the
+// actual draw happens on the timer tick. See each implementation's header for
+// why.
 
 #pragma once
 
@@ -32,6 +41,8 @@
 
 #if SMTG_OS_WINDOWS
 #include "platform/win32plugview.h"
+#elif SMTG_OS_MACOS
+#include "platform/macplugview.h"
 #else
 #include "platform/x11plugview.h"
 #endif
@@ -41,6 +52,8 @@ namespace Steinberg
 
 #if SMTG_OS_WINDOWS
 using NativePlugView = Win32PlugView;
+#elif SMTG_OS_MACOS
+using NativePlugView = MacPlugView;
 #else
 using NativePlugView = X11PlugView;
 #endif

@@ -1,13 +1,14 @@
-# Rations — a four-channel Neural Amp Modeler amp head, a raw VST3 plug-in for Linux and Windows
-# (no framework).
+# Rations — a four-channel Neural Amp Modeler amp head, a raw VST3 plug-in for Linux, Windows and
+# macOS (no framework).
 #
 # The DSP core is the MIT-licensed NeuralAmpModelerCore + AudioDSPTools by Steven Atkinson, with
 # Eigen (MPL2) as the linear-algebra backend. The editor is a Steinberg IPlugView embedded into
 # the host's own window and painted with Cairo/FreeType — no plug-in or GUI framework.
 #
-# TWO products on Linux, ONE on Windows. The VST3 bundle is the plug-in and is all Windows ships;
-# Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can be played
-# without a DAW. What is still absent, and is the real distinction from the parent NAMp, is the
+# TWO products on Linux, ONE on Windows and macOS. The VST3 bundle is the plug-in and is all those
+# two ship; Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can
+# be played without a DAW. standalone/ is X11, Linux::IRunLoop and JACK throughout, so a macOS or
+# Windows version of it would be a different program rather than the same one rebuilt. What is still absent, and is the real distinction from the parent NAMp, is the
 # RACK: nothing here hosts anyone else's plug-ins, scans for them or links LV2, because the
 # pedalboard is built into the plug-in rather than hosting other people's. The plug-in itself links
 # neither JACK nor the SDK's hosting layer — only the standalone and the offline tools do.
@@ -20,12 +21,57 @@
 
 cmake_minimum_required(VERSION 3.25.0)
 
+# ---------------------------------------------------------------------------
+# macOS build shape, set BEFORE project() because that is when it is read.
+#
+# CMAKE_OSX_DEPLOYMENT_TARGET and CMAKE_OSX_ARCHITECTURES are consumed during
+# compiler detection and by every try_compile the SDK's own checks run, so a
+# value set after project() reaches the targets defined later and NOT the probes
+# -- which is a build configured against one deployment target and checked
+# against another, and it fails as a link warning about mismatched minimum
+# versions rather than as anything that names the cause.
+#
+# Cache entries without FORCE, so a -D on the command line (which is how CI
+# selects the slice) still wins. Both are inert on Linux and Windows: CMake
+# ignores them off Apple, which is why they need no if(APPLE) guard here --
+# APPLE is not defined until project() has run.
+#
+# 11.0 is the floor for arm64 and the oldest macOS any current DAW supports. The
+# x86_64 slice could reach further back; it does not, because two slices built
+# against two different SDKs is a difference nobody would think to look for when
+# one of them misbehaves.
+set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+
+# ONE slice per configure. The universal binary is made by lipo joining two
+# builds afterwards rather than by asking one compiler for both, and the reason
+# is the gates: a fat binary built on an arm64 host cannot RUN its x86_64 half
+# without assuming Rosetta 2 is installed, so every proof would silently only
+# ever cover one architecture. Building each slice on a host of its own
+# architecture means every gate runs on the ISA it gates. Defaulted to the host
+# and validated in the platform split below.
+set(CMAKE_OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}"
+    CACHE STRING "macOS architecture slice to build")
+
 project(smtg-rations
     VERSION 0.1.0
     DESCRIPTION "Rations four-channel neural amp head VST3"
 )
 
 set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Objective-C++, and it belongs HERE rather than in the platform split below,
+# which is where every other platform decision in this file lives. Three files
+# in this build are .mm: the editor's NSView, and the SDK's own module_mac.mm,
+# which the validator, moduleinfotool and the offline tools each compile into a
+# target of their own. Those targets are created by the SDK's add_subdirectory
+# sixty lines down, and enable_language sets its rules FORWARD ONLY -- enabling
+# it after that call leaves every one of them with no rule for a .mm file, and
+# generation then fails with eleven copies of "Missing variable is:
+# CMAKE_OBJCXX_COMPILE_OBJECT" after configure has already reported success.
+# Guarded so a Linux or Windows build never asks for a compiler it cannot use.
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
 # ---------------------------------------------------------------------------
 # Dependency source trees. Each defaults to the in-tree submodule path and can
@@ -186,6 +232,11 @@ endif()
 # ---------------------------------------------------------------------------
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
+# Objective-C++ is a fourth language as far as CMake is concerned, and the C and
+# C++ presets do not reach it: src/platform/macplugview.mm would otherwise be the
+# one translation unit in the bundle compiled at default visibility. Set even
+# where OBJCXX is not enabled, which costs nothing -- an unused variable.
+set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 # The presets above cannot reach the standard library, and on GCC 12 that is not
@@ -217,9 +268,21 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 
 # ---------------------------------------------------------------------------
-# Platform split. One product on both platforms; the only OS-specific code is
-# the single window class in src/platform, which arrives with the editor.
+# Platform split. One product on all three platforms; the only OS-specific code
+# is the single window class in src/platform, which arrives with the editor.
+#
+# THREE values, not two. This used to be RATIONS_WINDOWS alone, and "not
+# Windows" silently meant Linux -- which was true while there were two
+# platforms and became a trap the moment there were three: every
+# if(NOT RATIONS_WINDOWS) in this file had to be re-read to find out whether it
+# meant "Linux" (the JACK standalone, the rtcheck allocation harness, cairo-xlib)
+# or genuinely "anything but Windows" (-fPIC, the module loader's else arm).
+# Naming all three makes each of those a decision at its site instead of an
+# inherited default.
 # ---------------------------------------------------------------------------
+set(RATIONS_WINDOWS OFF)
+set(RATIONS_MACOS OFF)
+set(RATIONS_LINUX OFF)
 if(WIN32)
     set(RATIONS_WINDOWS ON)
 
@@ -253,8 +316,25 @@ if(WIN32)
     # winsock, RPC and OLE out of every pedal-including TU, which they have no
     # use for.
     add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+elseif(APPLE)
+    set(RATIONS_MACOS ON)
+
+    # Objective-C++ is enabled immediately after project(), NOT here: it has to
+    # precede the SDK's add_subdirectory. See the comment at that site.
+
+    # Both defaults are set before project() -- see the comment there for why
+    # they cannot be set here. This is the check that the result is usable.
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _rations_arch_count)
+    if(_rations_arch_count GREATER 1)
+        message(FATAL_ERROR
+            "[Rations] CMAKE_OSX_ARCHITECTURES names ${_rations_arch_count} architectures "
+            "(${CMAKE_OSX_ARCHITECTURES}). Configure one slice at a time and join them with "
+            "lipo -- see scripts/makedist-mac.sh. A fat build cannot run its own gates.")
+    endif()
+    message(STATUS "[Rations] macOS slice: ${CMAKE_OSX_ARCHITECTURES}, deployment target "
+                   "${CMAKE_OSX_DEPLOYMENT_TARGET}")
 else()
-    set(RATIONS_WINDOWS OFF)
+    set(RATIONS_LINUX ON)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -293,6 +373,22 @@ if(RATIONS_WINDOWS)
     # on our own, because it describes how cairo must be USED, and it has to
     # reach every translation unit that includes a cairo header.
     target_compile_definitions(PkgConfig::CAIRO INTERFACE CAIRO_WIN32_STATIC_BUILD)
+elseif(RATIONS_MACOS)
+    # The same shape as the Windows branch above, and for the same reasons.
+    # No fontconfig: there is not one Fc* call in this tree. No cairo-xlib and
+    # no cairo-quartz either -- the mac editor composes into the same offscreen
+    # image surface the other two do and blits it through CoreGraphics, so cairo
+    # needs its image backend, its FreeType font backend and PNG, and nothing
+    # else.
+    #
+    # --static for the reason the Windows branch spells out at length: this
+    # points at scripts/build-mac-deps.sh's from-source sysroot, everything in
+    # which is a static archive, and the shared Libs: line orders -lz before
+    # -lpng16, which a one-pass resolver cannot satisfy. Homebrew is
+    # deliberately NOT used: it ships dylibs under /opt/homebrew, and a bundle
+    # that links those is loadable on the build machine and on no other.
+    set(PKG_CONFIG_ARGN --static)
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2)
 else()
     pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2 fontconfig)
     # The editor embeds into the host's X11 window; cairo-xlib paints it.
@@ -305,6 +401,15 @@ endif()
 # drawable. Named once so the plug-in and the render tool cannot disagree.
 if(RATIONS_WINDOWS)
     set(RATIONS_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
+elseif(RATIONS_MACOS)
+    # Cocoa for the NSView and its event and timer plumbing, CoreGraphics for
+    # the one CGImage blit that puts the cairo surface on screen, and
+    # CoreFoundation because macmain.cpp's bundleEntry/bundleExit take a
+    # CFBundleRef. The SDK adds CoreFoundation itself in
+    # smtg_target_make_plugin_package(); naming it here as well costs nothing
+    # and keeps this list a complete statement of what the window layer needs.
+    set(RATIONS_PLATFORM_GUI_LIBS
+        "-framework Cocoa" "-framework CoreGraphics" "-framework CoreFoundation")
 else()
     set(RATIONS_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
 endif()
@@ -360,9 +465,27 @@ add_library(RationsDsp STATIC
     ${RATIONS_ROOT}/deps/tonestack/ToneStack.cpp
 )
 
-target_compile_definitions(RationsDsp PUBLIC NAM_ENABLE_A2_FAST)
+# What it takes to COMPILE against these headers, held separately from the
+# archive itself, because on macOS the two are consumed by different mechanisms.
+#
+# Everywhere else the plug-in names RationsDsp as an ordinary link item and CMake
+# hands over its PUBLIC include paths, definitions and language level along with
+# the archive. The mac arm of rations_link_whole_dsp() below cannot do that: ld64
+# spells whole-archive as a -force_load FLAG carrying a path, so the target is
+# never named and every one of those usage requirements is silently dropped. The
+# first symptom is a missing NAM/dsp.h, which merely fails to build. The second
+# is worse and would not have failed anything: without NAM_ENABLE_A2_FAST the
+# A2 fast path is compiled out, and that path is the whole basis of the
+# click-free gain crossfade and the instant channel switch.
+#
+# So the requirements live on an INTERFACE library both arms can name. It
+# contributes no archive of its own, so naming it alongside -force_load cannot
+# put the same objects on the link line twice.
+add_library(RationsDspHeaders INTERFACE)
 
-target_include_directories(RationsDsp PUBLIC
+target_compile_definitions(RationsDspHeaders INTERFACE NAM_ENABLE_A2_FAST)
+
+target_include_directories(RationsDspHeaders INTERFACE
     ${NAM_CORE_DIR}
     ${NAM_CORE_DIR}/NAM
     ${NAM_CORE_DIR}/Dependencies/nlohmann
@@ -382,7 +505,7 @@ target_include_directories(RationsDsp PUBLIC
 
 # C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20
 # library feature. The plug-in itself stays at the SDK's C++17 baseline.
-target_compile_features(RationsDsp PUBLIC cxx_std_20)
+target_compile_features(RationsDspHeaders INTERFACE cxx_std_20)
 
 # AudioDSPTools' ResamplingContainer.h declares, at class scope,
 #
@@ -407,8 +530,12 @@ target_compile_features(RationsDsp PUBLIC cxx_std_20)
 # upstream tree is a pinned submodule, so patching the line there would be
 # undone by the next submodule update.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
-    target_compile_options(RationsDsp PUBLIC -fpermissive)
+    target_compile_options(RationsDspHeaders INTERFACE -fpermissive)
 endif()
+# The archive both compiles against those requirements and re-publishes them, so
+# a target that links RationsDsp the ordinary way needs nothing else.
+target_link_libraries(RationsDsp PUBLIC RationsDspHeaders)
+
 # -fPIC has no meaning for PE and MinGW warns that it is being ignored; code in
 # a Windows DLL is relocated by the loader, not by position-independent codegen.
 if(RATIONS_WINDOWS)
@@ -416,6 +543,42 @@ if(RATIONS_WINDOWS)
 else()
     target_compile_options(RationsDsp PRIVATE -ffast-math -fPIC -Wno-unused-parameter)
 endif()
+
+# ---------------------------------------------------------------------------
+# Link the whole of RationsDsp, whatever the linker is called.
+#
+# Five targets need every object out of that archive, not just the ones some
+# symbol references: each network architecture registers itself through a
+# file-scope static initialiser, and a normal static link drops the object files
+# holding them because nothing names them. The symptom is a clean build that
+# fails at run time with "No config parser registered for architecture: WaveNet".
+#
+# GNU ld spells that --whole-archive/--no-whole-archive around the library;
+# Apple's ld64 has neither flag and spells it -force_load with the archive's
+# path. -force_load already pulls in every object, so the library must NOT also
+# be named as an ordinary link item or ld64 reports every symbol twice -- which
+# is why the mac arm uses add_dependencies for the build ordering CMake would
+# otherwise infer from the link line.
+#
+# Not naming the target also loses everything CMake would have carried with it:
+# include paths, NAM_ENABLE_A2_FAST and the C++20 level. The mac arm therefore
+# names RationsDspHeaders, the INTERFACE library those requirements were moved
+# onto above -- it has no archive, so it cannot reintroduce the double-link this
+# paragraph is about.
+#
+# Written as one function so the five call sites cannot drift apart, which they
+# were already at risk of doing with the flags spelled out five times.
+# ---------------------------------------------------------------------------
+function(rations_link_whole_dsp target)
+    if(RATIONS_MACOS)
+        target_link_libraries(${target} PRIVATE
+            RationsDspHeaders "-Wl,-force_load,$<TARGET_FILE:RationsDsp>")
+        add_dependencies(${target} RationsDsp)
+    else()
+        target_link_libraries(${target}
+            PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+    endif()
+endfunction()
 
 # ---------------------------------------------------------------------------
 # Art, fonts and captures, named once.
@@ -493,10 +656,15 @@ endforeach()
 # The native window class is picked here the same way src/platform/plugview.h
 # picks the type it declares, so exactly one of the two is ever compiled: the
 # other one's headers do not exist on this platform.
-if(WIN32)
+if(RATIONS_WINDOWS)
     set(RATIONS_PLATFORM_VIEW_SOURCES
         src/platform/win32plugview.h
         src/platform/win32plugview.cpp
+    )
+elseif(RATIONS_MACOS)
+    set(RATIONS_PLATFORM_VIEW_SOURCES
+        src/platform/macplugview.h
+        src/platform/macplugview.mm
     )
 else()
     set(RATIONS_PLATFORM_VIEW_SOURCES
@@ -524,10 +692,6 @@ set(RATIONS_PLUGIN_SOURCES
     # The state blob's string reads, shared by the two functions above that decode one.
     src/statestream.h
     src/rationsfactory.cpp
-    src/rationsview.h
-    src/rationsview.cpp
-    src/filebrowser.h
-    src/filebrowser.cpp
     src/engineconfig.h
     src/spscqueue.h
     src/bank.h
@@ -555,6 +719,10 @@ set(RATIONS_PLUGIN_SOURCES
     src/pedals/reverb.h
     src/pedals/pedalchain.h
     src/pedals/pedalchain.cpp
+    src/rationsview.h
+    src/rationsview.cpp
+    src/filebrowser.h
+    src/filebrowser.cpp
     src/platform/plugview.h
     ${RATIONS_PLATFORM_VIEW_SOURCES}
 )
@@ -568,6 +736,13 @@ set(RATIONS_PLUGIN_SOURCES
 # PARAMS_UNPARSED_ARGUMENTS and the target is built with none
 # (vst3sdk/cmake/modules/SMTG_AddVST3Library.cmake).
 smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${RATIONS_PLUGIN_SOURCES})
+
+# macplugview.mm is Objective-C++ and is deliberately built WITHOUT -fobjc-arc,
+# unlike the SDK's module_mac.mm above. It owns its NSView the way its Win32
+# sibling owns its HWND -- an explicit create/destroy pair in a C++ object -- so
+# manual retain/release is what makes the two files read alike, and ARC would
+# additionally constrain how an Objective-C pointer may be held in a C++ member.
+# Stated here because the absence of a flag is not visible at the file itself.
 
 # ---------------------------------------------------------------------------
 # Put the Windows DLL inside its own bundle.
@@ -611,6 +786,42 @@ if(RATIONS_WINDOWS)
     message(STATUS "[Rations] bundle binary -> ${RATIONS_PKG_PATH}/${RATIONS_PKG_CONTENTS}/${RATIONS_WIN_ARCH}")
 endif()
 
+# ---------------------------------------------------------------------------
+# The macOS bundle's Info.plist.
+#
+# Written here because nothing else writes it. The SDK's smtg_target_set_bundle()
+# does its plist work entirely inside if(XCODE) branches, and this project builds
+# with Ninja, so under the SDK alone the bundle would carry whatever CMake's
+# default template produces -- which knows nothing about VST3 and, in
+# particular, nothing about CFBundlePackageType BNDL or NSHighResolutionCapable.
+#
+# configure_file() into the build tree rather than pointing
+# MACOSX_BUNDLE_INFO_PLIST straight at the template: that property's own
+# substitution only understands CMake's fixed MACOSX_BUNDLE_* variable names,
+# and half of what this plist needs has no such name. Configuring it ourselves
+# means every value comes from a variable named at its site.
+#
+# The two forms of the product name are D25's and the distinction is deliberate:
+# CFBundleExecutable is IDENTITY and must match the binary CMake puts in
+# Contents/MacOS, while CFBundleName is DISPLAY and is the string a user reads.
+# stringPluginName in src/version.h is the same display string the DAW's plug-in
+# list shows, so the two cannot disagree.
+# ---------------------------------------------------------------------------
+if(RATIONS_MACOS)
+    set(RATIONS_BUNDLE_EXECUTABLE "NAMp-rations")
+    set(RATIONS_BUNDLE_DISPLAY_NAME "NAMp Rations")
+    set(RATIONS_BUNDLE_IDENTIFIER "com.rations.vst3.namp-rations")
+    set(RATIONS_BUNDLE_VERSION "${PROJECT_VERSION}")
+    set(RATIONS_BUNDLE_COPYRIGHT
+        "MIT licence; NAM DSP core (C) Steven Atkinson")
+    configure_file(
+        "${RATIONS_ROOT}/packaging/mac/Info.plist.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/mac/Info.plist"
+        @ONLY)
+    set_target_properties(Rations PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/mac/Info.plist")
+endif()
+
 smtg_target_configure_version_file(Rations)
 
 # Title (Michroma) and body (Roboto) fonts, loaded straight out of the bundle by
@@ -630,6 +841,15 @@ smtg_target_add_plugin_resources(Rations
 
 target_compile_features(Rations PUBLIC cxx_std_17)
 target_compile_options(Rations PRIVATE -ffast-math -Wall)
+if(RATIONS_MACOS)
+    # target_compile_features' cxx_std_17 sets CXX_STANDARD and nothing else, so
+    # macplugview.mm would compile at whatever the compiler's default Objective-C++
+    # dialect happens to be. It uses C++17 (constexpr, nullptr-typed members,
+    # if-with-initialiser), and a toolchain whose default moved would either fail
+    # to build it or silently build it under different rules from the rest of the
+    # bundle.
+    set_target_properties(Rations PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+endif()
 target_include_directories(Rations PRIVATE ${RATIONS_ROOT}/src)
 
 target_link_libraries(Rations
@@ -637,8 +857,8 @@ target_link_libraries(Rations
         sdk
         RationsGfx
         ${RATIONS_PLATFORM_GUI_LIBS}
-        -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive
 )
+rations_link_whole_dsp(Rations)
 
 # The visibility preset above covers every object we compile; it cannot cover
 # the SDK's own archives, which are built in the SDK's scope at default
@@ -651,7 +871,21 @@ target_link_libraries(Rations
 # NAM registry, one layer down. --whole-archive still applies: it decides which
 # objects are pulled in, and the DSP core's self-registering architectures are
 # registered from .init_array, which needs no exported symbol.
-target_link_options(Rations PRIVATE -Wl,--exclude-libs,ALL)
+#
+# ld64 has no --exclude-libs, and does not need one: it takes an explicit
+# allow-list instead, which is the stricter of the two forms -- a deny-all on
+# archives leaves anything compiled INTO the target exported if its visibility
+# says so, while an allow-list names the entire public surface outright. The
+# file used is the SDK's own macexport.exp, which holds exactly the three
+# entry points macmain.cpp defines (_GetPluginFactory, _bundleEntry,
+# _bundleExit), so the mac bundle's exports are the same three the Windows one
+# gates on and the Linux one asserts.
+if(RATIONS_MACOS)
+    target_link_options(Rations PRIVATE
+        "-Wl,-exported_symbols_list,${VST3_SDK_DIR}/public.sdk/source/main/macexport.exp")
+else()
+    target_link_options(Rations PRIVATE -Wl,--exclude-libs,ALL)
+endif()
 
 # ---------------------------------------------------------------------------
 # panelrender — offline render of each editor page to a PNG, plus an audit of
@@ -672,9 +906,37 @@ target_link_options(Rations PRIVATE -Wl,--exclude-libs,ALL)
 if(RATIONS_WINDOWS)
     set(RATIONS_MODULE_LOADER
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
+elseif(RATIONS_MACOS)
+    # Objective-C++: it loads the bundle through CFBundle and reads
+    # moduleinfo.json with NSBundle. enable_language(OBJCXX) is done just after
+    # project(), and CMake picks the OBJCXX compiler off the .mm extension
+    # without any per-target property.
+    set(RATIONS_MODULE_LOADER
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_mac.mm)
 else()
     set(RATIONS_MODULE_LOADER
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
+endif()
+
+# Two things module_mac.mm needs that its Linux and Windows siblings do not, both
+# taken from the SDK's own validator target rather than guessed
+# (public.sdk/samples/vst-hosting/validator/CMakeLists.txt:96-115, 135-141):
+#
+#   -fobjc-arc  the file is written for Automatic Reference Counting. Without the
+#               flag it compiles under manual retain/release, where its ARC-managed
+#               NSBundle and NSString locals are simply leaked rather than rejected
+#               — a silent miscompilation, not an error.
+#   Cocoa       the framework the SDK links for exactly this file when the generator
+#               is not Xcode, which is our case.
+#
+# set_source_files_properties is directory-scoped, so this one call covers every
+# tool below that names ${RATIONS_MODULE_LOADER}. RATIONS_MODULE_LOADER_LIBS is
+# empty on the other two platforms and disappears from their link lines.
+set(RATIONS_MODULE_LOADER_LIBS "")
+if(RATIONS_MACOS)
+    set_source_files_properties(${RATIONS_MODULE_LOADER} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    find_library(RATIONS_COCOA_FRAMEWORK Cocoa REQUIRED)
+    set(RATIONS_MODULE_LOADER_LIBS ${RATIONS_COCOA_FRAMEWORK})
 endif()
 
 add_executable(rations_offline
@@ -691,7 +953,7 @@ add_executable(rations_offline
 # says it should. Header-only, and nothing else of the DSP is linked into this tool.
 target_include_directories(rations_offline PRIVATE ${RATIONS_ROOT}/src
     ${NAM_CORE_DIR}/Dependencies/nlohmann)
-target_link_libraries(rations_offline PRIVATE sdk_hosting)
+target_link_libraries(rations_offline PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_offline PRIVATE cxx_std_17)
 target_compile_options(rations_offline PRIVATE -Wall)
 add_dependencies(rations_offline Rations)
@@ -716,7 +978,7 @@ add_executable(rations_midicheck
     ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
 )
 target_include_directories(rations_midicheck PRIVATE ${RATIONS_ROOT}/src)
-target_link_libraries(rations_midicheck PRIVATE sdk_hosting)
+target_link_libraries(rations_midicheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_midicheck PRIVATE cxx_std_17)
 target_compile_options(rations_midicheck PRIVATE -Wall)
 add_dependencies(rations_midicheck Rations)
@@ -741,7 +1003,7 @@ add_executable(rations_ircheck
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
 )
 target_include_directories(rations_ircheck PRIVATE ${RATIONS_ROOT}/src)
-target_link_libraries(rations_ircheck PRIVATE sdk_hosting)
+target_link_libraries(rations_ircheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_ircheck PRIVATE cxx_std_17)
 target_compile_options(rations_ircheck PRIVATE -Wall)
 add_dependencies(rations_ircheck Rations)
@@ -761,8 +1023,7 @@ target_include_directories(rations_fadecheck PRIVATE ${RATIONS_ROOT}/src)
 # linker drops those object files from a normal static link because nothing
 # references them by name. The symptom is a clean build that fails at run time
 # with "No config parser registered for architecture: WaveNet".
-target_link_libraries(rations_fadecheck
-    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+rations_link_whole_dsp(rations_fadecheck)
 target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
 target_compile_options(rations_fadecheck PRIVATE -Wall)
 
@@ -774,7 +1035,11 @@ target_compile_options(rations_fadecheck PRIVATE -Wall)
 # are present: it is a measurement rig, not part of the plug-in, and its absence
 # must not stop the plug-in from building.
 # ---------------------------------------------------------------------------
-if(NOT RATIONS_WINDOWS)
+# RATIONS_LINUX rather than NOT RATIONS_WINDOWS, which is what this said while
+# there were two platforms and which would now silently offer to build a JACK
+# client and an X11 standalone on macOS. JACK does exist there; it is not what a
+# mac user has, and standalone/ is X11 and Linux::IRunLoop throughout.
+if(RATIONS_LINUX)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(RATIONS_JACK QUIET jack)
@@ -864,8 +1129,7 @@ add_executable(rations_switchcheck
     ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
 )
 target_include_directories(rations_switchcheck PRIVATE ${RATIONS_ROOT}/src ${VST3_SDK_DIR})
-target_link_libraries(rations_switchcheck
-    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+rations_link_whole_dsp(rations_switchcheck)
 target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
 target_compile_options(rations_switchcheck PRIVATE -Wall)
 
@@ -893,8 +1157,7 @@ add_executable(rations_racecheck
     ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
 )
 target_include_directories(rations_racecheck PRIVATE ${RATIONS_ROOT}/src ${VST3_SDK_DIR})
-target_link_libraries(rations_racecheck
-    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+rations_link_whole_dsp(rations_racecheck)
 target_compile_features(rations_racecheck PRIVATE cxx_std_20)
 target_compile_options(rations_racecheck PRIVATE -Wall)
 # TSan is a Linux gate and always was. MinGW ships no ThreadSanitizer runtime,
@@ -920,10 +1183,18 @@ endif()
 # tools/test/allocation_tracking.h — which is an ELF/glibc mechanism with no PE
 # equivalent, and that file is in a read-only upstream tree we do not patch. So
 # the no-allocation-on-the-RT-path gate that RULES.md requires is proved on
-# Linux and inherited by Windows: the audio path is the same source, and the
-# platform layer adds nothing to it.
+# Linux and inherited by the other two: the audio path is the same source, and
+# the platform layer adds nothing to it.
+#
+# macOS is excluded for the same reason Windows is, and had to be named rather
+# than left to fall through the old NOT RATIONS_WINDOWS: dlsym(RTLD_NEXT, ...)
+# compiles and links on Darwin, so mac would have built this target and run a
+# harness that does not intercept anything there -- dyld interposition is
+# DYLD_INSERT_LIBRARIES plus a __DATA,__interpose section, which that upstream
+# file does not implement. A gate that passes because it measured nothing is
+# worse than one that is absent.
 # ---------------------------------------------------------------------------
-if(NOT RATIONS_WINDOWS)
+if(RATIONS_LINUX)
 add_executable(rations_rtcheck
     ${RATIONS_ROOT}/tools/rations_rtcheck.cpp
     ${RATIONS_ROOT}/src/irblend.cpp
@@ -948,8 +1219,7 @@ add_executable(rations_rtcheck
 # ships.
 target_include_directories(rations_rtcheck
     PRIVATE ${RATIONS_ROOT}/src ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
-target_link_libraries(rations_rtcheck
-    PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
+rations_link_whole_dsp(rations_rtcheck)
 target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
 # The interception harness needs real calls to operator new, so the optimiser
 # must not be allowed to elide them, and NDEBUG must not disable the checks.

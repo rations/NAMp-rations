@@ -1,0 +1,444 @@
+# macOS build and gates.
+#
+# WHY CI AND NOT A CROSS BUILD. The rest of this project is built on one Linux
+# box, Windows included: MinGW cross-compiles it and Wine runs every gate on it,
+# so a Windows regression is caught on the machine that caused it. macOS has no
+# equivalent to either half. Cross-compiling to Darwin is possible with osxcross,
+# but it needs a macOS SDK extracted from Xcode -- which Apple licenses for use
+# on Apple hardware only -- and, decisively, nothing built that way could be RUN:
+# there is no Wine for Darwin. A macOS runner gives a native toolchain, a
+# licensed SDK, and a place where the validator and panelrender actually execute.
+#
+# TWO RUNNERS, ONE SLICE EACH, JOINED BY LIPO LATER. A single arm64 runner can
+# compile an x86_64 slice, but it cannot run that slice's gates without assuming
+# Rosetta 2 is installed -- so every proof would silently only ever cover one
+# architecture. Each slice is therefore built and gated on a host of its own
+# architecture, and only already-proven binaries are joined.
+#
+# WHAT THIS DOES NOT COVER, and it is a large gap rather than a small one: every
+# capture-dependent proof (rations_offline, ir-gate.sh, rations_switchcheck, most
+# of rations_midicheck) needs .nam banks, and the plug-in ships none because the
+# captures are not ours to distribute. The macOS DSP path is therefore unmeasured,
+# and docs/macos-testing.md is what stands in for it -- a person listening. The
+# thing that would close it properly is a synthetic .nam fixture generator, which
+# would close it for Linux and Windows at the same time.
+name: macOS
+
+# WHEN THIS RUNS. Every push on every branch, EXCEPT ones that cannot affect the
+# result. A macOS run is two runner-minutes-heavy builds plus a diff, and a
+# README or docs commit does not need any of it.
+#
+# The list is what to IGNORE rather than what to match, deliberately: forgetting
+# an entry here means a run that was not needed, which is free, where forgetting
+# one in a match list means a change that silently stops being checked. So
+# anything not named below still triggers a build -- src, resources, tools,
+# CMakeLists.txt, the vendored DSP, the submodule pins, and this file.
+#
+# To stop it running at all, without a commit: the repository's Actions tab,
+# this workflow, the "..." menu, Disable workflow. That also removes the manual
+# Run workflow button until it is enabled again.
+on:
+  push:
+    branches: ['**']
+    paths-ignore: &docs_only
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+      - 'installer/**'
+      - 'standalone/**'
+      - 'scripts/makedist-linux.sh'
+      - 'scripts/makedist-windows.sh'
+      - 'scripts/build-win-deps.sh'
+      - 'gui/**'
+  pull_request:
+    paths-ignore: *docs_only
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.arch }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both slices always run to completion: when one architecture fails and
+      # the other does not, that difference IS the finding, and cancelling the
+      # sibling would throw it away.
+      fail-fast: false
+      matrix:
+        include:
+          # THESE LABELS ARE PERISHABLE AND ONE OF THEM ALREADY EXPIRED. GitHub
+          # retires macOS images on a rolling schedule, and the failure mode is
+          # the nastiest kind: a job asking for a label that no longer exists is
+          # not rejected, it QUEUES FOREVER. The first run of this workflow sat
+          # 12 hours on macos-13 before anyone thought to look, while the arm64
+          # half had long since run.
+          #
+          # So: check the label against the source before changing it, which is
+          # the table in https://github.com/actions/runner-images (README.md).
+          # As of that table, macos-13 is gone entirely and macos-14 is marked
+          # deprecated in both its variants; macos-15 is the current standard
+          # arm64 image and macos-15-intel the current standard x64 one. The
+          # -large and -xlarge suffixes are LARGER RUNNERS and are billed even
+          # on a public repository, so they are not interchangeable with these.
+          #
+          # fail-fast is off partly for this: a label that dies on one
+          # architecture must not stop the other from building and reporting.
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+
+    # ACTION VERSIONS ARE THE LOWEST MAJOR THAT RUNS ON NODE 24, not the newest
+    # available, and the difference is not caution for its own sake. Node 20 is
+    # deprecated on the runners, which is the only thing being fixed here, and
+    # every major above the one that fixes it carries unrelated behaviour
+    # changes. One of them would break this workflow outright:
+    # download-artifact@v8 "will no longer attempt to unzip all downloads", and
+    # the universal job downloads two slices and expects them extracted. So the
+    # pins are checkout v5, cache v5, upload-artifact v6 and download-artifact
+    # v7 -- each the release whose own notes say it moved to node24 -- and the
+    # upload/download pair is kept off the v7/v8 direct-upload change, which the
+    # two actions have to agree about.
+    steps:
+      - uses: actions/checkout@v5
+
+      # The SDK is a superproject and only four of its submodules are needed;
+      # `submodules: recursive` on the checkout action would additionally pull
+      # vstgui4, doc and tutorials, none of which this project builds. Same
+      # sequence a local clone uses, and the same reason.
+      - name: Submodules
+        run: |
+          git submodule update --init --recursive \
+              NeuralAmpModelerCore AudioDSPTools eigen
+          git submodule update --init vst3sdk
+          git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
+
+      # Installed one at a time and only when absent. GitHub's images already
+      # carry some of these, and `brew install` on a formula that is present but
+      # outdated can decide to upgrade it and fail on a linking conflict with
+      # something else preinstalled -- which would break the build for a reason
+      # having nothing to do with this project.
+      - name: Build tools
+        run: |
+          for f in meson ninja pkg-config; do
+            brew list --formula "$f" >/dev/null 2>&1 || brew install "$f"
+          done
+          cmake --version; meson --version; ninja --version
+
+      # Keyed on the script rather than on a version string: every pin lives in
+      # that file, so a changed pin is a changed hash and a rebuilt sysroot.
+      - name: Cache the dependency sysroot
+        id: deps-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/third_party/mac-deps
+          key: macdeps-${{ matrix.arch }}-${{ hashFiles('scripts/build-mac-deps.sh') }}
+
+      # Run unconditionally, cache hit or not: the script is idempotent through
+      # per-module stamp files that live inside the cached tree, so on a hit it
+      # is a fast no-op that still prints the sysroot roll-call and still fails
+      # if a cached tree is incomplete or has acquired a dylib. Gating it on
+      # cache-miss would mean a corrupt cache is discovered at link time.
+      - name: Dependency sysroot (static cairo/freetype/pixman/png/zlib)
+        run: scripts/build-mac-deps.sh
+        env:
+          RATIONS_MAC_ARCH: ${{ matrix.arch }}
+
+      # PKG_CONFIG_LIBDIR points at our sysroot and NOTHING else, which is what
+      # keeps Homebrew's dylibs out of the link. Without it pkg_check_modules
+      # would happily find /opt/homebrew's cairo and produce a bundle that loads
+      # on this runner and on no user's machine.
+      #
+      # Set inside the script rather than in an `env:` block because it has to
+      # expand $HOME, and an `env:` value is an Actions expression in which
+      # $HOME is literal text.
+      # PRINTED BEFORE CONFIGURING, because the log of this workflow cannot be read
+      # from the machine this project is developed on -- the GitHub API serves run
+      # and step status to anyone, and job logs only to a repository admin. So a
+      # failure here is copied out by hand, and everything needed to diagnose one
+      # should be in the same screenful as the error rather than three steps up.
+      #
+      # xcodebuild in particular: the SDK's smtg_detect_xcode_version() runs
+      # `xcodebuild -version` with ERROR_QUIET, and an empty result compares as 0,
+      # which trips its own "XCode 9 or newer is required" FATAL_ERROR. That
+      # failure names the wrong cause, so the real one is worth having above it.
+      - name: Toolchain and sysroot
+        run: |
+          echo "--- xcode ---"
+          xcode-select -p || true
+          xcodebuild -version || echo "xcodebuild FAILED - see the note in the workflow"
+          xcrun --sdk macosx --show-sdk-path || true
+          echo "--- cmake / ninja ---"
+          cmake --version | head -1
+          ninja --version
+          echo "--- sysroot ---"
+          SYSROOT="$HOME/third_party/mac-deps/${{ matrix.arch }}/sysroot"
+          ls -la "$SYSROOT/lib/pkgconfig" || true
+          PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig" PKG_CONFIG_PATH="" \
+            pkg-config --modversion cairo cairo-ft freetype2 libpng zlib || true
+          echo "--- any dylib in the sysroot (there must be none) ---"
+          find "$SYSROOT" -name '*.dylib' || true
+
+      - name: Configure
+        run: |
+          export PKG_CONFIG_LIBDIR="$HOME/third_party/mac-deps/${{ matrix.arch }}/sysroot/lib/pkgconfig"
+          export PKG_CONFIG_PATH=""
+          test -d "$PKG_CONFIG_LIBDIR" || { echo "no sysroot at $PKG_CONFIG_LIBDIR" >&2; exit 1; }
+          cmake -S . -B build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+
+      # Everything: the bundle, the SDK's validator and moduleinfotool, and every
+      # offline tool. rations_jackcheck and rations_rtcheck are Linux-gated in
+      # CMakeLists.txt and are simply absent here.
+      - name: Build
+        run: cmake --build build --parallel
+
+      # panelrender is the first gate on a new platform for the same reason it was
+      # on Windows: it proves cairo, FreeType, PNG decode, NanoSVG and the whole of
+      # src/gfx before any window code exists, and it audits every art asset and
+      # every legend against geometry.h while it does so.
+      - name: Render and audit the editor pages
+        run: |
+          mkdir -p panels
+          ./build/panelrender panels/mac resources 1.0
+
+      # moduleinfo.json is generated for us: SMTG_CREATE_MODULE_INFO defaults ON
+      # and its POST_BUILD step runs a natively-built moduleinfotool, which is why
+      # this needs none of the explicit generation makedist-windows.sh does under
+      # Wine. Asserted rather than assumed, because a silent failure there would
+      # leave the bundle valid and the file missing.
+      - name: moduleinfo.json
+        run: |
+          BUNDLE=build/VST3/Release/NAMp-rations.vst3
+          test -s "$BUNDLE/Contents/Resources/moduleinfo.json" \
+            || { echo "no moduleinfo.json in the bundle" >&2; exit 1; }
+          head -c 200 "$BUNDLE/Contents/Resources/moduleinfo.json"; echo
+
+      # A green validator is a FLOOR, never a gate -- three separate things in this
+      # project have been wrong while it passed all 47 tests. It is run because it
+      # is cheap and catches gross breakage, not because it settles anything.
+      - name: SDK validator
+        run: |
+          BUNDLE=build/VST3/Release/NAMp-rations.vst3
+          VALIDATOR=build/bin/Release/validator
+          test -x "$VALIDATOR" || VALIDATOR=build/bin/validator
+          OUT="$("$VALIDATOR" "$BUNDLE" 2>&1 || true)"
+          echo "$OUT"
+          echo "$OUT" | grep -qE '^Result: [0-9]+ tests passed, 0 tests failed' \
+            || { echo "the SDK validator did not pass" >&2; exit 1; }
+
+      # The mirror of makedist-windows.sh's objdump export gate. A VST3 bundle
+      # offers exactly three entry points; anything else in the dynamic table is a
+      # symbol two SDK versions in one host could interpose on each other.
+      #
+      # nm -gU: global (-g) and defined here (-U), so undefined imports are not
+      # counted. The leading underscore is the Mach-O C symbol prefix.
+      - name: Exports are exactly the three VST3 entry points
+        run: |
+          BIN=build/VST3/Release/NAMp-rations.vst3/Contents/MacOS/NAMp-rations
+          # Both sides sorted the same way and under LC_ALL=C: a plain sort
+          # collates by locale, where _GetPluginFactory lands AFTER _bundleEntry
+          # because case is folded, so comparing against a hand-written order
+          # fails on a correct bundle. Found by dry-running the packaging script
+          # against stub tools rather than on a runner.
+          GOT="$(nm -gU "$BIN" | awk '{print $3}' | LC_ALL=C sort -u)"
+          WANT="$(printf '%s\n' _GetPluginFactory _bundleEntry _bundleExit | LC_ALL=C sort)"
+          echo "$GOT"
+          test "$GOT" = "$WANT" \
+            || { echo "unexpected exported symbols" >&2; exit 1; }
+
+      # The mirror of the imports gate, and the thing that proves the static
+      # sysroot was actually linked: a bundle that names /opt/homebrew loads on
+      # this runner and on nobody else's machine.
+      - name: Links nothing but system libraries
+        run: |
+          BIN=build/VST3/Release/NAMp-rations.vst3/Contents/MacOS/NAMp-rations
+          otool -L "$BIN"
+          BAD="$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
+                 | grep -vE '^(/usr/lib/|/System/Library/Frameworks/)' || true)"
+          test -z "$BAD" || { echo "non-system dependencies:"; echo "$BAD"; exit 1; }
+
+      # The same four both makedist scripts assert. A bundle that loads and then
+      # draws flat rectangles is a worse failure than one that does not load.
+      - name: Load-bearing resources are in the bundle
+        run: |
+          RES=build/VST3/Release/NAMp-rations.vst3/Contents/Resources
+          for f in img/head.png img/File.svg \
+                   fonts/Michroma-Regular.ttf fonts/Roboto-Regular.ttf; do
+            test -s "$RES/$f" || { echo "missing $f" >&2; exit 1; }
+          done
+          echo "all four present"
+
+      # The one proof in this tree that needs no captures -- a pedal is the same
+      # arithmetic whatever is upstream of it -- and so the only DSP measurement
+      # macOS gets at all until the fixture generator exists. Every other offline
+      # proof takes .nam banks that are not ours to ship.
+      #
+      # rations_racecheck is NOT run here despite being listed in the port plan:
+      # it takes capture directories as positional arguments, so CI has nothing to
+      # give it. Corrected by reading the tool, not by running it.
+      - name: rations_pedalcheck
+        run: ./build/rations_pedalcheck
+
+      # Uploaded so the pages can be LOOKED AT. Three of the defects this
+      # project's art has produced were invisible to every audit and visible
+      # immediately in the render.
+      - name: Upload rendered pages
+        uses: actions/upload-artifact@v6
+        with:
+          name: panels-${{ matrix.arch }}
+          path: panels/*.png
+          if-no-files-found: error
+
+      # AS A TARBALL, not as a directory, and both halves of that matter.
+      # upload-artifact does not preserve file permissions, and it re-roots a
+      # directory path at its contents -- so uploading the bundle directly would
+      # arrive as a bare Contents/ with the .vst3 wrapper name gone and the
+      # executable bit off. tar preserves both.
+      #
+      # Note what is NOT in here: the SDK ad-hoc-signs only moduleinfo.json under a
+      # Ninja build (smtg_target_codesign is entirely inside an if(XCODE) branch),
+      # so the bundle carries no _CodeSignature of its own yet. The linker's own
+      # default ad-hoc signature is what makes the arm64 slice executable at all;
+      # signing the assembled bundle is the packaging job's, and has to happen after
+      # lipo and strip have finished rewriting the binary.
+      - name: Pack the slice
+        run: tar -czf "bundle-${{ matrix.arch }}.tar.gz" -C build/VST3/Release NAMp-rations.vst3
+
+      - name: Upload the slice
+        uses: actions/upload-artifact@v6
+        with:
+          name: bundle-${{ matrix.arch }}
+          path: bundle-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # The universal binary. Runs only when BOTH slices have passed their own gates,
+  # which is the whole design: lipo joins binaries that have already been proved
+  # on a host of their own architecture, never two halves of one cross build.
+  # ---------------------------------------------------------------------------
+  universal:
+    name: universal binary
+    needs: build
+    # Only lipo, codesign and ditto run here, so the architecture does not
+    # matter -- but the label still has to be one that exists. See the matrix.
+    runs-on: macos-15
+    steps:
+      # For scripts/makedist-mac.sh and for the version, which it reads out of
+      # CMakeLists.txt the same way the Linux and Windows scripts do so the three
+      # releases cannot be tagged differently. No submodules and no build here.
+      - uses: actions/checkout@v5
+
+      - name: Download both slices
+        uses: actions/download-artifact@v7
+        with:
+          pattern: bundle-*
+          path: slices
+
+      - name: Unpack
+        run: |
+          for arch in arm64 x86_64; do
+            mkdir -p "slices/$arch"
+            tar -xzf "slices/bundle-$arch/bundle-$arch.tar.gz" -C "slices/$arch"
+            test -x "slices/$arch/NAMp-rations.vst3/Contents/MacOS/NAMp-rations" \
+              || { echo "slice $arch did not unpack with its executable bit" >&2; exit 1; }
+          done
+
+      # Joins, strips, gates (architectures, exports, dependencies, resources),
+      # ad-hoc signs, and archives with ditto -- then extracts the archive again and
+      # re-verifies the signature, which is the only thing that proves the archiver
+      # did not drop it.
+      - name: Package
+        run: |
+          scripts/makedist-mac.sh \
+            --bundle slices/arm64/NAMp-rations.vst3 \
+            --bundle slices/x86_64/NAMp-rations.vst3
+
+      - name: Upload the release archive
+        uses: actions/upload-artifact@v6
+        with:
+          name: NAMp-rations-macos-universal
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Does the arm64 editor DRAW what the x86_64 one draws?
+  #
+  # This is the only automated check of the macOS editor's appearance, and it
+  # asks a question the Windows panel diff cannot. That one compares two builds
+  # on ONE instruction set, so it measures a toolchain difference; this compares
+  # two instruction sets from one source tree with pinned-identical
+  # dependencies, so what is left is arithmetic -- above all whether arm64's
+  # fused multiply-add contracts the dial trigonometry differently from x86_64's.
+  # The two pages that differ at all on Windows are exactly the two that draw
+  # rotated dials, and the measurement below half agrees: the head page differs
+  # and the pedalboard, whose pedal knobs are drawn by the same code at a smaller
+  # radius, does not.
+  #
+  # IT NEEDS NO BASELINE FROM ANYONE'S MACHINE, which is why it can run on every
+  # push. Comparing against the LINUX render would need this repository to carry
+  # 1.5 MB of committed PNGs that go stale on every art edit; that comparison is
+  # run by hand instead -- download the panels-arm64 artifact and point
+  # scripts/panel-diff.sh at it and at a local `build/panelrender` render.
+  #
+  # THE THRESHOLDS ARE MEASURED. They were a placeholder borrowed from the
+  # Linux-versus-Windows diff until this pair had ever been run; it has now, at
+  # AppleClang 17 / macOS 15, and what it reported is:
+  #
+  #     head           35 of   456599 px differ, worst channel delta 1/255
+  #     cabinet         0 of   294400 px differ, byte-identical
+  #     pedalboard      0 of   450822 px differ, byte-identical
+  #     settings        0 of   746240 px differ, byte-identical
+  #     TOTAL          35 of  1948061 px
+  #
+  # So the two instruction sets agree on three pages exactly, and disagree on 35
+  # pixels of one -- every one of them by a single quantisation step, which is
+  # what a rounding difference looks like by definition. That is the answer to
+  # the FMA question this job was built to ask: contraction does move the dial
+  # trigonometry, and it moves it by less than one part in 255.
+  #
+  # PIXELS is set ABOVE the worst case with margin (35 -> 256), per the rule this
+  # project applies to every threshold, so it reports a regression rather than
+  # its own noise floor. It is deliberately the same number the Windows diff
+  # uses: two platforms measured independently at 32 and 35 do not need two
+  # different caps, and one number is one thing to remember.
+  #
+  # DELTA is set AT the measured value rather than above it, and that is not an
+  # inconsistency. 1/255 is not a measurement that could drift; it is the
+  # definition of rounding. A delta of 2 means ink landed where there was none,
+  # which is a rasterisation difference and not arithmetic, and no amount of
+  # margin should let that through. It is the sharper of the two gates.
+  # ---------------------------------------------------------------------------
+  panel-diff:
+    name: panel diff (arm64 vs x86_64)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # No decoder to install: panel-diff.sh reads the PNGs with the Python
+      # standard library. It used to want ImageMagick 7's `magick`, and apt's
+      # `imagemagick` is version 6, which ships `convert` and no `magick` at
+      # all -- so that step passed and bought nothing. Nothing in this job needs
+      # a Mac, which is why it is not on one.
+
+      - name: Download both renders
+        uses: actions/download-artifact@v7
+        with:
+          pattern: panels-*
+          path: panels
+
+      - name: Compare
+        env:
+          PANEL_MAX_PIXELS: 256
+          PANEL_MAX_DELTA: 1
+        run: |
+          ls -R panels
+          scripts/panel-diff.sh \
+            panels/panels-arm64 mac panels/panels-x86_64 mac arm64 x86_64
