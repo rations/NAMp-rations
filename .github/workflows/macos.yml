@@ -67,8 +67,19 @@ jobs:
           - runner: macos-15-intel
             arch: x86_64
 
+    # ACTION VERSIONS ARE THE LOWEST MAJOR THAT RUNS ON NODE 24, not the newest
+    # available, and the difference is not caution for its own sake. Node 20 is
+    # deprecated on the runners, which is the only thing being fixed here, and
+    # every major above the one that fixes it carries unrelated behaviour
+    # changes. One of them would break this workflow outright:
+    # download-artifact@v8 "will no longer attempt to unzip all downloads", and
+    # the universal job downloads two slices and expects them extracted. So the
+    # pins are checkout v5, cache v5, upload-artifact v6 and download-artifact
+    # v7 -- each the release whose own notes say it moved to node24 -- and the
+    # upload/download pair is kept off the v7/v8 direct-upload change, which the
+    # two actions have to agree about.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The SDK is a superproject and only four of its submodules are needed;
       # `submodules: recursive` on the checkout action would additionally pull
@@ -97,7 +108,7 @@ jobs:
       # that file, so a changed pin is a changed hash and a rebuilt sysroot.
       - name: Cache the dependency sysroot
         id: deps-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/third_party/mac-deps
           key: macdeps-${{ matrix.arch }}-${{ hashFiles('scripts/build-mac-deps.sh') }}
@@ -253,7 +264,7 @@ jobs:
       # project's art has produced were invisible to every audit and visible
       # immediately in the render.
       - name: Upload rendered pages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: panels-${{ matrix.arch }}
           path: panels/*.png
@@ -275,7 +286,7 @@ jobs:
         run: tar -czf "bundle-${{ matrix.arch }}.tar.gz" -C build/VST3/Release NAMp-rations.vst3
 
       - name: Upload the slice
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bundle-${{ matrix.arch }}
           path: bundle-${{ matrix.arch }}.tar.gz
@@ -296,10 +307,10 @@ jobs:
       # For scripts/makedist-mac.sh and for the version, which it reads out of
       # CMakeLists.txt the same way the Linux and Windows scripts do so the three
       # releases cannot be tagged differently. No submodules and no build here.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download both slices
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: bundle-*
           path: slices
@@ -324,7 +335,7 @@ jobs:
             --bundle slices/x86_64/NAMp-rations.vst3
 
       - name: Upload the release archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: NAMp-rations-macos-universal
           path: dist/*.zip
@@ -363,7 +374,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # No decoder to install: panel-diff.sh reads the PNGs with the Python
       # standard library. It used to want ImageMagick 7's `magick`, and apt's
@@ -372,7 +383,7 @@ jobs:
       # a Mac, which is why it is not on one.
 
       - name: Download both renders
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: panels-*
           path: panels
