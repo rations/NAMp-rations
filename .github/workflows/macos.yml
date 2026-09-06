@@ -24,10 +24,36 @@
 # would close it for Linux and Windows at the same time.
 name: macOS
 
+# WHEN THIS RUNS. Every push on every branch, EXCEPT ones that cannot affect the
+# result. A macOS run is two runner-minutes-heavy builds plus a diff, and a
+# README or docs commit does not need any of it.
+#
+# The list is what to IGNORE rather than what to match, deliberately: forgetting
+# an entry here means a run that was not needed, which is free, where forgetting
+# one in a match list means a change that silently stops being checked. So
+# anything not named below still triggers a build -- src, resources, tools,
+# CMakeLists.txt, the vendored DSP, the submodule pins, and this file.
+#
+# To stop it running at all, without a commit: the repository's Actions tab,
+# this workflow, the "..." menu, Disable workflow. That also removes the manual
+# Run workflow button until it is enabled again.
 on:
   push:
     branches: ['**']
+    paths-ignore: &docs_only
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+      - 'installer/**'
+      - 'standalone/**'
+      - 'scripts/makedist-linux.sh'
+      - 'scripts/makedist-windows.sh'
+      - 'scripts/build-win-deps.sh'
+      - 'gui/**'
   pull_request:
+    paths-ignore: *docs_only
   workflow_dispatch:
 
 concurrency:
