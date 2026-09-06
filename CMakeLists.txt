@@ -59,6 +59,20 @@ project(smtg-rations
 
 set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Objective-C++, and it belongs HERE rather than in the platform split below,
+# which is where every other platform decision in this file lives. Three files
+# in this build are .mm: the editor's NSView, and the SDK's own module_mac.mm,
+# which the validator, moduleinfotool and the offline tools each compile into a
+# target of their own. Those targets are created by the SDK's add_subdirectory
+# sixty lines down, and enable_language sets its rules FORWARD ONLY -- enabling
+# it after that call leaves every one of them with no rule for a .mm file, and
+# generation then fails with eleven copies of "Missing variable is:
+# CMAKE_OBJCXX_COMPILE_OBJECT" after configure has already reported success.
+# Guarded so a Linux or Windows build never asks for a compiler it cannot use.
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 # ---------------------------------------------------------------------------
 # Dependency source trees. Each defaults to the in-tree submodule path and can
 # be pointed at an external checkout instead, which is how development against
@@ -305,11 +319,8 @@ if(WIN32)
 elseif(APPLE)
     set(RATIONS_MACOS ON)
 
-    # Objective-C++. Three files need it and no more: the editor's NSView, and
-    # the SDK's own module_mac.mm which the offline tools load the bundle with.
-    # Enabled here rather than in the project() call so a Linux or Windows build
-    # never asks for a compiler it has no use for.
-    enable_language(OBJCXX)
+    # Objective-C++ is enabled immediately after project(), NOT here: it has to
+    # precede the SDK's add_subdirectory. See the comment at that site.
 
     # Both defaults are set before project() -- see the comment there for why
     # they cannot be set here. This is the check that the result is usable.
@@ -868,9 +879,9 @@ if(RATIONS_WINDOWS)
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
 elseif(RATIONS_MACOS)
     # Objective-C++: it loads the bundle through CFBundle and reads
-    # moduleinfo.json with NSBundle. enable_language(OBJCXX) is done in the
-    # platform split above, and CMake picks the OBJCXX compiler off the .mm
-    # extension without any per-target property.
+    # moduleinfo.json with NSBundle. enable_language(OBJCXX) is done just after
+    # project(), and CMake picks the OBJCXX compiler off the .mm extension
+    # without any per-target property.
     set(RATIONS_MODULE_LOADER
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_mac.mm)
 else()
