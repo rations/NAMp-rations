@@ -351,7 +351,9 @@ jobs:
   # dependencies, so what is left is arithmetic -- above all whether arm64's
   # fused multiply-add contracts the dial trigonometry differently from x86_64's.
   # The two pages that differ at all on Windows are exactly the two that draw
-  # rotated dials, so that is where any difference here is expected too.
+  # rotated dials, and the measurement below half agrees: the head page differs
+  # and the pedalboard, whose pedal knobs are drawn by the same code at a smaller
+  # radius, does not.
   #
   # IT NEEDS NO BASELINE FROM ANYONE'S MACHINE, which is why it can run on every
   # push. Comparing against the LINUX render would need this repository to carry
@@ -359,15 +361,33 @@ jobs:
   # run by hand instead -- download the panels-arm64 artifact and point
   # scripts/panel-diff.sh at it and at a local `build/panelrender` render.
   #
-  # THE THRESHOLDS BELOW ARE A PLACEHOLDER AND ARE FLAGGED AS ONE. Nothing has
-  # measured this pair yet, so they start at the figures the Linux-versus-Windows
-  # diff measured -- 256 pixels per page, worst channel delta 1 -- which is the
-  # only measured number this project has for a panel diff of any kind. The rule
-  # this project applies to every threshold is to run it, record the worst case,
-  # and set the gate ABOVE that with margin, so it reports a regression rather
-  # than its own noise floor. The first green run is what supplies that, and
-  # until then a failure here is a MEASUREMENT rather than necessarily a
-  # regression.
+  # THE THRESHOLDS ARE MEASURED. They were a placeholder borrowed from the
+  # Linux-versus-Windows diff until this pair had ever been run; it has now, at
+  # AppleClang 17 / macOS 15, and what it reported is:
+  #
+  #     head           35 of   456599 px differ, worst channel delta 1/255
+  #     cabinet         0 of   294400 px differ, byte-identical
+  #     pedalboard      0 of   450822 px differ, byte-identical
+  #     settings        0 of   746240 px differ, byte-identical
+  #     TOTAL          35 of  1948061 px
+  #
+  # So the two instruction sets agree on three pages exactly, and disagree on 35
+  # pixels of one -- every one of them by a single quantisation step, which is
+  # what a rounding difference looks like by definition. That is the answer to
+  # the FMA question this job was built to ask: contraction does move the dial
+  # trigonometry, and it moves it by less than one part in 255.
+  #
+  # PIXELS is set ABOVE the worst case with margin (35 -> 256), per the rule this
+  # project applies to every threshold, so it reports a regression rather than
+  # its own noise floor. It is deliberately the same number the Windows diff
+  # uses: two platforms measured independently at 32 and 35 do not need two
+  # different caps, and one number is one thing to remember.
+  #
+  # DELTA is set AT the measured value rather than above it, and that is not an
+  # inconsistency. 1/255 is not a measurement that could drift; it is the
+  # definition of rounding. A delta of 2 means ink landed where there was none,
+  # which is a rasterisation difference and not arithmetic, and no amount of
+  # margin should let that through. It is the sharper of the two gates.
   # ---------------------------------------------------------------------------
   panel-diff:
     name: panel diff (arm64 vs x86_64)
