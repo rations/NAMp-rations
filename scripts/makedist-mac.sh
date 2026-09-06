@@ -147,39 +147,70 @@ if [ "${#BUNDLES[@]}" -gt 1 ]; then
   done
 fi
 
-# ENTRY POINTS. Exactly the three a VST3 host calls, and no more.
+# The next two gates read the binary's symbol table and its load commands, and
+# both are asked ONE SLICE AT A TIME, on a thin copy cut out with `lipo -thin`.
 #
-# EXACTLY, unlike the Linux script, which can only check for presence: that one is
-# an ELF shared object where weak template instantiations legitimately stay
-# visible. Here -Wl,-exported_symbols_list names an explicit allow-list of three
-# (the SDK's own public.sdk/source/main/macexport.exp), so anything else in the
-# table means that list was not applied. nm -gU is global and defined-here, so
-# undefined imports are not counted; the leading underscore is the Mach-O C prefix.
-# Both sides sorted the same way and under LC_ALL=C, which is not fussiness: a
-# plain `sort` collates by locale, where "_GetPluginFactory" lands AFTER
-# "_bundleEntry" because case is folded, so comparing against a hand-written
-# order fails on a correct bundle. Found by dry-running this script against stub
-# tools, not on a runner.
-EXPORTS="$(nm -gU "$BIN" | awk '{print $3}' | LC_ALL=C sort -u)"
-EXPECTED="$(printf '%s\n' _GetPluginFactory _bundleEntry _bundleExit | LC_ALL=C sort)"
-if [ "$EXPORTS" != "$EXPECTED" ]; then
-  echo "unexpected exported symbols:" >&2
-  echo "$EXPORTS" | sed 's/^/  /' >&2
-  echo "Expected exactly _GetPluginFactory, _bundleEntry and _bundleExit." >&2
-  exit 1
-fi
+# That is not tidiness. `nm` and `otool` given a universal file emit a section per
+# architecture with a header line in front of each, and the parsing below is
+# positional -- so on a fat binary the SECOND header is read as though it were a
+# symbol or a library. It is what happened: the dependency gate reported the
+# plug-in's own path as a non-system library, on a bundle whose two halves had
+# each already passed the identical gate as thin slices in CI.
+#
+# Cutting the slice out first means these gates run on exactly the shape they
+# were written for and are proven against, with no claim needed about how either
+# tool lays a fat file out -- a claim that cannot be checked from the machine this
+# script is written on. It is also the stronger question: a universal binary whose
+# x86_64 half links Homebrew and whose arm64 half does not is exactly the failure
+# this gate exists to catch, and whole-file output would have let it pass on
+# whichever half the tool happened to print first.
+THIN="$STAGEDIR/thin"
+mkdir -p "$THIN"
+for _arch in $ARCHS; do
+  _slice="$THIN/$_arch"
+  if [ "${#BUNDLES[@]}" -gt 1 ]; then
+    lipo -thin "$_arch" "$BIN" -output "$_slice"
+  else
+    cp "$BIN" "$_slice"          # already thin; lipo -thin refuses a thin input
+  fi
 
-# DEPENDENCIES. Nothing but the system, which is what proves the static
-# dependency sysroot was linked rather than Homebrew's dylibs. A bundle naming
-# /opt/homebrew loads on the build machine and on nobody else's, and fails
-# silently: the host simply reports no such plug-in.
-BADLIBS="$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
-           | grep -vE '^(/usr/lib/|/System/Library/Frameworks/)' || true)"
-if [ -n "$BADLIBS" ]; then
-  echo "the bundle links non-system libraries:" >&2
-  echo "$BADLIBS" | sed 's/^/  /' >&2
-  exit 1
-fi
+  # ENTRY POINTS. Exactly the three a VST3 host calls, and no more.
+  #
+  # EXACTLY, unlike the Linux script, which can only check for presence: that one
+  # is an ELF shared object where weak template instantiations legitimately stay
+  # visible. Here -Wl,-exported_symbols_list names an explicit allow-list of three
+  # (the SDK's own public.sdk/source/main/macexport.exp), so anything else in the
+  # table means that list was not applied. nm -gU is global and defined-here, so
+  # undefined imports are not counted; the leading underscore is the Mach-O C
+  # prefix. Both sides sorted the same way and under LC_ALL=C, which is not
+  # fussiness: a plain `sort` collates by locale, where "_GetPluginFactory" lands
+  # AFTER "_bundleEntry" because case is folded, so comparing against a
+  # hand-written order fails on a correct bundle. Found by dry-running this script
+  # against stub tools, not on a runner.
+  EXPORTS="$(nm -gU "$_slice" | awk '{print $3}' | LC_ALL=C sort -u)"
+  EXPECTED="$(printf '%s\n' _GetPluginFactory _bundleEntry _bundleExit | LC_ALL=C sort)"
+  if [ "$EXPORTS" != "$EXPECTED" ]; then
+    echo "unexpected exported symbols in the $_arch slice:" >&2
+    echo "$EXPORTS" | sed 's/^/  /' >&2
+    echo "Expected exactly _GetPluginFactory, _bundleEntry and _bundleExit." >&2
+    exit 1
+  fi
+
+  # DEPENDENCIES. Nothing but the system, which is what proves the static
+  # dependency sysroot was linked rather than Homebrew's dylibs. A bundle naming
+  # /opt/homebrew loads on the build machine and on nobody else's, and fails
+  # silently: the host simply reports no such plug-in.
+  BADLIBS="$(otool -L "$_slice" | tail -n +2 | awk '{print $1}' \
+             | grep -vE '^(/usr/lib/|/System/Library/Frameworks/)' || true)"
+  if [ -n "$BADLIBS" ]; then
+    echo "the $_arch slice links non-system libraries:" >&2
+    echo "$BADLIBS" | sed 's/^/  /' >&2
+    exit 1
+  fi
+
+  echo "$_arch: three entry points, system libraries only"
+done
+rm -rf "$THIN"
 
 # RESOURCES. This project embeds NO fallback art: src/gfx/resourcestore.h states
 # that its built-in table is always empty here by design. So a bundle that reaches
@@ -461,4 +492,4 @@ echo "Packaged: $ARCHIVE"
 echo "  $(du -h "$ARCHIVE" | cut -f1), $ARCHS, signature verified after extraction"
 echo ""
 echo "Contents:"
-find "$STAGEDIR/verify" -maxdepth 3 | sed "s|$STAGEDIR/verify/||"
+find "$STAGEDIR/verify" -mindepth 1 -maxdepth 3 | sed "s|$STAGEDIR/verify/||"
