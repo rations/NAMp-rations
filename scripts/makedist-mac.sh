@@ -325,7 +325,8 @@ xattr -cr "$BUNDLE" 2>/dev/null || true
 echo "Installed: $BUNDLE"
 echo
 echo "Rescan plug-ins in your DAW to pick it up."
-echo "To remove it again:  ./install.sh --uninstall"
+echo "To remove it again, run this same script with --uninstall after it:"
+echo "  bash \"$HERE/install.sh\" --uninstall"
 EOF
 chmod +x "$PKGDIR/install.sh"
 
@@ -342,13 +343,35 @@ rather than the same one rebuilt.
 
 Install
 -------
-    ./install.sh
+If you have never used Terminal, this is the whole of it. There are five steps
+and you do not have to type any file names.
 
-That copies the bundle to ~/Library/Audio/Plug-Ins/VST3 and clears the
-quarantine flag. Nothing needs an administrator password. Then rescan plug-ins
-in your DAW.
+  1. Double-click the .zip file you downloaded. A folder appears beside it.
 
-To remove it again: ./install.sh --uninstall
+  2. Open Terminal: hold Command and press the space bar, type   terminal
+     and press Return. A window with a text prompt opens.
+
+  3. In that window type the four letters   bash   and then ONE SPACE.
+     Do not press Return yet.
+
+  4. Drag the file called   install.sh   out of the folder from step 1 and
+     drop it onto the Terminal window. Its location appears after what you
+     typed. (Dragging the file is how you avoid typing where it is.)
+
+  5. Press Return.
+
+It prints "Installed:" and a location. Then rescan plug-ins in your DAW and
+NAMp Rations will be there.
+
+That copies the plug-in to your own Library folder and clears the quarantine
+flag described below. Nothing needs an administrator password, and nothing is
+put anywhere outside your home folder.
+
+To remove it again, do exactly the same five steps, but before pressing Return
+in step 5 also type ONE SPACE and then   --uninstall
+
+(If you are comfortable in a terminal:  ./install.sh  and
+./install.sh --uninstall  from the extracted folder do the same thing.)
 
 If you would rather copy it by hand
 -----------------------------------

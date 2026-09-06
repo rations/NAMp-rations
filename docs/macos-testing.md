@@ -35,10 +35,25 @@ Three things are deliberate and are not worth reporting:
 This is the **only** test the ad-hoc signature ever gets, so do it on a machine
 that has never had this plug-in on it.
 
-- [ ] Download the archive and extract it in Finder (not from a terminal — the
-      quarantine flag is set by the download, and unpacking it the ordinary way
-      is what a user does).
-- [ ] Run `./install.sh` in Terminal.
+**You will need Terminal once, for about thirty seconds, and you do not have to
+type any file names.** Only once, and only to install — everything after this is
+your DAW and your ears. The reason it cannot be done entirely in Finder is the
+quarantine flag explained above.
+
+- [ ] Download the archive and **double-click it in Finder** to unpack it (not
+      from a terminal — the quarantine flag is set by the download, and unpacking
+      it the ordinary way is what a real user does, so it is what needs testing).
+      A folder appears beside the .zip.
+- [ ] Open Terminal: hold **Command** and press the **space bar**, type
+      `terminal`, press **Return**. A window with a text prompt opens.
+- [ ] In that window type the four letters `bash` and then **one space**. Do not
+      press Return yet.
+- [ ] **Drag the file `install.sh`** out of the folder and drop it onto the
+      Terminal window. Its location appears after what you typed.
+- [ ] Press **Return**. It should print `Installed:` and a location.
+
+If it prints anything else, that is a result — copy the whole window and send it.
+
 - [ ] Open your DAW, rescan plug-ins, and confirm **NAMp Rations** appears.
 - [ ] Add it to a track. It should open showing an amp head with four dials and
       four empty channel names.
@@ -47,8 +62,9 @@ If the DAW finds it and then refuses to load it, that is the quarantine flag and
 the interesting question is whether `install.sh` failed to clear it. Say which
 DAW, and paste whatever it said.
 
-- [ ] `./install.sh --uninstall` removes it again, and the DAW no longer lists it
-      after a rescan.
+- [ ] Removing it again works: the same five steps, but before pressing Return
+      also type one space and then `--uninstall`. After a rescan the DAW should
+      no longer list it.
 
 ## 2. Load your captures
 
