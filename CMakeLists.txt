@@ -465,9 +465,27 @@ add_library(RationsDsp STATIC
     ${RATIONS_ROOT}/deps/tonestack/ToneStack.cpp
 )
 
-target_compile_definitions(RationsDsp PUBLIC NAM_ENABLE_A2_FAST)
+# What it takes to COMPILE against these headers, held separately from the
+# archive itself, because on macOS the two are consumed by different mechanisms.
+#
+# Everywhere else the plug-in names RationsDsp as an ordinary link item and CMake
+# hands over its PUBLIC include paths, definitions and language level along with
+# the archive. The mac arm of rations_link_whole_dsp() below cannot do that: ld64
+# spells whole-archive as a -force_load FLAG carrying a path, so the target is
+# never named and every one of those usage requirements is silently dropped. The
+# first symptom is a missing NAM/dsp.h, which merely fails to build. The second
+# is worse and would not have failed anything: without NAM_ENABLE_A2_FAST the
+# A2 fast path is compiled out, and that path is the whole basis of the
+# click-free gain crossfade and the instant channel switch.
+#
+# So the requirements live on an INTERFACE library both arms can name. It
+# contributes no archive of its own, so naming it alongside -force_load cannot
+# put the same objects on the link line twice.
+add_library(RationsDspHeaders INTERFACE)
 
-target_include_directories(RationsDsp PUBLIC
+target_compile_definitions(RationsDspHeaders INTERFACE NAM_ENABLE_A2_FAST)
+
+target_include_directories(RationsDspHeaders INTERFACE
     ${NAM_CORE_DIR}
     ${NAM_CORE_DIR}/NAM
     ${NAM_CORE_DIR}/Dependencies/nlohmann
@@ -487,7 +505,7 @@ target_include_directories(RationsDsp PUBLIC
 
 # C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20
 # library feature. The plug-in itself stays at the SDK's C++17 baseline.
-target_compile_features(RationsDsp PUBLIC cxx_std_20)
+target_compile_features(RationsDspHeaders INTERFACE cxx_std_20)
 
 # AudioDSPTools' ResamplingContainer.h declares, at class scope,
 #
@@ -512,8 +530,12 @@ target_compile_features(RationsDsp PUBLIC cxx_std_20)
 # upstream tree is a pinned submodule, so patching the line there would be
 # undone by the next submodule update.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
-    target_compile_options(RationsDsp PUBLIC -fpermissive)
+    target_compile_options(RationsDspHeaders INTERFACE -fpermissive)
 endif()
+# The archive both compiles against those requirements and re-publishes them, so
+# a target that links RationsDsp the ordinary way needs nothing else.
+target_link_libraries(RationsDsp PUBLIC RationsDspHeaders)
+
 # -fPIC has no meaning for PE and MinGW warns that it is being ignored; code in
 # a Windows DLL is relocated by the loader, not by position-independent codegen.
 if(RATIONS_WINDOWS)
@@ -538,12 +560,19 @@ endif()
 # is why the mac arm uses add_dependencies for the build ordering CMake would
 # otherwise infer from the link line.
 #
+# Not naming the target also loses everything CMake would have carried with it:
+# include paths, NAM_ENABLE_A2_FAST and the C++20 level. The mac arm therefore
+# names RationsDspHeaders, the INTERFACE library those requirements were moved
+# onto above -- it has no archive, so it cannot reintroduce the double-link this
+# paragraph is about.
+#
 # Written as one function so the five call sites cannot drift apart, which they
 # were already at risk of doing with the flags spelled out five times.
 # ---------------------------------------------------------------------------
 function(rations_link_whole_dsp target)
     if(RATIONS_MACOS)
-        target_link_libraries(${target} PRIVATE "-Wl,-force_load,$<TARGET_FILE:RationsDsp>")
+        target_link_libraries(${target} PRIVATE
+            RationsDspHeaders "-Wl,-force_load,$<TARGET_FILE:RationsDsp>")
         add_dependencies(${target} RationsDsp)
     else()
         target_link_libraries(${target}
