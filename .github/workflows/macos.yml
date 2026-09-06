@@ -365,10 +365,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ImageMagick decodes the PNGs to raw RGB; nothing else here needs a Mac,
-      # which is why this job is not on one.
-      - name: ImageMagick
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+      # No decoder to install: panel-diff.sh reads the PNGs with the Python
+      # standard library. It used to want ImageMagick 7's `magick`, and apt's
+      # `imagemagick` is version 6, which ships `convert` and no `magick` at
+      # all -- so that step passed and bought nothing. Nothing in this job needs
+      # a Mac, which is why it is not on one.
 
       - name: Download both renders
         uses: actions/download-artifact@v4
