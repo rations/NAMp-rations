@@ -35,7 +35,7 @@ cmake --build "$BUILD" --parallel "$(nproc)"
 # The project() version, which is the first VERSION line in the top-level lists file. Read rather
 # than duplicated, and read the SAME way makedist-windows.sh reads it, so the two releases cannot
 # be tagged differently from one another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
+VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
   "$REPO/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2

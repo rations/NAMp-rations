@@ -57,7 +57,7 @@ done
 # file. Read rather than duplicated, and read the SAME way makedist-linux.sh and
 # makedist-windows.sh read it, so the three releases cannot be tagged differently
 # from one another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
+VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
   "$REPO/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2

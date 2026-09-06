@@ -81,7 +81,7 @@ cmake --build "$BUILD" --parallel "$(nproc)"
 # The project() version, which is the first VERSION line in the top-level lists
 # file. Read rather than duplicated, so a release cannot be tagged one thing and
 # packaged as another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
+VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
   "$REPO/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2
@@ -296,40 +296,36 @@ else
   PANEL_MAX_PIXELS=256     # per page
   PANEL_MAX_DELTA=1        # per channel, any page
 
-  if ! command -v magick >/dev/null; then
-    echo >&2
-    echo "WARNING: ImageMagick (magick) not found, so the Linux-vs-Windows panel" >&2
-    echo "comparison was SKIPPED. Nothing has checked that the Windows editor" >&2
-    echo "draws what the Linux one draws. Install ImageMagick 7 and re-run." >&2
-    echo >&2
-  else
-    echo "comparing the editor pages against the Linux render"
-    PANELS="$STAGEDIR/panels"
-    mkdir -p "$PANELS"
+  # This used to be skipped with a warning when ImageMagick was absent, which is
+  # a gate that can quietly not run. panel-diff.sh decodes the PNGs with the
+  # Python standard library now, so there is nothing left to be missing and
+  # nothing left to skip.
+  echo "comparing the editor pages against the Linux render"
+  PANELS="$STAGEDIR/panels"
+  mkdir -p "$PANELS"
 
-    # The Linux reference has to come from a Linux build of the same tree.
-    LINUX_PANELRENDER="${RATIONS_BUILD_DIR:-$REPO/build}/panelrender"
-    if [ ! -x "$LINUX_PANELRENDER" ]; then
-      echo "no Linux panelrender at $LINUX_PANELRENDER - build the native tree first:" >&2
-      echo "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
-      echo "or set RATIONS_BUILD_DIR to a native build directory." >&2
-      exit 1
-    fi
-
-    "$LINUX_PANELRENDER" "$PANELS/lin" "$REPO/resources" 1.0 >/dev/null
-    # The resource directory is passed explicitly rather than left to
-    # respath.cpp's module-relative fallback, which resolves to nothing for a
-    # bare .exe sitting outside a bundle.
-    wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
-         "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
-
-    # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
-    # calls too -- one implementation, so the two platforms' figures are
-    # produced the same way and stay comparable. The thresholds stay HERE
-    # because they are this pair's measurement, not that script's.
-    PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
-      "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
+  # The Linux reference has to come from a Linux build of the same tree.
+  LINUX_PANELRENDER="${RATIONS_BUILD_DIR:-$REPO/build}/panelrender"
+  if [ ! -x "$LINUX_PANELRENDER" ]; then
+    echo "no Linux panelrender at $LINUX_PANELRENDER - build the native tree first:" >&2
+    echo "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
+    echo "or set RATIONS_BUILD_DIR to a native build directory." >&2
+    exit 1
   fi
+
+  "$LINUX_PANELRENDER" "$PANELS/lin" "$REPO/resources" 1.0 >/dev/null
+  # The resource directory is passed explicitly rather than left to
+  # respath.cpp's module-relative fallback, which resolves to nothing for a
+  # bare .exe sitting outside a bundle.
+  wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
+       "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
+
+  # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
+  # calls too -- one implementation, so the two platforms' figures are
+  # produced the same way and stay comparable. The thresholds stay HERE
+  # because they are this pair's measurement, not that script's.
+  PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
+    "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
 fi
 
 # --- licence, attribution and instructions ----------------------------------

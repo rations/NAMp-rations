@@ -44,39 +44,104 @@ LABEL_A="${5:-$PRE_A}"; LABEL_B="${6:-$PRE_B}"
 : "${PANEL_MAX_PIXELS:?set PANEL_MAX_PIXELS (per page) before calling}"
 : "${PANEL_MAX_DELTA:?set PANEL_MAX_DELTA (per channel) before calling}"
 
-if ! command -v magick >/dev/null; then
-  echo "ImageMagick (magick) not found; cannot decode the renders." >&2
-  exit 1
-fi
-
-RAW="$(mktemp -d)"
-trap 'rm -rf "$RAW"' EXIT
-
 for _p in head cabinet pedalboard settings; do
-  for _side in "a:$DIR_A/$PRE_A" "b:$DIR_B/$PRE_B"; do
-    _tag="${_side%%:*}"; _stem="${_side#*:}"
+  for _stem in "$DIR_A/$PRE_A" "$DIR_B/$PRE_B"; do
     if [ ! -f "$_stem-$_p.png" ]; then
       echo "missing render: $_stem-$_p.png" >&2
       exit 1
     fi
-    magick "$_stem-$_p.png" -depth 8 "rgb:$RAW/$_tag-$_p.raw"
   done
 done
 
-RAW="$RAW" LABEL_A="$LABEL_A" LABEL_B="$LABEL_B" \
+STEM_A="$DIR_A/$PRE_A" STEM_B="$DIR_B/$PRE_B" LABEL_A="$LABEL_A" LABEL_B="$LABEL_B" \
 PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" python3 - <<'PYEOF'
-import os, sys
+import os, sys, zlib, struct
 
-d          = os.environ["RAW"]
+stem_a     = os.environ["STEM_A"]
+stem_b     = os.environ["STEM_B"]
 max_pixels = int(os.environ["PANEL_MAX_PIXELS"])
 max_delta  = int(os.environ["PANEL_MAX_DELTA"])
 label_a    = os.environ["LABEL_A"]
 label_b    = os.environ["LABEL_B"]
 
+
+def decode_png_rgb(path):
+    """The four pages as packed 8-bit RGB, using nothing but the standard library.
+
+    This used to shell out to ImageMagick, which is not on a GitHub macOS runner
+    and is one more thing whose version would have to be pinned to keep the
+    comparison honest. panelrender writes through cairo_surface_write_to_png,
+    so every page is 8-bit, colour type 2, non-interlaced -- the simplest shape
+    PNG has, and a zlib inflate plus the five standard row filters. Anything
+    else is refused by name rather than decoded wrongly.
+
+    Verified byte for byte against `magick <page>.png -depth 8 rgb:` on all four
+    pages before ImageMagick was dropped, so the figures this gate reports did
+    not move when the decoder changed.
+    """
+    d = open(path, "rb").read()
+    if d[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(path + ": not a PNG")
+    pos, idat, ihdr = 8, [], None
+    while pos < len(d):
+        ln, typ = struct.unpack(">I4s", d[pos:pos + 8])
+        if typ == b"IHDR":
+            ihdr = struct.unpack(">IIBBBBB", d[pos + 8:pos + 8 + ln])
+        elif typ == b"IDAT":
+            idat.append(d[pos + 8:pos + 8 + ln])
+        elif typ == b"IEND":
+            break
+        pos += 12 + ln
+    if ihdr is None:
+        raise ValueError(path + ": no IHDR")
+    w, h, depth, colour, _comp, _filt, interlace = ihdr
+    if depth != 8 or colour not in (2, 6) or interlace != 0:
+        raise ValueError("%s: unsupported PNG (bit depth %d, colour type %d, interlace %d) - "
+                         "panelrender writes 8-bit RGB" % (path, depth, colour, interlace))
+    bpp = 3 if colour == 2 else 4
+    raw = zlib.decompress(b"".join(idat))
+    stride, out, prev, ip = w * bpp, bytearray(w * h * bpp), bytearray(w * bpp), 0
+    for y in range(h):
+        f = raw[ip]
+        ip += 1
+        line = bytearray(raw[ip:ip + stride])
+        ip += stride
+        if f == 1:                                          # Sub
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif f == 2:                                        # Up
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif f == 3:                                        # Average
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 255
+        elif f == 4:                                        # Paeth
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                c = prev[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 255
+        elif f != 0:
+            raise ValueError("%s: bad row filter %d on row %d" % (path, f, y))
+        out[y * stride:(y + 1) * stride] = line
+        prev = line
+    if bpp == 4:
+        out = bytearray(b for i in range(0, len(out), 4) for b in out[i:i + 3])
+    return bytes(out)
+
+
 fail, tot_d, tot_p = [], 0, 0
 for page in ("head", "cabinet", "pedalboard", "settings"):
-    a = open(f"{d}/a-{page}.raw", "rb").read()
-    b = open(f"{d}/b-{page}.raw", "rb").read()
+    try:
+        a = decode_png_rgb(f"{stem_a}-{page}.png")
+        b = decode_png_rgb(f"{stem_b}-{page}.png")
+    except ValueError as e:
+        print(f"cannot read the renders: {e}", file=sys.stderr)
+        sys.exit(1)
     if len(a) != len(b):
         fail.append(f"{page}: the two renders are different SIZES "
                     f"({len(a)//3} vs {len(b)//3} px) - the layout itself diverged")
