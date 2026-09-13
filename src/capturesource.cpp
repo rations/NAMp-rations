@@ -40,8 +40,10 @@ bool readMetaNumber(const nlohmann::json &metadata, const char *key, double &out
 }
 
 // Pull one submodel-shaped JSON object ({version, architecture, config, weights, sample_rate,
-// metadata}) into a SubmodelSource.
-bool readSubmodel(const nlohmann::json &j, double maxValue, SubmodelSource &out, std::string &error)
+// metadata}) into a SubmodelSource. `fileMeta` is the FILE's top-level metadata object, which is
+// where the trainer writes the dBu pair -- see the comment on the metadata reads below.
+bool readSubmodel(const nlohmann::json &j, double maxValue, const nlohmann::json &fileMeta,
+                  SubmodelSource &out, std::string &error)
 {
     if (!j.is_object()) {
         error = "submodel is not a JSON object";
@@ -88,15 +90,27 @@ bool readSubmodel(const nlohmann::json &j, double maxValue, SubmodelSource &out,
         return false;
     }
 
-    // The SUBMODEL's own loudness, not the file's. They differ, and using the file's would apply
-    // the wrong compensation to whichever size variant is actually playing.
     const nlohmann::json meta = j.value("metadata", nlohmann::json::object());
     double v = 0.0;
+
+    // The SUBMODEL's own loudness, not the file's. They differ per size variant -- measured on the
+    // development corpus, one container's two submodels state -14.4215 and -14.2985 -- so using the
+    // file's would apply the wrong compensation to whichever variant is actually playing.
     if (readMetaNumber(meta, "loudness", v))
         out.metadata.loudness = v;
-    if (readMetaNumber(meta, "input_level_dbu", v))
+
+    // The dBu pair is the opposite case, and reading it from the submodel alone is what made
+    // Calibrated and the whole input-calibration block permanently dead: the two levels describe the
+    // capture RIG rather than the model, so the trainer writes them ONCE, at the file's top level.
+    // Measured across 35 development captures, every one a SlimmableContainer: 20 state
+    // input_level_dbu 13 at file level and NONE state either key on a submodel. The submodel is
+    // still tried first, so a future trainer that does write them per-variant wins; today's files
+    // take the fallback. For a plain (non-container) capture `j` IS the file root, so the two
+    // lookups are the same object and the fallback is a no-op by construction.
+    if (readMetaNumber(meta, "input_level_dbu", v) || readMetaNumber(fileMeta, "input_level_dbu", v))
         out.metadata.input_level = v;
-    if (readMetaNumber(meta, "output_level_dbu", v))
+    if (readMetaNumber(meta, "output_level_dbu", v) ||
+        readMetaNumber(fileMeta, "output_level_dbu", v))
         out.metadata.output_level = v;
 
     out.maxValue = maxValue;
@@ -187,6 +201,9 @@ bool loadCaptureSource(const std::filesystem::path &file, CaptureSource &out, st
         }
         const std::string architecture = arch->get<std::string>();
 
+        // The file's own metadata block, passed down as the fallback for the dBu level pair.
+        const nlohmann::json fileMeta = j.value("metadata", nlohmann::json::object());
+
         if (architecture == "SlimmableContainer") {
             auto config = j.find("config");
             if (config == j.end() || !config->is_object()) {
@@ -206,7 +223,7 @@ bool loadCaptureSource(const std::filesystem::path &file, CaptureSource &out, st
                     return false;
                 }
                 SubmodelSource sub;
-                if (!readSubmodel(*modelIt, maxIt->get<double>(), sub, error))
+                if (!readSubmodel(*modelIt, maxIt->get<double>(), fileMeta, sub, error))
                     return false;
                 out.submodels.push_back(std::move(sub));
             }
@@ -216,9 +233,10 @@ bool loadCaptureSource(const std::filesystem::path &file, CaptureSource &out, st
                           return l.maxValue < r.maxValue;
                       });
         } else {
-            // A plain capture: one variant, always selected.
+            // A plain capture: one variant, always selected. `j` is both the submodel node and
+            // the file root here, so the dBu fallback above resolves to the same object.
             SubmodelSource sub;
-            if (!readSubmodel(j, 1.0, sub, error))
+            if (!readSubmodel(j, 1.0, fileMeta, sub, error))
                 return false;
             out.submodels.push_back(std::move(sub));
         }
