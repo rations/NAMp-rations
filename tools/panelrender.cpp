@@ -804,6 +804,8 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
     }
     drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
                      geo::kOutputFootnote, cx, static_cast<float>(geo::kOutputFootnoteY));
+    drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
+                     geo::kOutputFootnote2, cx, static_cast<float>(geo::kOutputFootnote2Y));
 
     drawButton(c, geo::kBackButton);
 }
@@ -1443,6 +1445,28 @@ bool auditText(FontStack &fonts)
                     geo::kSettingsFootnote2, static_cast<float>(geo::kMidiRowW)});
     fits.push_back({"settings footnote 3", Font::Body, geo::kSettingsFootnoteSize,
                     geo::kSettingsFootnote3, static_cast<float>(geo::kMidiRowW)});
+    // The output section's own text had NO fit audit at all until the footnote grew a second
+    // line, so neither the footnotes nor the mode labels had ever been measured against the
+    // space they are given. The labels are measured in their GREYED form, which is the long
+    // one - the suffix is what a row actually draws when it has something to say, and auditing
+    // the bare word would pass a label that overflows in the only state that matters.
+    fits.push_back({"output footnote", Font::Body, geo::kSettingsFootnoteSize, geo::kOutputFootnote,
+                    static_cast<float>(geo::kMidiRowW)});
+    fits.push_back({"output footnote 2", Font::Body, geo::kSettingsFootnoteSize,
+                    geo::kOutputFootnote2, static_cast<float>(geo::kMidiRowW)});
+    static std::string outputLabels[3];
+    for (int i = 0; i < 3; ++i) {
+        outputLabels[i] = std::string(geo::kOutputModeNames[i]) + geo::kOutputUnsupported;
+        // The allowance is NOT kOutputRowW: that is the click target, and the label is drawn
+        // past its right edge by design. What the text must not reach is the 24 units of right
+        // margin the scrollbar lives in, so the budget runs from the text's own left edge to
+        // where the settings rows end.
+        fits.push_back({"output mode row", Font::Title, geo::kMidiRowTextSize,
+                        outputLabels[i].c_str(),
+                        static_cast<float>(geo::kMidiRowW - geo::kOutputTextX)});
+    }
+    fits.push_back({"calibrate label", Font::Title, geo::kMidiRowTextSize, geo::kCalibrateLabel,
+                    static_cast<float>(geo::kCalValueX - geo::kCalLabelX)});
 
     // The utility row, measured as a pair rather than against an allowance.
     //
