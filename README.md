@@ -6,7 +6,9 @@
 
 A four-channel amp head built on [Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
 captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**, plus
-a JACK standalone on Linux for playing it without a DAW. There is also an
+an **LV2** build and a JACK standalone on Linux for playing it without a DAW. The LV2 is the same
+amp and not a port: the same DSP and the same panel behind a second set of callbacks, so pick
+whichever your host likes better. There is also an
 **[experimental macOS build](#macos-experimental)**, which nobody involved has been able to play
 yet — read that section before downloading it.
 
@@ -54,8 +56,10 @@ thing to do after installing is load your own into them.
 
 ### Linux
 
-The tarball holds the plug-in and the standalone, which are the same amp twice — the standalone
-*hosts* `NAMp-rations.vst3` rather than duplicating it, so keep the two together.
+The tarball holds three things and they are the same amp three times: the VST3, the LV2, and the
+standalone. The VST3 and the LV2 are interchangeable — install whichever your host handles best and
+ignore the other. The standalone *hosts* `NAMp-rations.vst3` rather than duplicating it, so keep
+those two together.
 
 ```
 tar xf NAMp-rations-*-linux-x86_64.tar.gz
@@ -67,14 +71,20 @@ Everything goes under your home directory and nothing needs root:
 
 | | |
 |---|---|
-| `~/.vst3/NAMp-rations.vst3` | the plug-in |
+| `~/.vst3/NAMp-rations.vst3` | the plug-in, VST3 |
+| `~/.lv2/rations.lv2` | the plug-in, LV2 |
 | `~/.local/bin/namp-rations-standalone` | the standalone |
 | `~/.local/share/applications/` | a menu entry, with an icon |
 
-Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all three again.
+Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all of it again.
 
-You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` by hand if you only want the
-plug-in, and run `./namp-rations-standalone` where you extracted it. cairo, FreeType and fontconfig come
+If a host shows you an older version of the LV2 after installing, check for `rations.lv2` under
+`/usr/lib/lv2` or `/usr/local/lib/lv2`: a copy there shadows the one in your home directory. The
+installer says so if it finds one.
+
+You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` or `rations.lv2` into
+`~/.lv2/` by hand if you only want the plug-in, and run `./namp-rations-standalone` where you
+extracted it. cairo, FreeType and fontconfig come
 from your system; the standalone additionally wants a JACK server (jackd, or a PipeWire desktop,
 which provides one).
 

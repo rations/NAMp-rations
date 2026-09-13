@@ -34,6 +34,20 @@ namespace Rations
 // Cached after the first call.
 const std::string &resourceDir();
 
+// Name the resource directory outright, ahead of every rule above.
+//
+// It exists for ONE caller: the LV2 build, whose bundle is not a VST3 bundle. The layout rule
+// above walks two directories up from the loaded module and adds "Resources", which is where a
+// .vst3 keeps its art; an LV2 bundle keeps its binaries and its art side by side in one directory
+// and hands that directory to the UI as instantiate()'s bundle_path. There is nothing to derive
+// there, so the answer is given rather than looked for.
+//
+// MUST be called before the first resourceDir(), because that answer is cached for the life of
+// the process. The LV2 UI calls it in instantiate(), before the editor is created and therefore
+// before anything loads a resource. A call that arrives late warns and changes nothing rather
+// than silently disagreeing with art that is already loaded.
+void setResourceDirOverride(const std::string &dir);
+
 // A UTF-8 string as a std::filesystem::path, without ever throwing.
 //
 // Constructing a path from a narrow string is not a safe operation on Windows.

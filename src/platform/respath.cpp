@@ -182,8 +182,21 @@ std::string fromExecutablePath()
     return std::string();
 }
 
+// Set by setResourceDirOverride(), which is how a bundle format that is not a VST3 bundle names
+// its own resources. Read once, by resolve(), and never written after that read — see the header.
+std::string gOverride;
+bool gResolved = false;
+
 std::string resolve()
 {
+    gResolved = true;
+    if (!gOverride.empty()) {
+        if (isDir(gOverride))
+            return gOverride;
+        fprintf(stderr, "Rations: the resource directory %s does not exist (ignored)\n",
+                gOverride.c_str());
+    }
+
     if (const char *env = std::getenv("RATIONS_RESOURCE_DIR")) {
         if (isDir(env))
             return std::string(env);
@@ -208,6 +221,22 @@ std::string resolve()
 }
 
 } // namespace
+
+//------------------------------------------------------------------------
+void setResourceDirOverride(const std::string &dir)
+{
+    if (gResolved) {
+        // Not fatal, and deliberately not silent: the answer is already cached and this call
+        // cannot change it, so a caller that reached here has an ordering problem rather than a
+        // missing directory, and that is worth being told once.
+        fprintf(stderr,
+                "Rations: setResourceDirOverride(%s) came after the resource directory "
+                "was already resolved; ignored\n",
+                dir.c_str());
+        return;
+    }
+    gOverride = dir;
+}
 
 //------------------------------------------------------------------------
 const std::string &resourceDir()
