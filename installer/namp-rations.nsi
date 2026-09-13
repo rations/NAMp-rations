@@ -15,7 +15,7 @@
 ;
 ; INVOKED BY scripts/makedist-windows.sh, which supplies every path:
 ;
-;   makensis -DVERSION=0.1.0 -DVERSION4=0.1.0.0 \
+;   makensis -DVERSION=x.y.z -DVERSION4=x.y.z.0 \
 ;            -DBUNDLE_DIR=<staged>/NAMp-rations.vst3 -DDOC_DIR=<staged> \
 ;            -DOUTFILE=<staged>/NAMp-rations-install.exe installer/namp-rations.nsi
 ;

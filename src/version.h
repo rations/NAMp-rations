@@ -2,10 +2,16 @@
 
 #include "pluginterfaces/base/fplatform.h"
 
+// KEEP IN STEP WITH project(... VERSION x.y.z) IN CMakeLists.txt. They are two
+// separate sources of truth -- this file is the SDK's own pattern and is what the
+// plug-in reports to a host for each CLASS, while the project() version is what
+// moduleinfo.json, the three makedist scripts and the installer read. Nothing
+// checks that they agree, and they have already disagreed once: the module said
+// 0.2.0 while every class still answered 0.1.0.1.
 #define MAJOR_VERSION_STR "0"
 #define MAJOR_VERSION_INT 0
-#define SUB_VERSION_STR "1"
-#define SUB_VERSION_INT 1
+#define SUB_VERSION_STR "2"
+#define SUB_VERSION_INT 2
 #define RELEASE_NUMBER_STR "0"
 #define RELEASE_NUMBER_INT 0
 #define BUILD_NUMBER_STR "1"

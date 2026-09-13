@@ -53,7 +53,7 @@ set(CMAKE_OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}"
     CACHE STRING "macOS architecture slice to build")
 
 project(smtg-rations
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Rations four-channel neural amp head VST3"
 )
 
