@@ -92,9 +92,11 @@ constexpr int kPedalPageH = 681;
 // the smaller scale kSettingsScaleMin gives it did not turn out to be enough on
 // its own. It grew by 238 when the pedalboard's five footswitches joined the
 // MIDI list, and that cost nothing but scrolling, which is exactly what a page
-// that already scrolls is for.
+// that already scrolls is for. It grew by 18 again — one footnote line — when the
+// output section had to explain that a mode needs its metadata in EVERY capture
+// of a bank, for the same reason and at the same price.
 constexpr int kSettingsPageW = 640;
-constexpr int kSettingsPageH = 1166;
+constexpr int kSettingsPageH = 1184;
 
 // The shortest that page's viewport may be dragged to, in logical units: the
 // fixed header band that carries the back button (kPageContentTop, 50) plus
@@ -1466,6 +1468,10 @@ constexpr int kCalValueY = kCalRowY + 7;
 // stated level is a round number and this is how a user lands on theirs.
 constexpr double kCalWheelDb = 1.0;
 constexpr int kOutputFootnoteY = 1144;
+constexpr int kOutputFootnote2Y = kOutputFootnoteY + 18; // the MIDI footnotes' own pitch
+static_assert(kOutputFootnote2Y + 22 == kSettingsPageH,
+              "the output footnote block must keep the page's bottom margin - if a line is added "
+              "or removed here, kSettingsPageH moves with it");
 
 // The Learn button's two states, named here so the panel and the art audit
 // cannot disagree about which strings have to fit inside it.
@@ -1517,9 +1523,22 @@ constexpr const char *kCalibrateLabel = "Calibrate Input";
 // talking about is the SOUNDING one, which is what the footnote is for: without
 // it a player watches an option grey itself on a footswitch stomp with no way to
 // know why.
-constexpr const char *kOutputUnsupported = "  [not in this channel's captures]";
+//
+// "not in EVERY capture" rather than the older "not in this channel's captures",
+// which was true but read as "none of them have it" — and the case a user is most
+// likely to hit is the opposite one, a single capture dropped into an otherwise
+// complete folder. That is offered by ModelBank's bank-wide AND: a mode is offered
+// only when every entry can honour it, because a dial sweeping across an entry
+// that cannot would step in level as it crossed. The rule is deliberate; what was
+// missing was any way for a player to find it out, since nothing on the panel said
+// the test was over the whole bank rather than over the bank as a whole.
+constexpr const char *kOutputUnsupported = "  [not in every capture]";
 constexpr const char *kOutputFootnote =
-    "Greyed options are ones the sounding channel's own captures do not carry the metadata for.";
+    "Greyed options need the metadata in every capture of the sounding channel's bank.";
+// The second line is the reason, and it is here because the rule above is
+// surprising without it: one file out of ten is enough to grey a whole channel.
+constexpr const char *kOutputFootnote2 =
+    "One capture without it greys the option, because the dial would step in level there.";
 
 // --- File browser overlay ---------------------------------------------------
 // Drawn over the cabinet page (the only page with anything to load), so it is

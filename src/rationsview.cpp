@@ -918,6 +918,8 @@ void RationsEditorView::composeSettings(Canvas &c)
     c.setColor(geo::kDimColor);
     c.drawString(geo::kOutputFootnote, cx - c.stringWidth(geo::kOutputFootnote) * 0.5f,
                  static_cast<float>(geo::kOutputFootnoteY));
+    c.drawString(geo::kOutputFootnote2, cx - c.stringWidth(geo::kOutputFootnote2) * 0.5f,
+                 static_cast<float>(geo::kOutputFootnote2Y));
 }
 
 //------------------------------------------------------------------------
