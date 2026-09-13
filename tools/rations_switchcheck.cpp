@@ -73,9 +73,16 @@ namespace
 {
 
 constexpr double kNativeRate = Rations::kNativeSampleRate;
-// Matches the plug-in: per-capture loudness compensation on, no input calibration.
+// Matches the plug-in: per-capture loudness compensation on. Input calibration is off unless
+// --calibrate is passed, which is the state every other measurement here is taken in.
 constexpr int kOutputModeNormalized = 1;
-constexpr double kUnusedCalLevelDbu = 12.0;
+// The interface level a capture's stated input_level_dbu is measured against, in dBu -- the
+// number the settings page's value box holds. This was called "unused" because it WAS: every
+// capture in the development corpus stated no input level, so entryInputGain() fell back to unity
+// whatever this said and --calibrate exercised nothing. That stopped being true when
+// capturesource.cpp began taking the dBu pair from the file's top-level metadata, which is where
+// the trainer writes it; this is a live operand now.
+constexpr double kCalLevelDbu = 12.0;
 
 // Enough silence to open the engine's first-sound ramp (engine::kBypassRampMs) several times
 // over, while leaving every model history at the zeros Reset left it in.
@@ -141,7 +148,7 @@ struct Channel {
     {
         engine.setLoader(&loader);
         engine.prepare(maxNative, kNativeRate);
-        engine.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, calibrate);
+        engine.setOutputMode(kOutputModeNormalized, kCalLevelDbu, calibrate);
         loader.start();
         loader.loadDirectory(dir, 1.0, Rations::engine::kChunk);
     }
@@ -549,7 +556,7 @@ int main(int argc, char **argv)
     {
         Rations::ChannelRack rack;
         rack.prepare(opt.block, kNativeRate);
-        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, opt.calibrate);
+        rack.setOutputMode(kOutputModeNormalized, kCalLevelDbu, opt.calibrate);
         rack.start();
         rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
         rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
@@ -570,7 +577,7 @@ int main(int argc, char **argv)
     {
         Rations::ChannelRack rack;
         rack.prepare(opt.block, kNativeRate);
-        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, opt.calibrate);
+        rack.setOutputMode(kOutputModeNormalized, kCalLevelDbu, opt.calibrate);
         rack.start();
         rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
         rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
@@ -586,7 +593,7 @@ int main(int argc, char **argv)
     {
         Rations::ChannelRack rack;
         rack.prepare(opt.block, kNativeRate);
-        rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu, opt.calibrate);
+        rack.setOutputMode(kOutputModeNormalized, kCalLevelDbu, opt.calibrate);
         rack.start();
         rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
         rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);

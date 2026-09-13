@@ -50,7 +50,12 @@ namespace
 
 constexpr double kNativeRate = kNativeSampleRate;
 constexpr int kOutputModeNormalized = 1;
-constexpr double kUnusedCalLevelDbu = 12.0;
+// The interface level a capture's stated input_level_dbu is measured against, in dBu. The rack
+// starts here with calibration off; the stress loop below then republishes it every stomp, with an
+// offset and with calibration cycling, because a change to the INPUT level is the one that must
+// also make a channel report itself not warm. It was called "unused" while no capture stated an
+// input level at all -- see the note at the same constant in rations_switchcheck.cpp.
+constexpr double kCalLevelDbu = 12.0;
 
 struct Options {
     std::vector<std::string> dirs;
@@ -138,7 +143,7 @@ int main(int argc, char **argv)
 
     ChannelRack rack;
     rack.prepare(opt.block, kNativeRate);
-    rack.setOutputMode(kOutputModeNormalized, kUnusedCalLevelDbu,
+    rack.setOutputMode(kOutputModeNormalized, kCalLevelDbu,
                        /*calibrateInput=*/false);
     rack.start();
     for (int c = 0; c < channels; ++c)
@@ -193,7 +198,7 @@ int main(int argc, char **argv)
             // make a channel report itself NOT warm, and a stale warm flag is a correctness bug
             // rather than a slow one.
             ++outputGen;
-            rack.setOutputMode(outputGen % 3, 12.0 + (outputGen % 5), (outputGen % 2) != 0);
+            rack.setOutputMode(outputGen % 3, kCalLevelDbu + (outputGen % 5), (outputGen % 2) != 0);
         }
 
         NAM_SAMPLE *ip = input.data() + off;
