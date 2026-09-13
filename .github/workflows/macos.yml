@@ -355,16 +355,40 @@ jobs:
       # re-verifies the signature, which is the only thing that proves the archiver
       # did not drop it.
       - name: Package
+        id: package
         run: |
           scripts/makedist-mac.sh \
             --bundle slices/arm64/NAMp-rations.vst3 \
             --bundle slices/x86_64/NAMp-rations.vst3
 
+          # NAME THE ARTIFACT AFTER THE ARCHIVE THE SCRIPT ACTUALLY WROTE. The name
+          # upload-artifact is given is what the DOWNLOAD is called -- GitHub always
+          # wraps an artifact in a zip of its own -- so a hard-coded name produced
+          # NAMp-rations-macos-universal.zip for every build ever made, whatever
+          # version was inside it, and two releases' downloads were indistinguishable
+          # once they left the browser.
+          #
+          # Derived from the file rather than by re-reading CMakeLists here, so there
+          # is ONE source of truth for the version. A second copy of that logic in
+          # YAML is exactly how project() and src/version.h drifted apart.
+          set -- dist/*.zip
+          if [ "$#" -eq 1 ] && [ ! -e "$1" ]; then
+            echo "makedist-mac.sh wrote no .zip into dist/" >&2
+            exit 1
+          fi
+          if [ "$#" -ne 1 ]; then
+            echo "expected exactly one .zip in dist/, found $#: $*" >&2
+            exit 1
+          fi
+          echo "archive=$1" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$1" .zip)" >> "$GITHUB_OUTPUT"
+          echo "packaged $1"
+
       - name: Upload the release archive
         uses: actions/upload-artifact@v6
         with:
-          name: NAMp-rations-macos-universal
-          path: dist/*.zip
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.archive }}
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
