@@ -15,6 +15,7 @@
 #include "rationsview.h"
 #include "rationscontroller.h"
 #include "rationsids.h"
+#include "gfx/widgets.h"
 #include "platform/respath.h"
 
 #include "pluginterfaces/base/keycodes.h"
@@ -48,6 +49,20 @@ namespace
 // what can be typed into a field that is 170 logical units wide and clipped: past this the user is
 // entering text nothing will ever show them, and a state blob is not the place to keep it.
 constexpr size_t kRenameMaxChars = 64;
+
+// The caret, placed by measuring the text in front of it. Not blinked: a blink needs a timer the
+// settings page would otherwise not run, and a steady caret in the accent colour is unambiguous
+// when there is only ever one field open at a time.
+//
+// Shared by the two fields rather than written beside each, because they differ in where their
+// text STARTS — a channel name is left-aligned in its row, a dBu level centred in its box — and
+// not in anything about the caret itself.
+void drawCaret(Canvas &c, const Rect &box, float caretX)
+{
+    c.setColor(geo::kAccentBright);
+    c.setPenSize(1.0f);
+    c.strokeLine(caretX, box.y + 4.0f, caretX, box.bottom() - 4.0f);
+}
 
 // Pixels of vertical drag for a dial's full range, in LOGICAL units — so the feel is the same at
 // every window size.
@@ -167,7 +182,7 @@ void RationsEditorView::setPage(geo::Page page)
     // picker over a panel with nothing to pick. A half-typed channel name is the same kind of
     // thing, and is KEPT rather than dropped, for the same reason a click away from it keeps it.
     mBrowser.close();
-    commitRename();
+    commitTextEdit();
     // A drag in progress belongs to a control that is no longer on screen. Ending the edit rather
     // than dropping it matters: beginEdit without endEdit leaves the host's automation latched.
     if (mDragParam && mController) {
@@ -973,7 +988,7 @@ void RationsEditorView::drawCaptureRow(Canvas &c, int row)
     // paints under that channel's dial. Clipped rather than allowed to run into the path beside
     // it — a user may type anything at all here.
     const Rect nameBox = captureNameRect(row);
-    const bool editing = mRenaming == row;
+    const bool editing = editingChannelName(row);
     if (editing) {
         // A field only while it IS one. A box around every name all the time would make four text
         // fields out of what is, the rest of the time, four legends.
@@ -987,20 +1002,14 @@ void RationsEditorView::drawCaptureRow(Canvas &c, int row)
     c.setFontSize(geo::kMidiRowTextSize);
     c.setColor(editing ? geo::kAccentBright : geo::kTextColor);
     const std::string name =
-        editing ? mRenameText : (mController ? mController->channelName(row) : std::string());
+        editing ? mEditText : (mController ? mController->channelName(row) : std::string());
     const float nameX = nameBox.x + (editing ? 4.0f : 0.0f);
     const float nameW = nameBox.w - (editing ? 8.0f : 0.0f);
     c.drawString(c.clipToWidth(name, nameW).c_str(), nameX, base);
     if (editing) {
-        // The caret, placed by measuring the text in front of it. Not blinked: a blink needs a
-        // timer this page would otherwise not run, and a steady caret in the accent colour is
-        // unambiguous on the only field on screen.
         const std::string before =
-            c.clipToWidth(name.substr(0, std::min(mRenameCaret, name.size())), nameW);
-        const float caretX = std::min(nameX + c.stringWidth(before.c_str()), nameX + nameW);
-        c.setColor(geo::kAccentBright);
-        c.setPenSize(1.0f);
-        c.strokeLine(caretX, nameBox.y + 4.0f, caretX, nameBox.bottom() - 4.0f);
+            c.clipToWidth(name.substr(0, std::min(mEditCaret, name.size())), nameW);
+        drawCaret(c, nameBox, std::min(nameX + c.stringWidth(before.c_str()), nameX + nameW));
     }
 
     // What is loaded, in the body face — a path is a variable-length string that has to stay
@@ -1135,9 +1144,9 @@ Rect RationsEditorView::outputModeRow(int index)
 
 Rect RationsEditorView::calToggleRect()
 {
-    return Rect(static_cast<float>(geo::kCalToggleCX) - geo::kToggleW * 0.5f,
-                static_cast<float>(geo::kCalToggleCY) - geo::kToggleH * 0.5f,
-                static_cast<float>(geo::kToggleW), static_cast<float>(geo::kToggleH));
+    return Rect(static_cast<float>(geo::kCalToggleCX) - geo::kCalPillW * 0.5f,
+                static_cast<float>(geo::kCalToggleCY) - geo::kCalPillH * 0.5f,
+                static_cast<float>(geo::kCalPillW), static_cast<float>(geo::kCalPillH));
 }
 
 Rect RationsEditorView::calValueRect()
@@ -1240,16 +1249,10 @@ void RationsEditorView::drawOutputSection(Canvas &c)
     const bool calAvailable = inputCalibrationAvailable();
     const bool calOn = paramValue(kCalibrateInputId) > 0.5;
     const Rect tog = calToggleRect();
-    // Bat UP for on, the same way the gate's switch reads, and scaled to device pixels the same
-    // way drawToggle does — getScaled caches by the size it is asked for, so passing logical units
-    // here would fill that cache with a second entry at the wrong resolution.
-    const int pw = static_cast<int>(std::lround(geo::kToggleW * mScale));
-    const int ph = static_cast<int>(std::lround(geo::kToggleH * mScale));
-    if (cairo_surface_t *art =
-            mImages.getScaled(calOn ? "switch_up_ring" : "switch_down_ring", pw, ph))
-        c.drawImage(art, tog);
-    else
-        drawToggleFallback(c, tog, calOn);
+    // A pill rather than the faceplate's bat, drawn from code through the one helper panelrender
+    // also draws it with — see gfx/widgets.h, and geometry.h's kCalPillW for why this control is
+    // shaped unlike the switches on the head.
+    drawPillToggle(c, tog, calOn, calAvailable);
 
     c.setFont(Font::Title);
     c.setFontSize(geo::kMidiRowTextSize);
@@ -1257,20 +1260,43 @@ void RationsEditorView::drawOutputSection(Canvas &c)
     c.drawString(geo::kCalibrateLabel, static_cast<float>(geo::kCalLabelX),
                  tog.centerY() + geo::kMidiRowTextSize * 0.36f);
 
+    // The level, which is TYPED rather than dragged. It was a vertical drag, which is the wrong
+    // gesture twice over: the number is a property of the user's interface, so it is looked up on
+    // a spec sheet and entered rather than searched for by feel, and a drag over a 110-unit box
+    // covering 120 dB lands 1.1 dB per unit — the one control on this panel where the exact value
+    // is the whole point and the gesture could not deliver one. Clicking it opens the same field
+    // the capture rows' names use, with the same caret, the same keys and the same focus rules.
     const Rect value = calValueRect();
-    c.setColor(0x000000, 170);
+    const bool editing = mEditField == TextField::CalLevel;
+    c.setColor(0x000000, editing ? 200 : 170);
     c.fillRoundRect(value, 4.0f);
-    c.setColor(geo::kGold, 190);
+    c.setColor(editing ? geo::kAccent : geo::kGold, editing ? 220 : 190);
     c.setPenSize(1.0f);
     c.strokeRoundRect(value, 4.0f);
-    char dbu[24];
-    snprintf(dbu, sizeof(dbu), "%+.1f dBu",
-             ranges::kCalMin + paramValue(kInputCalLevelId) * (ranges::kCalMax - ranges::kCalMin));
+
+    const std::string text = editing ? mEditText : calValueText();
     c.setFont(Font::Body);
     c.setFontSize(geo::kMidiRowTextSize);
-    c.setColor(geo::kTextColor);
-    c.drawString(dbu, value.centerX() - c.stringWidth(dbu) * 0.5f,
-                 value.centerY() + geo::kMidiRowTextSize * 0.36f);
+    // Centred in both states, so the box does not jolt as the field opens under the pointer.
+    const float textW = c.stringWidth(text.c_str());
+    const float textX = value.centerX() - textW * 0.5f;
+    const float textBase = value.centerY() + geo::kMidiRowTextSize * 0.36f;
+    if (editSelected()) {
+        // The seed, drawn SELECTED — which is the field saying, before anything is typed, that
+        // typing will replace it rather than append to it. Without this the rule is still the
+        // right one and the user has no way to know it until they have got a wrong answer.
+        const Rect sel(textX - 2.0f, value.y + 4.0f, textW + 4.0f, value.h - 8.0f);
+        c.setColor(geo::kAccent, 210);
+        c.fillRoundRect(sel, 2.0f);
+        c.setColor(0x0C0B0A);
+    } else {
+        c.setColor(editing ? geo::kAccentBright : geo::kTextColor);
+    }
+    c.drawString(text.c_str(), textX, textBase);
+    if (editing && !editSelected()) {
+        const std::string before = text.substr(0, std::min(mEditCaret, text.size()));
+        drawCaret(c, value, textX + c.stringWidth(before.c_str()));
+    }
 }
 
 //------------------------------------------------------------------------
@@ -1309,10 +1335,12 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
     if (!mController)
         return false;
 
-    // A click anywhere else ends a rename in progress, and ends it by KEEPING what was typed.
-    // Clicking away from a field just filled in and having it silently discarded is the behaviour
-    // nobody wants; Escape is there for the other answer.
-    const int wasRenaming = mRenaming;
+    // A click anywhere else ends an open field, and ends it by KEEPING what was typed. Clicking
+    // away from a field just filled in and having it silently discarded is the behaviour nobody
+    // wants; Escape is there for the other answer. The one exception is a click on the field that
+    // is already open, which must not close and reopen it — that would put the caret back at the
+    // end of a value the user was part-way through correcting.
+    const bool wasEditing = editingText();
 
     // The capture rows. The name field and the clear box are tested before the row itself, because
     // both sit inside it and a row-wide test would swallow them — the same ordering the cabinet
@@ -1322,14 +1350,14 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
         if (!row.contains(x, y))
             continue;
         if (captureNameRect(i).contains(x, y)) {
-            if (wasRenaming >= 0 && wasRenaming != i)
-                commitRename();
-            if (mRenaming != i)
-                beginRename(i);
+            if (!editingChannelName(i)) {
+                commitTextEdit();
+                beginTextEdit(TextField::ChannelName, i);
+            }
             return true;
         }
-        if (wasRenaming >= 0)
-            commitRename();
+        if (wasEditing)
+            commitTextEdit();
         if (!mController->capturePath(i).empty() && captureClearBox(i).contains(x, y)) {
             mController->setCaptureSource(i, "", false);
             invalidate();
@@ -1338,12 +1366,21 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
         openCaptureBrowser(i);
         return true;
     }
-    if (wasRenaming >= 0)
-        commitRename();
 
-    // The output mode. A gated row is inert rather than merely grey: the compensation it selects
-    // falls back to unity for these captures, so letting it be chosen would be offering a control
-    // that does nothing and looks as though it did something.
+    // The level box is tested before everything that commits, because a click on the field that is
+    // already open must leave it open — see wasEditing above.
+    if (calValueRect().contains(x, y)) {
+        if (mEditField != TextField::CalLevel) {
+            commitTextEdit();
+            beginTextEdit(TextField::CalLevel);
+        }
+        return true;
+    }
+    if (wasEditing)
+        commitTextEdit();
+
+    // The output mode. A gated row is RELABELLED rather than refused; the reason is inside the
+    // loop, where the decision it records lives.
     for (int i = 0; i < kOutputModeCount; ++i) {
         if (!outputModeRow(i).contains(x, y))
             continue;
@@ -1365,11 +1402,6 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
     // in drawOutputSection, which draws the same split.
     if (inputCalibrationAvailable() && calToggleRect().contains(x, y)) {
         editParam(kCalibrateInputId, paramValue(kCalibrateInputId) > 0.5 ? 0.0 : 1.0);
-        invalidate();
-        return true;
-    }
-    if (calValueRect().contains(x, y)) {
-        startDrag(kInputCalLevelId, x, y, false);
         invalidate();
         return true;
     }
@@ -2538,107 +2570,225 @@ void RationsEditorView::openIrBrowser(int slot)
 }
 
 //------------------------------------------------------------------------
-// Renaming a channel.
+// Typed input: a channel's name, and the interface calibration level.
 //
-// This is the only typed input in the editor, and it is deliberately the SECOND way to name a
-// channel rather than the only one. Whether keys reach an embedded plug-in view at all is the
-// host's business: the SDK routes them through IPlugView::onKeyDown and forbids taking them off
-// the platform window, but a host that never gives the view focus never calls it, and on Linux
-// that varies between hosts. So the primary name is the basename of whatever the channel loaded —
-// a folder called JCM800 names the channel JCM800 with nothing typed — and this only ever
-// OVERRIDES that. In a host that delivers no keys nothing here is reachable and nothing is broken.
-void RationsEditorView::beginRename(int channel)
+// Typing is deliberately the SECOND way to reach both, never the only one. Whether keys reach an
+// embedded plug-in view at all is the host's business: the SDK routes them through
+// IPlugView::onKeyDown and forbids taking them off the platform window, but a host that never
+// gives the view focus never calls it, and on Linux that varies between hosts. So a channel's
+// primary name is the basename of whatever it loaded — a folder called JCM800 names the channel
+// JCM800 with nothing typed — and the calibration level keeps its wheel, which lands on the whole
+// decibels an interface is actually specified in. In a host that delivers no keys neither field is
+// reachable and neither control is lost.
+//
+// What the two fields share is everything about being a field: one open at a time, one caret, one
+// key handler, and one grab of the host's keyboard that is taken as the field opens and handed
+// back by every exit from it (RULES §4). Two independent fields would be two things that can each
+// forget to hand it back.
+std::string RationsEditorView::calValueText() const
 {
-    if (!mController || channel < 0 || channel >= kChannelCount)
+    char dbu[24];
+    snprintf(dbu, sizeof(dbu), "%+.1f dBu",
+             ranges::kCalMin + paramValue(kInputCalLevelId) * (ranges::kCalMax - ranges::kCalMin));
+    return dbu;
+}
+
+// Seeded WITHOUT the unit and without a leading plus: what is typed is a number, so the field
+// offers a number. Leaving "dBu" in it would put three characters in front of the caret that have
+// to be deleted before the value can be replaced, and that every user would delete.
+std::string RationsEditorView::calEditSeed() const
+{
+    char dbu[24];
+    snprintf(dbu, sizeof(dbu), "%.1f",
+             ranges::kCalMin + paramValue(kInputCalLevelId) * (ranges::kCalMax - ranges::kCalMin));
+    return dbu;
+}
+
+void RationsEditorView::beginTextEdit(TextField field, int channel)
+{
+    if (!mController || field == TextField::NoField)
         return;
-    mRenaming = channel;
-    // Seeded with the name currently SHOWN, not with the override, so a user who wants to adjust
-    // the folder's name starts from it rather than from an empty field.
-    mRenameText = mController->channelName(channel);
-    mRenameCaret = mRenameText.size();
-    // Take the keyboard for exactly as long as this field is open, and no longer. Every exit
-    // from the field — commit, cancel, a click elsewhere, a page change — runs through
-    // commitRename() or cancelRename(), so there is no path that leaves it held.
+    if (field == TextField::ChannelName && (channel < 0 || channel >= kChannelCount))
+        return;
+
+    mEditField = field;
+    mEditChannel = channel;
+    // A name is seeded with the name currently SHOWN, not with the override, so a user adjusting
+    // the folder's name starts from it rather than from an empty field. A level is seeded with the
+    // level currently set, for the same reason: both are edits to something, not entries from
+    // nothing.
+    mEditText = field == TextField::ChannelName ? mController->channelName(channel) : calEditSeed();
+    mEditCaret = mEditText.size();
+    // A LEVEL opens with its seed selected, so the first character typed replaces it. That is what
+    // a value field is for: the number is read off an interface's spec sheet and entered whole,
+    // and a field that appends to what is already there turns "-3.5" into "12.0-3.5" — which
+    // parses as 12.0 and looks, to the person who typed it, like the field ignored them. Found by
+    // driving the built editor, which is the only place a seeding rule can be seen at all.
+    //
+    // A NAME does not, and that is the same argument reaching the other answer: a channel's name
+    // is seeded with what the folder is called precisely so it can be ADJUSTED (D14), and select-
+    // on-open would put a keystroke between the user and the text they asked to start from.
+    mEditSelectAll = field == TextField::CalLevel;
+    // Take the keyboard for exactly as long as this field is open, and no longer. Every exit from
+    // a field — commit, cancel, a click elsewhere, a page change — runs through commitTextEdit()
+    // or cancelTextEdit(), so there is no path that leaves it held.
     setKeyboardFocus(true);
     invalidate();
 }
 
-void RationsEditorView::commitRename()
+void RationsEditorView::commitTextEdit()
 {
-    if (mRenaming < 0)
+    if (mEditField == TextField::NoField)
         return;
-    const int channel = mRenaming;
-    mRenaming = -1;
-    if (mController) {
+    const TextField field = mEditField;
+    const int channel = mEditChannel;
+    const std::string text = mEditText;
+    mEditField = TextField::NoField;
+    mEditChannel = -1;
+    mEditText.clear();
+    mEditCaret = 0;
+    mEditSelectAll = false;
+    setKeyboardFocus(false);
+
+    if (mController && field == TextField::ChannelName) {
         // Typing the basename back is the same as having no override at all, and storing it as one
         // would freeze the name against a later load. So a name that matches what the channel would
         // be called anyway is stored as empty - which is also how a user clears an override without
         // being told there is such a thing.
         const std::string current = mController->channelName(channel);
-        std::string next = mRenameText;
+        std::string next = text;
         while (!next.empty() && next.back() == ' ')
             next.pop_back();
         mController->setChannelName(channel, next == current ? "" : next.c_str());
+    } else if (mController && field == TextField::CalLevel) {
+        // A value that will not parse leaves the parameter alone. That is the one thing a commit
+        // cannot keep, and the honest answer to it is the value that was there before rather than
+        // a number invented out of a partial one — "-" on its own, or an emptied field, is a user
+        // part-way through an edit and not a request for -60 dBu.
+        //
+        // strtod rather than std::stod: this runs on the host's UI thread inside a click, and a
+        // throw out of here would cross the SDK's C ABI.
+        //
+        // There is deliberately no std::isfinite guard: this translation unit is built with
+        // -ffast-math, under which that call folds to a constant true (D26, where exactly such a
+        // guard had been compiled out of every build since it was written). It is not needed
+        // either. acceptsTextChar admits only [0-9.+-], so there is no exponent and no "nan" to
+        // type, and kCalEditMaxChars caps the field at eight characters — the largest magnitude
+        // that can be entered is 99999999, which is finite, and std::clamp takes it to +60.
+        const char *begin = text.c_str();
+        char *end = nullptr;
+        const double db = std::strtod(begin, &end);
+        if (end != begin) {
+            // Clamped rather than refused: a user who types 100 wants the loudest this offers, and
+            // the box redraws at +60.0 dBu to say what they got.
+            const double clamped = std::clamp(db, ranges::kCalMin, ranges::kCalMax);
+            editParam(kInputCalLevelId,
+                      (clamped - ranges::kCalMin) / (ranges::kCalMax - ranges::kCalMin));
+        }
     }
-    mRenameText.clear();
+    invalidate();
+}
+
+void RationsEditorView::cancelTextEdit()
+{
+    mEditField = TextField::NoField;
+    mEditChannel = -1;
+    mEditText.clear();
+    mEditCaret = 0;
+    mEditSelectAll = false;
     setKeyboardFocus(false);
     invalidate();
 }
 
-void RationsEditorView::cancelRename()
+// What may be typed into the field that is open. A name takes any printable ASCII; a level takes
+// only the characters a decimal number is written with, so a field whose whole purpose is to be
+// parsed cannot be filled with something that will not parse. The check is on the CHARACTER and
+// not on the resulting string: rejecting "-" because "-" is not yet a number would make a negative
+// level untypeable, which is the shape of interface level most users have.
+// Drop the selection, optionally taking the text with it. One place rather than the six the key
+// handler would otherwise set two fields in, because a selection left set after the text under it
+// has changed would highlight characters the user did not select.
+void RationsEditorView::clearSelection(bool erase)
 {
-    mRenaming = -1;
-    mRenameText.clear();
-    setKeyboardFocus(false);
-    invalidate();
+    if (!mEditSelectAll)
+        return;
+    mEditSelectAll = false;
+    if (erase) {
+        mEditText.clear();
+        mEditCaret = 0;
+    }
+}
+
+bool RationsEditorView::acceptsTextChar(char ch) const
+{
+    if (mEditField != TextField::CalLevel)
+        return true;
+    return (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '+';
 }
 
 // One key. Returns whether it was consumed, which is the whole contract: the SDK warns that
 // answering kResultTrue for a key that was not handled blocks the host's own key commands, and in
 // a DAW the space bar is one of those.
-bool RationsEditorView::handleRenameKey(char16 key, int16 keyCode, int16 modifiers)
+bool RationsEditorView::handleTextKey(char16 key, int16 keyCode, int16 modifiers)
 {
-    if (mRenaming < 0)
+    if (mEditField == TextField::NoField)
         return false;
 
     switch (keyCode) {
         case Steinberg::KEY_RETURN:
         case Steinberg::KEY_ENTER:
-            commitRename();
+            commitTextEdit();
             return true;
         case Steinberg::KEY_ESCAPE:
-            cancelRename();
+            cancelTextEdit();
             return true;
+        // Either delete key clears a SELECTED field outright, which is what the highlight in
+        // front of the user says it will do.
         case Steinberg::KEY_BACK:
-            if (mRenameCaret > 0) {
-                mRenameText.erase(--mRenameCaret, 1);
-                invalidate();
+            if (mEditSelectAll) {
+                clearSelection(/*erase=*/true);
+            } else if (mEditCaret > 0) {
+                mEditText.erase(--mEditCaret, 1);
             }
+            invalidate();
             return true;
         case Steinberg::KEY_DELETE:
-            if (mRenameCaret < mRenameText.size()) {
-                mRenameText.erase(mRenameCaret, 1);
-                invalidate();
+            if (mEditSelectAll) {
+                clearSelection(/*erase=*/true);
+            } else if (mEditCaret < mEditText.size()) {
+                mEditText.erase(mEditCaret, 1);
             }
+            invalidate();
             return true;
+        // Moving the caret is how a user says "I want to edit this rather than replace it", so it
+        // drops the selection and keeps the text — landing at the end the arrow points at, which
+        // is what makes Left-then-type insert in front and Right-then-type append.
         case Steinberg::KEY_LEFT:
-            if (mRenameCaret > 0) {
-                --mRenameCaret;
-                invalidate();
+            if (mEditSelectAll) {
+                clearSelection(/*erase=*/false);
+                mEditCaret = 0;
+            } else if (mEditCaret > 0) {
+                --mEditCaret;
             }
+            invalidate();
             return true;
         case Steinberg::KEY_RIGHT:
-            if (mRenameCaret < mRenameText.size()) {
-                ++mRenameCaret;
-                invalidate();
+            if (mEditSelectAll) {
+                clearSelection(/*erase=*/false);
+                mEditCaret = mEditText.size();
+            } else if (mEditCaret < mEditText.size()) {
+                ++mEditCaret;
             }
+            invalidate();
             return true;
         case Steinberg::KEY_HOME:
-            mRenameCaret = 0;
+            clearSelection(/*erase=*/false);
+            mEditCaret = 0;
             invalidate();
             return true;
         case Steinberg::KEY_END:
-            mRenameCaret = mRenameText.size();
+            clearSelection(/*erase=*/false);
+            mEditCaret = mEditText.size();
             invalidate();
             return true;
         default:
@@ -2676,10 +2826,19 @@ bool RationsEditorView::handleRenameKey(char16 key, int16 keyCode, int16 modifie
     // here rather than left to be discovered.
     if (ch < 0x20 || ch > 0x7E)
         return false;
-    if (mRenameText.size() >= kRenameMaxChars)
+    // Consumed either way below: the field has the keyboard, so a character it will not take is
+    // still a character the host must not be told it can act on.
+    if (!acceptsTextChar(static_cast<char>(ch)))
+        return true;
+    // The first character typed into a selected field replaces the whole of it.
+    if (mEditSelectAll)
+        clearSelection(/*erase=*/true);
+    const size_t limit =
+        mEditField == TextField::CalLevel ? geo::kCalEditMaxChars : kRenameMaxChars;
+    if (mEditText.size() >= limit)
         return true; // consumed, but the field is full
-    mRenameText.insert(mRenameCaret, 1, static_cast<char>(ch));
-    ++mRenameCaret;
+    mEditText.insert(mEditCaret, 1, static_cast<char>(ch));
+    ++mEditCaret;
     invalidate();
     return true;
 }
@@ -2687,7 +2846,7 @@ bool RationsEditorView::handleRenameKey(char16 key, int16 keyCode, int16 modifie
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsEditorView::onKeyDown(char16 key, int16 keyCode, int16 modifiers)
 {
-    const bool handled = handleRenameKey(key, keyCode, modifiers);
+    const bool handled = handleTextKey(key, keyCode, modifiers);
     // Whether a host routes keys to an embedded view at all is the host's policy, and it is the
     // one thing about this field that cannot be established by reading our own source: if this
     // line never prints, no key ever reached the plug-in and nothing below it is at fault. Same
@@ -2696,30 +2855,30 @@ tresult PLUGIN_API RationsEditorView::onKeyDown(char16 key, int16 keyCode, int16
     if (trace) {
         std::fprintf(stderr,
                      "[Rations] onKeyDown key=0x%04x ('%c') keyCode=%d modifiers=0x%02x "
-                     "renaming=%d handled=%d\n",
+                     "field=%d handled=%d\n",
                      static_cast<unsigned>(key),
                      (key >= 0x20 && key <= 0x7E) ? static_cast<char>(key) : '.',
-                     static_cast<int>(keyCode), static_cast<unsigned>(modifiers), mRenaming,
-                     handled ? 1 : 0);
+                     static_cast<int>(keyCode), static_cast<unsigned>(modifiers),
+                     static_cast<int>(mEditField), handled ? 1 : 0);
     }
     return handled ? kResultTrue : kResultFalse;
 }
 
 // The platform route. Identical handling to onKeyDown above, deliberately: the two differ only in
-// where the key came from, and routing both through handleRenameKey is what stops them drifting.
+// where the key came from, and routing both through handleTextKey is what stops them drifting.
 // The trace is shared too, so one run says which route — if either — is carrying keys in a host.
 bool RationsEditorView::onKeyDownNative(char16 key, int16 keyCode, int16 modifiers)
 {
-    const bool handled = handleRenameKey(key, keyCode, modifiers);
+    const bool handled = handleTextKey(key, keyCode, modifiers);
     static const bool trace = std::getenv("RATIONS_KEY_TRACE") != nullptr;
     if (trace) {
         std::fprintf(stderr,
                      "[Rations] native key=0x%04x ('%c') keyCode=%d modifiers=0x%02x "
-                     "renaming=%d handled=%d\n",
+                     "field=%d handled=%d\n",
                      static_cast<unsigned>(key),
                      (key >= 0x20 && key <= 0x7E) ? static_cast<char>(key) : '.',
-                     static_cast<int>(keyCode), static_cast<unsigned>(modifiers), mRenaming,
-                     handled ? 1 : 0);
+                     static_cast<int>(keyCode), static_cast<unsigned>(modifiers),
+                     static_cast<int>(mEditField), handled ? 1 : 0);
     }
     return handled;
 }

@@ -139,7 +139,7 @@ public:
 
 private:
     // Keyboard from the platform window, which is the route that actually carries a key in every
-    // host tested here. Both routes end in handleRenameKey, so there is one handler and no way
+    // host tested here. Both routes end in handleTextKey, so there is one handler and no way
     // for the two to drift apart. See the platform view's setKeyboardFocus() for why a plug-in
     // ends up reading its own window despite the SDK saying it must not.
     bool onKeyDownNative(Steinberg::char16 key, Steinberg::int16 keyCode,
@@ -194,17 +194,54 @@ private:
     // may be taller than the window showing it. Called at open and again on every resize.
     void boundCaptureBrowser();
 
-    // --- renaming a channel ----------------------------------------------------------------
-    // The one place this editor takes typed input, and the only one it is ever likely to: every
-    // other control here is a knob, a switch or a list, which is deliberate — see the note on
-    // onKeyDown in the .cpp for why a plug-in view cannot count on getting keys at all.
-    void beginRename(int channel);
-    void commitRename();
-    void cancelRename();
+    // --- typed input -------------------------------------------------------------------------
+    // Two fields take typed input — a channel's name and the interface calibration level — and
+    // they share one field, one caret, one focus grab and one key handler. That is not tidiness:
+    // the field holds the host's keyboard focus while it is open (RULES §4), so two independent
+    // fields would be two things that can each forget to hand it back, and a state where both
+    // believe they have it. One field cannot be open twice.
+    //
+    // NoField rather than the None it wants to be called: X11's X.h defines `None` as a macro, and
+    // this header reaches it through platform/plugview.h on the Linux build. An enumerator by that
+    // name compiles on two platforms out of three.
+    enum class TextField {
+        NoField,
+        ChannelName, // mEditChannel says which of the four
+        CalLevel,    // the interface level in dBu, kInputCalLevelId
+    };
+    void beginTextEdit(TextField field, int channel = -1);
+    // Ends the edit by KEEPING what was typed, which is what every exit but Escape does. A value
+    // that will not parse is the one case that cannot be kept, and leaves its parameter alone.
+    void commitTextEdit();
+    void cancelTextEdit();
+    bool editingText() const
+    {
+        return mEditField != TextField::NoField;
+    }
+    // Whether the seeded text is still SELECTED — the state a value field opens in, where the
+    // first character typed replaces the lot. See beginTextEdit for which field opens that way
+    // and why the other does not.
+    bool editSelected() const
+    {
+        return mEditSelectAll && mEditField != TextField::NoField;
+    }
+    bool editingChannelName(int channel) const
+    {
+        return mEditField == TextField::ChannelName && mEditChannel == channel;
+    }
     // Returns true when the key was consumed, which is exactly what onKeyDown must report to the
     // host: a wrong "yes" swallows the host's own key commands, and the transport is one of them.
-    bool handleRenameKey(Steinberg::char16 key, Steinberg::int16 keyCode,
-                         Steinberg::int16 modifiers);
+    bool handleTextKey(Steinberg::char16 key, Steinberg::int16 keyCode, Steinberg::int16 modifiers);
+    // Whether `ch` may go into the field that is open. A name takes any printable ASCII; a dBu
+    // level takes the characters a number is written with and nothing else, so a field that is
+    // going to be parsed cannot be filled with something that will not parse.
+    bool acceptsTextChar(char ch) const;
+    // Drop the selection, optionally erasing the text it covered.
+    void clearSelection(bool erase);
+    // The dBu level as the box shows it at rest ("+12.0 dBu") and as it is seeded into the field
+    // for editing ("12.0") — the unit is not typed, so it is not offered to be deleted.
+    std::string calValueText() const;
+    std::string calEditSeed() const;
     void pollCaps();
     // Ask the processor what the learn table now says, while a row is waiting to be taught.
     void pollMidi();
@@ -315,11 +352,17 @@ private:
     // bool beside mBrowserSlot, so "an IR row opened it" and "which one" cannot disagree.
     int mBrowserChannel = -1;
 
-    // Which channel's name is being typed, or -1. The text is held here rather than pushed at the
-    // controller on every keystroke so that Escape has something to go back to.
-    int mRenaming = -1;
-    std::string mRenameText;
-    size_t mRenameCaret = 0;
+    // The one open text field, if any, and what is in it. The text is held here rather than
+    // pushed at its destination on every keystroke so that Escape has something to go back to.
+    TextField mEditField = TextField::NoField;
+    int mEditChannel = -1; // meaningful only for TextField::ChannelName
+    std::string mEditText;
+    size_t mEditCaret = 0;
+    // The whole seed is selected until the first key lands on it. One flag rather than an anchor
+    // and an extent: there is no way to make a partial selection in this editor — no shift-arrow,
+    // no drag-select — so a selection here is always the whole field or nothing, and a pair of
+    // indices would be two things that can disagree about that.
+    bool mEditSelectAll = false;
 
     Steinberg::Vst::ParamID mDragParam = 0; // 0 = no active drag
     // The Slim overlay: whether it is up, and whether the knob has moved since the setting was

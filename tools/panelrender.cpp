@@ -40,6 +40,7 @@
 #include "gfx/fontstack.h"
 #include "gfx/image.h"
 #include "gfx/svg.h"
+#include "gfx/widgets.h"
 #include "platform/respath.h"
 
 #include <algorithm>
@@ -773,15 +774,13 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
                          dotCY + geo::kMidiRowTextSize * 0.36f);
         }
 
-        // The same bat the faceplate uses, through the same helper: a second way of drawing a
-        // switch would be a second thing to keep looking like the first.
-        constexpr geo::ToggleSpec kCalToggle = {kCalibrateInputId, geo::kCalToggleCX,
-                                                geo::kCalToggleCY, geo::kToggleW,
-                                                geo::kToggleH,     nullptr,
-                                                false};
-        drawToggle(c, images, kCalToggle, /*on=*/true);
-        const Rect tog(geo::kCalToggleCX - geo::kToggleW * 0.5f,
-                       geo::kCalToggleCY - geo::kToggleH * 0.5f, geo::kToggleW, geo::kToggleH);
+        // A pill, not the faceplate's bat, and drawn through the same helper the editor draws it
+        // with (gfx/widgets.h) rather than a second implementation this audit would then be
+        // auditing instead of the panel. Drawn ON and available, which is the state that puts the
+        // handle at the end the legend has to clear.
+        const Rect tog(geo::kCalToggleCX - geo::kCalPillW * 0.5f,
+                       geo::kCalToggleCY - geo::kCalPillH * 0.5f, geo::kCalPillW, geo::kCalPillH);
+        drawPillToggle(c, tog, /*on=*/true);
         c.setFont(Font::Title);
         c.setFontSize(geo::kMidiRowTextSize);
         c.setColor(geo::kTextColor);

@@ -20,6 +20,8 @@
 
 #include "pluginterfaces/vst/vsttypes.h"
 
+#include <cstddef>
+
 namespace Rations
 {
 namespace geo
@@ -1453,20 +1455,57 @@ constexpr float kOutputDotCX = 10.0f;
 constexpr float kOutputDotR = 6.0f;
 constexpr float kOutputDotFillR = 3.0f;
 constexpr int kOutputTextX = 26;
-// The calibration row: a bat toggle on the left and the dBu value box to its
+// The calibration row: a PILL toggle on the left and the dBu value box to its
 // right. Only the TOGGLE is drawn as far as the loaded captures can honour it;
 // the value beside it is the user's own interface level and is always live.
+//
+// A pill rather than the faceplate's bat, and that is a decision about WHERE
+// this control is rather than about what it does. The bats on the head are amp
+// hardware: they sit in a row under the channel dials, and the four below them
+// are played. This one sits in a list of settings rows, at the bottom of a page
+// that is read rather than performed, and a lever drawn in that company reads as
+// a stray piece of another panel. The shape is the grandparent's own slide
+// switch (/home/human/NAMix); the colour is this project's gold rather than its
+// azure. See gfx/widgets.h, which both the editor and panelrender draw it with.
+//
+// The pair sits well to the RIGHT of the column the rows above start in, and close to the value
+// box, which is the one place on this page that breaks the left-column convention. It is deliberate
+// and it is about what the row IS: the toggle and the level are one control in two halves — the
+// level is the number, the toggle is whether it is applied — and drawn against the left margin
+// they read as a fourth item in the radio list above with a box stranded off to the right. Pushed
+// across, the two halves read as the pair they are. This is as far across as they go: the legend
+// between them is 155 units of Michroma and the box's left edge is fixed, so the gap in front of
+// it is what is left over.
 constexpr int kCalRowY = 1098;
-constexpr int kCalToggleCX = kMidiRowX + 40;
+constexpr int kCalPillW = 44, kCalPillH = 22;
+constexpr int kCalToggleCX = kMidiRowX + 118;
 constexpr int kCalToggleCY = kCalRowY + 20;
-constexpr int kCalLabelX = kMidiRowX + 70;
+constexpr int kCalLabelX = kMidiRowX + 152;
 constexpr int kCalValueX = kMidiRowX + 320;
 constexpr int kCalValueW = 110;
 constexpr int kCalValueH = 26;
 constexpr int kCalValueY = kCalRowY + 7;
+static_assert(kCalToggleCX - kCalPillW / 2 >= kMidiRowX,
+              "the calibration pill must start no further left than the rows above it");
+static_assert(kCalToggleCX + kCalPillW / 2 + 8 <= kCalLabelX,
+              "the calibration pill must clear its own legend by a readable gap - the pill is "
+              "nearly twice the width of the bat it replaced, so this is the clearance that moved");
+static_assert(kCalLabelX < kCalValueX,
+              "the calibration legend must start left of the value box it labels; whether it FITS "
+              "in what is left is measured with real glyph ink by panelrender's text audit, which "
+              "is the sharper of the two gates and the one that moves when the face does");
 // One wheel click on the calibration level, in dB. Whole decibels: an interface's
 // stated level is a round number and this is how a user lands on theirs.
+//
+// The wheel is now the SECOND way to set this, and the reason it is kept is that
+// it is the only one that needs no keyboard: whether keys reach an embedded view
+// is the host's policy (D14), so a field that is typed into has to have a way
+// round it that is not a drag. It is not a fallback for the value being
+// unreachable - it lands on whole decibels, which is what an interface states.
 constexpr double kCalWheelDb = 1.0;
+// The most characters the dBu field will hold. Long enough for "-60.0" and a
+// little slack, short enough that nothing typed into it can outrun the box.
+constexpr std::size_t kCalEditMaxChars = 8;
 constexpr int kOutputFootnoteY = 1144;
 constexpr int kOutputFootnote2Y = kOutputFootnoteY + 18; // the MIDI footnotes' own pitch
 static_assert(kOutputFootnote2Y + 22 == kSettingsPageH,
