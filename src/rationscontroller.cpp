@@ -903,8 +903,12 @@ void RationsController::refreshParamTitles()
         return false;
     }();
     changed |= retitleParam(kSlimId, (!anyLoaded || anyBankSlimmable()) ? "Slim" : "Slim (n/a)");
-    changed |= retitleParam(kInputCalLevelId,
-                            hasIn ? "Input Calibration Level" : "Input Calibration Level (n/a)");
+    // The LEVEL is never unavailable: it is the analog level corresponding to 0 dBFS at this
+    // plug-in's input, which is a property of the user's interface rather than of any bank, and is
+    // the same number on all four channels. Only the toggle above reports whether the sounding
+    // channel's captures state a level to measure it against. A host-generic parameter list has to
+    // agree with the panel, which draws this field at full strength on every channel.
+    changed |= retitleParam(kInputCalLevelId, "Input Calibration Level");
     for (int c = 0; c < kChannelCount; ++c) {
         // The gain dial is named after the channel and says so when there is nothing to sweep: a
         // bank of one is a bank the dial cannot travel across.

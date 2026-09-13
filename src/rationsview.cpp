@@ -1222,9 +1222,19 @@ void RationsEditorView::drawOutputSection(Canvas &c)
                      dotCY + geo::kMidiRowTextSize * 0.36f);
     }
 
-    // Input calibration: the toggle, its legend, and the interface level it works against. The
-    // whole block dims together, because the level means nothing with the toggle off and neither
-    // means anything when the captures do not state what level they were fed.
+    // Input calibration: the toggle, its legend, and the interface level it works against. The two
+    // halves report DIFFERENT facts and so are gated separately.
+    //
+    // The level is the analog level, in dBu RMS, that corresponds to 0 dBFS as the signal enters
+    // the plug-in - a property of the user's AUDIO INTERFACE. It is the same number on all four
+    // channels, and whether the channel that happens to be sounding states its own recording level
+    // has no bearing on it. So it is always drawn at full strength and always editable. Dimming it
+    // with the toggle meant a user who had Clean selected could not enter their interface's level
+    // at all, even though it is the number OD1 will be measured against a moment later.
+    //
+    // The TOGGLE is the half that is about the captures: it reports whether the loaded bank carries
+    // the recording level to measure that number against, so it alone follows the sounding
+    // channel's metadata.
     const bool calAvailable = inputCalibrationAvailable();
     const bool calOn = paramValue(kCalibrateInputId) > 0.5;
     const Rect tog = calToggleRect();
@@ -1248,7 +1258,7 @@ void RationsEditorView::drawOutputSection(Canvas &c)
     const Rect value = calValueRect();
     c.setColor(0x000000, 170);
     c.fillRoundRect(value, 4.0f);
-    c.setColor(geo::kGold, calAvailable ? 190 : 80);
+    c.setColor(geo::kGold, 190);
     c.setPenSize(1.0f);
     c.strokeRoundRect(value, 4.0f);
     char dbu[24];
@@ -1256,7 +1266,7 @@ void RationsEditorView::drawOutputSection(Canvas &c)
              ranges::kCalMin + paramValue(kInputCalLevelId) * (ranges::kCalMax - ranges::kCalMin));
     c.setFont(Font::Body);
     c.setFontSize(geo::kMidiRowTextSize);
-    c.setColor(calAvailable ? geo::kTextColor : 0x6A6460);
+    c.setColor(geo::kTextColor);
     c.drawString(dbu, value.centerX() - c.stringWidth(dbu) * 0.5f,
                  value.centerY() + geo::kMidiRowTextSize * 0.36f);
 }
@@ -1348,17 +1358,18 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
         invalidate();
         return true;
     }
-    if (inputCalibrationAvailable()) {
-        if (calToggleRect().contains(x, y)) {
-            editParam(kCalibrateInputId, paramValue(kCalibrateInputId) > 0.5 ? 0.0 : 1.0);
-            invalidate();
-            return true;
-        }
-        if (calValueRect().contains(x, y)) {
-            startDrag(kInputCalLevelId, x, y, false);
-            invalidate();
-            return true;
-        }
+    // Only the TOGGLE is gated on what the sounding channel's captures state; the level beside it
+    // is a property of the user's interface and stays editable on every channel. See the comment
+    // in drawOutputSection, which draws the same split.
+    if (inputCalibrationAvailable() && calToggleRect().contains(x, y)) {
+        editParam(kCalibrateInputId, paramValue(kCalibrateInputId) > 0.5 ? 0.0 : 1.0);
+        invalidate();
+        return true;
+    }
+    if (calValueRect().contains(x, y)) {
+        startDrag(kInputCalLevelId, x, y, false);
+        invalidate();
+        return true;
     }
 
     for (int i = 0; i < geo::kLevelRowCount; ++i) {
@@ -2383,7 +2394,7 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
         }
         // The interface calibration level, in whole decibels: an interface's stated level is a
         // round number, and this is how a user lands on theirs without aiming a drag at it.
-        if (inputCalibrationAvailable() && calValueRect().contains(fx, cy)) {
+        if (calValueRect().contains(fx, cy)) {
             nudgeParam(kInputCalLevelId,
                        delta * geo::kCalWheelDb / (ranges::kCalMax - ranges::kCalMin));
             return;

@@ -1452,7 +1452,8 @@ constexpr float kOutputDotR = 6.0f;
 constexpr float kOutputDotFillR = 3.0f;
 constexpr int kOutputTextX = 26;
 // The calibration row: a bat toggle on the left and the dBu value box to its
-// right, both drawn only as far as the loaded captures can honour them.
+// right. Only the TOGGLE is drawn as far as the loaded captures can honour it;
+// the value beside it is the user's own interface level and is always live.
 constexpr int kCalRowY = 1098;
 constexpr int kCalToggleCX = kMidiRowX + 40;
 constexpr int kCalToggleCY = kCalRowY + 20;
