@@ -618,7 +618,8 @@ set(NAMPRACK_PLUGIN_SOURCES
     ${NAMP_CORE_DIR}/channelrack.cpp
     ${NAMP_CORE_DIR}/irblend.h
     ${NAMP_CORE_DIR}/irblend.cpp
-    src/midilearn.h
+    ${NAMP_CORE_DIR}/midilearn.h
+    src/midilearnrows.h
     ${NAMP_CORE_DIR}/midilearn.cpp
     src/rationsview.h
     src/rationsview.cpp

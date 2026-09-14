@@ -31,15 +31,24 @@
 //     it is stored that way rather than being flattened to match the other two.
 //
 // The table is GENERIC OVER ParamID and value rather than hard-wired to the four channels, and
-// the pedalboard is what that generality was for: the five footswitch rows are five rows of data
-// and no new mechanism. The gate toggle is deliberately absent - it is not on the MIDI path at
-// all and stays on for as long as the user has it on.
+// what that generality buys differs by product, which is why the rows themselves are not in this
+// file. products/rations spends it on the pedalboard: the five footswitch rows are five rows of
+// data and no new mechanism. products/rack has no pedalboard -- its pedals are separate plug-ins
+// it hosts -- so every row it holds today is a channel row, and the generality is kept there
+// against the same shape arriving again: a footswitch reaching a HOSTED plug-in's bypass is a
+// ParamID and a value on some other object, which is exactly what a row already is. Rebuilding
+// the mechanism at that point would be rebuilding this file.
 //
-// WHAT A ROW PERFORMS, AND WHY THE TWO HALVES OF THE TABLE DIFFER. A channel row SETS: the four
-// of them are four positions of one switch, and "go to OD2" is the whole of what a player means
-// by stamping on that button. A pedal row TOGGLES, and it has to, because a footswitch that could
-// only ever turn a pedal ON would need a second button to turn it off - five pedals would eat ten
-// of the four buttons a footswitch has.
+// The gate toggle is deliberately absent from both - it is not on the MIDI path at all and stays
+// on for as long as the user has it on.
+//
+// WHAT A ROW PERFORMS, AND WHY THE TWO ACTIONS DIFFER. A channel row SETS: the four of them are
+// four positions of one switch, and "go to OD2" is the whole of what a player means by stamping on
+// that button. A row that TOGGLES has to, because a footswitch that could only ever turn a pedal
+// ON would need a second button to turn it off - five pedals would eat ten of the four buttons a
+// footswitch has. Every toggling row today is one of products/rations' pedals; products/rack keeps
+// MidiAction::Toggle with no row using it, because it is one line to keep and a mechanism to
+// re-derive.
 //
 // WHAT COUNTS AS A PRESS depends on the controller, and there are three kinds. This mattered more
 // than it looks, because the rule here was originally written for one of them and quietly broke
@@ -56,7 +65,8 @@
 // is a release and does nothing. The rule used to require a RISING edge, at or above 64 having
 // previously been below, which serves a momentary switch exactly and makes a PROGRAMMED one work
 // once and then go dead: its second press is not an edge. That was invisible on a channel row,
-// because selecting Clean twice is selecting Clean, and it would have been fatal on a pedal row.
+// because selecting Clean twice is selecting Clean, and it would have been fatal on a row that
+// toggles.
 // Measured against the built bundle rather than reasoned about: three presses of one value gave
 // on, nothing, nothing.
 //
@@ -124,8 +134,8 @@ struct MidiBinding {
 std::uint32_t packBinding(const MidiBinding &b);
 MidiBinding unpackBinding(std::uint32_t word);
 
-// What a row does with its parameter. See the file header for why a channel sets and a pedal
-// toggles, and for what a latching footswitch costs.
+// What a row does with its parameter. See the file header for why a channel row sets and a
+// footswitch row toggles, and for what a latching footswitch costs.
 enum class MidiAction {
     Set = 0,    // store the row's value
     Toggle = 1, // flip between 0 and 1 - only legal on a parameter whose step count is 1
@@ -140,52 +150,31 @@ struct MidiLearnTarget {
     double value;                  // what Set stores, normalized. Toggle does not read it.
 };
 
-// Nine rows: four channels, then five pedal footswitches in the order the board is wired.
+// THE ROWS THEMSELVES ARE THE PRODUCT'S, and arrive from its own midilearnrows.h. That file
+// supplies kMidiLearnChannelRows, kMidiLearnRowCount, kMidiLearnRows[] and whatever assertions are
+// particular to its table; everything above this line and everything below it is the mechanism and
+// is the same in both products.
 //
-// kChannelId is a list parameter, so a channel row's value is that channel's step - see
-// normFromChannel in rationsids.h, which this must agree with. Written out rather than computed so
-// the table reads as a table; the static_asserts below are what keep it honest about the half of
-// it that is computed elsewhere.
-inline constexpr int kMidiLearnChannelRows = kChannelCount;
-inline constexpr int kMidiLearnRowCount = kChannelCount + kPedalCount;
-inline constexpr MidiLearnTarget kMidiLearnRows[kMidiLearnRowCount] = {
-    {"Clean", kChannelId, MidiAction::Set, 0.0},
-    {"Crunch", kChannelId, MidiAction::Set, 1.0 / 3.0},
-    {"OD1", kChannelId, MidiAction::Set, 2.0 / 3.0},
-    {"OD2", kChannelId, MidiAction::Set, 1.0},
-    {"Boost", kBoostOnId, MidiAction::Toggle, 0.0},
-    {"Chorus", kChorusOnId, MidiAction::Toggle, 0.0},
-    {"Flanger", kFlangerOnId, MidiAction::Toggle, 0.0},
-    {"Delay", kDelayOnId, MidiAction::Toggle, 0.0},
-    {"Reverb", kReverbOnId, MidiAction::Toggle, 0.0},
-};
+// It is reached by name and resolved by the include path, which puts the product's src/ ahead of
+// core/ -- the same rule that decides which geometry.h or rationsids.h this file just included.
+// Include midilearn.h, never midilearnrows.h directly: the rows are written in terms of
+// MidiLearnTarget and MidiAction, which are declared above.
+//
+// The namespace is closed around the include and reopened after it, so that file is an ordinary
+// header that opens its own namespace rather than a fragment that only compiles in one context.
 
-// The pedal half of that table is written out by hand and derived in kPedalParams, so it is
-// checked rather than trusted: a pedal reordered there, or a sixth one added, is a compile error
-// here instead of a footswitch that turns on somebody else's pedal.
-constexpr bool midiPedalRowsMatchPedals()
+} // namespace Rations
+
+#include "midilearnrows.h"
+
+namespace Rations
 {
-    for (int p = 0; p < kPedalCount; ++p) {
-        const MidiLearnTarget &row = kMidiLearnRows[kMidiLearnChannelRows + p];
-        if (row.param != kPedalOnId[p] || row.action != MidiAction::Toggle)
-            return false;
-        // Toggle flips between 0 and 1, which is only a value that parameter can take if its step
-        // count is 1. Every pedal's first entry is its footswitch, and that is asserted in
-        // rationsids.h; this is the other half of the claim - that it is a Toggle.
-        if (kPedalParams[pedalParamFirst(p)].kind != PedalParamKind::Toggle)
-            return false;
-    }
-    return true;
-}
-static_assert(midiPedalRowsMatchPedals(),
-              "the pedal rows must stay in kPedalParams' order and stay toggles");
 
 // A channel row does not toggle, and its value has to be a step kChannelId can actually take.
 constexpr bool midiChannelRowsAreChannels()
 {
     for (int c = 0; c < kMidiLearnChannelRows; ++c)
-        if (kMidiLearnRows[c].param != kChannelId ||
-            kMidiLearnRows[c].action != MidiAction::Set ||
+        if (kMidiLearnRows[c].param != kChannelId || kMidiLearnRows[c].action != MidiAction::Set ||
             kMidiLearnRows[c].value != normFromChannel(static_cast<Channel>(c)))
             return false;
     return true;
@@ -193,9 +182,13 @@ constexpr bool midiChannelRowsAreChannels()
 static_assert(midiChannelRowsAreChannels(), "a channel row must set kChannelId to its own step");
 
 // How many rows a state blob written before the pedalboard holds. FROZEN: it is a fact about
-// versions 2 to 5 of that format, not about this build's table, so it stays 4 whatever
-// kMidiLearnRowCount becomes. From version 6 the block carries its own count and this is not
-// consulted - see kStateVersion.
+// versions 2 to 5 of that format, not about any build's table, so it stays 4 whatever
+// kMidiLearnRowCount becomes and whichever product is asking. From version 6 the block carries its
+// own count and this is not consulted - see kStateVersion.
+//
+// In products/rack it happens to equal kMidiLearnRowCount, because that table is the four channel
+// rows and nothing else. That is a coincidence of arithmetic and not a reason to merge them: one
+// is history and the other is this build. The assertion below is what the split has to keep true.
 inline constexpr int kMidiLearnRowsV2 = 4;
 static_assert(kMidiLearnRowsV2 <= kMidiLearnRowCount,
               "an old blob's rows must all still have somewhere to land");

@@ -712,7 +712,8 @@ set(RATIONS_PLUGIN_SOURCES
     ${NAMP_CORE_DIR}/channelrack.cpp
     ${NAMP_CORE_DIR}/irblend.h
     ${NAMP_CORE_DIR}/irblend.cpp
-    src/midilearn.h
+    ${NAMP_CORE_DIR}/midilearn.h
+    src/midilearnrows.h
     ${NAMP_CORE_DIR}/midilearn.cpp
     # The pedalboard. Five pedals plus the two chains they sit in; the pedals themselves are
     # header-only until the phase that gives each one a body, so only the chain has a .cpp.
