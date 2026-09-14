@@ -51,7 +51,8 @@ command -v "$TRIPLE-g++" >/dev/null || {
   echo "  sudo apt install g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64" >&2
   exit 1
 }
-if [ ! -d "${RATIONS_WIN_SYSROOT:-$HOME/third_party/win-deps/sysroot}/lib/pkgconfig" ]; then
+SYSROOT_DIR="${NAMP_WIN_SYSROOT:-${RATIONS_WIN_SYSROOT:-$HOME/third_party/win-deps/sysroot}}"
+if [ ! -d "$SYSROOT_DIR/lib/pkgconfig" ]; then
   echo "error: the Windows dependency sysroot is missing. Build it first:" >&2
   echo "  scripts/build-win-deps.sh" >&2
   exit 1
@@ -81,7 +82,7 @@ if [ "${RATIONS_SKIP_INSTALLER:-0}" != "1" ] && [ -z "$MAKENSIS" ]; then
 fi
 
 cmake -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_TOOLCHAIN_FILE="$PRODUCT/cmake/toolchain-mingw-w64.cmake" -S "$REPO"
+      -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/toolchain-mingw-w64.cmake" -S "$REPO"
 cmake --build "$BUILD" --parallel "$(nproc)"
 
 # The project() version, which is the first VERSION line in the top-level lists

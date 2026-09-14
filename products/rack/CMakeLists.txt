@@ -313,7 +313,7 @@ endif()
 # itself the moment the SDK is there.
 # ---------------------------------------------------------------------------
 if(NAMPRACK_WIN_ASIO)
-    set(NAMPRACK_ASIO_SDK_DIR "${NAMPRACK_WIN_SYSROOT}/include/asiosdk"
+    set(NAMPRACK_ASIO_SDK_DIR "${NAMP_WIN_SYSROOT}/include/asiosdk"
         CACHE PATH "The ASIO SDK's host side, as installed into the dependency sysroot")
     set(NAMPRACK_ASIO_SOURCES
         ${NAMPRACK_ASIO_SDK_DIR}/common/asio.cpp
