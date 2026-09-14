@@ -29,10 +29,11 @@ captures/
 # back by a later deletion. (The reference implementations get this wrong: RtAudio vendors an ASIO
 # snapshot in-repository and iPlug2 inherits it. It is not a precedent to follow.)
 #
-# The SDK reaches the Windows build through the rack's scripts/build-win-deps.sh and the untracked
-# dependency sysroot, and through nothing else. These names are guarded so a stray copy cannot be
-# staged by accident; the phase gate sweeps for the same names, because the ignore rule stops a
-# copy arriving and the sweep catches one that arrived another way.
+# The SDK reaches the Windows build through scripts/build-win-deps.sh -- one script, shared by both
+# products since stage 7 -- and the untracked dependency sysroot, and through nothing else. These
+# names are guarded so a stray copy cannot be staged by accident; the phase gate sweeps for the same
+# names, because the ignore rule stops a copy arriving and the sweep catches one that arrived
+# another way.
 #
 # AT THE ROOT AND UNANCHORED, deliberately. Only one product builds for ASIO today, but a stray
 # copy can land anywhere in a tree this size, and a rule that only guarded products/rack/ would
