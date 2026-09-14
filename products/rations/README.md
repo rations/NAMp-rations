@@ -6,11 +6,12 @@
 
 A four-channel amp head built on [Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
 captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**, plus
-an **LV2** build and a JACK standalone on Linux for playing it without a DAW. The LV2 is the same
-amp and not a port: the same DSP and the same panel behind a second set of callbacks, so pick
-whichever your host likes better. There is also an
-**[experimental macOS build](#macos-experimental)**, which nobody involved has been able to play
-yet — read that section before downloading it.
+an **LV2** build on Linux. The LV2 is the same amp and not a port: the same DSP and the same panel
+behind a second set of callbacks, so pick whichever your host likes better. To play the amp
+*without* a DAW there is **NAMp Rack**, a separate download from this same repository: the same amp
+in its own window on JACK, with a rack that hosts other people's VST3 and LV2 plug-ins around it.
+There is also an **[experimental macOS build](#macos-experimental)**, which nobody involved has
+been able to play yet — read that section before downloading it.
 
 A `.nam` capture freezes an amp at one knob position on one channel. A real amp head has several
 channels, each with its own gain range, and you change channel with your foot mid-song. NAMp Rations
@@ -56,10 +57,9 @@ thing to do after installing is load your own into them.
 
 ### Linux
 
-The tarball holds three things and they are the same amp three times: the VST3, the LV2, and the
-standalone. The VST3 and the LV2 are interchangeable — install whichever your host handles best and
-ignore the other. The standalone *hosts* `NAMp-rations.vst3` rather than duplicating it, so keep
-those two together.
+The tarball holds two things and they are the same amp twice: the VST3 and the LV2. They are
+interchangeable — install whichever your host handles best and ignore the other. There is no
+application in here to launch; that is NAMp Rack, and it is its own download.
 
 ```
 tar xf NAMp-rations-*-linux-x86_64.tar.gz
@@ -73,8 +73,6 @@ Everything goes under your home directory and nothing needs root:
 |---|---|
 | `~/.vst3/NAMp-rations.vst3` | the plug-in, VST3 |
 | `~/.lv2/rations.lv2` | the plug-in, LV2 |
-| `~/.local/bin/namp-rations-standalone` | the standalone |
-| `~/.local/share/applications/` | a menu entry, with an icon |
 
 Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all of it again.
 
@@ -100,10 +98,8 @@ knowing before you decide it is misbehaving:
   that is not wired to it.
 
 You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` or `rations.lv2` into
-`~/.lv2/` by hand if you only want the plug-in, and run `./namp-rations-standalone` where you
-extracted it. cairo, FreeType and fontconfig come
-from your system; the standalone additionally wants a JACK server (jackd, or a PipeWire desktop,
-which provides one).
+`~/.lv2/` by hand. There is nothing else in the archive to install. cairo, FreeType and fontconfig
+come from your system.
 
 ### Windows
 
@@ -142,9 +138,9 @@ honest summary is that it may not work:
   validator, exports exactly the three entry points a host calls, links nothing outside the system,
   and renders all four editor pages, with the Apple Silicon and Intel renders compared against each
   other pixel for pixel. That is a floor, not a guarantee.
-- **There is no standalone** — the macOS release is the plug-in only. The Linux standalone is a
-  JACK client, so the macOS equivalent would be a different program rather than the same one
-  rebuilt.
+- **There is no application, only the plug-in.** NAMp Rack, the standalone build of this amp, is a
+  JACK client and a Linux one, so the macOS equivalent would be a different program rather than the
+  same one rebuilt.
 
 If it misbehaves, [an issue](https://github.com/rations/NAMp-rations/issues) with your Mac, your
 DAW and what happened is genuinely useful — it is the only way any of this gets found.
@@ -191,11 +187,21 @@ cmake --build build
 
 That produces `build/VST3/Release/NAMp-rations.vst3`. Copy it into `~/.vst3/`.
 
-### The standalone (Linux)
+### The standalone is NAMp Rack
 
-The same build also produces `build/namp-rations-standalone` when JACK's development files are present
-(`libjack-jackd2-dev`): the amp without a DAW, in a window of its own, with the plug-in's own
-editor in it and a MIDI port for a footswitch.
+**The standalone build of this amp is [NAMp Rack](../rack), and it is its own release.** Same amp,
+same four channels, same instant channel switch, in its own window on JACK — and around it a rack
+that hosts other people's VST3 and LV2 plug-ins before and after the amp, which is what the
+pedalboard page becomes when you are not inside a DAW. Build it with
+`cmake -S . -B build-rack -DNAMP_PRODUCT=rack` and package it with
+`products/rack/scripts/makedist-linux.sh`.
+
+`build/namp-rations-standalone` still exists and is still built here when JACK's development files
+are present (`libjack-jackd2-dev`) — the amp on JACK with the plug-in's own editor in it. It is a
+**development rig rather than a shipped program**: it *hosts* `NAMp-rations.vst3` the way a DAW
+does, which makes it the only thing in this tree that catches a host-side parameter-echo bug, and
+it is what `scripts/switch-gate.sh` and `rations_jackcheck` drive. Run it if you are working on the
+plug-in; run NAMp Rack if you want to play.
 
 ```
 ./build/namp-rations-standalone
@@ -208,8 +214,10 @@ which is what keeps the editor resolving its art and fonts by the same route in 
 connects the audio to the first physical ports it finds, and leaves the MIDI port for you to patch.
 What it was playing is kept in `~/.config/NAMp-rations/standalone.state`; `--no-state` starts empty.
 
-`scripts/makedist-linux.sh` packages the two into a tarball with a launcher entry and an
-`install.sh`. There is no standalone on Windows — that release is the plug-in only.
+`scripts/makedist-linux.sh` packages the VST3 and the LV2 into a tarball with an `install.sh`. The
+standalone release is NAMp Rack's, built by `products/rack/scripts/makedist-linux.sh` and carrying
+its own launcher entry and icons. There is no standalone on Windows — that release is the plug-in
+only.
 
 ### The LV2 build (Linux)
 
@@ -226,8 +234,8 @@ it. It refuses to write anything when the port table and the controller disagree
 added to the plug-in and forgotten there fails the build instead of becoming a control no LV2 host
 can reach.
 
-`scripts/makedist-linux.sh` packages it alongside the VST3 and the standalone, and the `install.sh`
-it generates puts it in `~/.lv2` and warns about a root-owned copy that would shadow it.
+`scripts/makedist-linux.sh` packages it alongside the VST3, and the `install.sh` it generates puts
+it in `~/.lv2` and warns about a root-owned copy that would shadow it.
 
 ### macOS, built on GitHub Actions
 
