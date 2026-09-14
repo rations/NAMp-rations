@@ -98,14 +98,16 @@ endif()
 #
 # Each defaults to the in-tree pinned directory and can be pointed at an external checkout
 # instead, which is how development against pristine reference trees works without initialising
-# submodules. These trees are read-only: a local edit inside one is silently reverted by the next
-# update and leaves a fresh clone unable to reproduce the build.
+# submodules. Each defaults to the submodule path at the REPOSITORY ROOT -- one copy shared by
+# every product in this tree, at the pins both products already agreed on. These trees are
+# read-only: a local edit inside one is silently reverted by the next update and leaves a fresh
+# clone unable to reproduce the build.
 # ---------------------------------------------------------------------------
-set(NAM_CORE_DIR "${NAMPRACK_ROOT}/NeuralAmpModelerCore"
+set(NAM_CORE_DIR "${NAMP_REPO_ROOT}/NeuralAmpModelerCore"
     CACHE PATH "NeuralAmpModelerCore source tree (v0.5.5 or newer)")
-set(AUDIO_DSP_TOOLS_DIR "${NAMPRACK_ROOT}/AudioDSPTools"
+set(AUDIO_DSP_TOOLS_DIR "${NAMP_REPO_ROOT}/AudioDSPTools"
     CACHE PATH "AudioDSPTools source tree")
-set(EIGEN_DIR "${NAMPRACK_ROOT}/eigen"
+set(EIGEN_DIR "${NAMP_REPO_ROOT}/eigen"
     CACHE PATH "Eigen source tree (the directory containing Eigen/)")
 
 foreach(_dep NAM_CORE_DIR AUDIO_DSP_TOOLS_DIR EIGEN_DIR)
@@ -160,7 +162,7 @@ endif()
 # HostClasses) run the rack.
 # ---------------------------------------------------------------------------
 if(NOT TARGET sdk)
-    set(VST3_SDK_DIR "${NAMPRACK_ROOT}/vst3sdk"
+    set(VST3_SDK_DIR "${NAMP_REPO_ROOT}/vst3sdk"
         CACHE PATH "VST 3 SDK source tree")
     if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)
         message(FATAL_ERROR
