@@ -66,7 +66,7 @@ struct Options {
 };
 
 // A deliberate race, so that a clean run means something. A sanitizer can be silently absent -
-// a build directory configured without RATIONS_ENABLE_TSAN produces a binary that runs fine and
+// a build directory configured without NAMP_ENABLE_TSAN produces a binary that runs fine and
 // reports nothing - and "no races found" from an uninstrumented binary looks exactly like "no
 // races". This is the ThreadSanitizer equivalent of the allocation harness proving it can see a
 // deliberate allocation before any of its counts are believed.

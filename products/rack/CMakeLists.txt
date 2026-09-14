@@ -283,7 +283,7 @@ if(NOT WIN32)
     # redistributed. See NOTICE.
     pkg_check_modules(NAMPRACK_GFX REQUIRED IMPORTED_TARGET
         cairo freetype2 fontconfig x11)
-    pkg_check_modules(NAMPRACK_JACK REQUIRED IMPORTED_TARGET jack)
+    pkg_check_modules(NAMP_JACK REQUIRED IMPORTED_TARGET jack)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -446,26 +446,26 @@ if(WIN32)
     # undefined references to crc32/inflate/deflate out of libpng16.a. The --static line repeats
     # -lz after -lpng16, which is exactly what the one-pass resolver needs.
     set(PKG_CONFIG_ARGN --static)
-    pkg_check_modules(CAIROFT REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2)
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2)
 
     # cairo.h declares every entry point __declspec(dllimport) unless this is defined, and cairo's
     # own .pc file does not carry it even for a static build — so without it every cairo call fails
     # to link as "undefined reference to __imp_cairo_*". It belongs on the imported target rather
     # than on ours, because it describes how cairo must be USED, and it has to reach every
     # translation unit that includes a cairo header.
-    target_compile_definitions(PkgConfig::CAIROFT INTERFACE CAIRO_WIN32_STATIC_BUILD)
+    target_compile_definitions(PkgConfig::CAIRO INTERFACE CAIRO_WIN32_STATIC_BUILD)
 
     # What the window layer needs beyond cairo: GDI for the DIB blit, user32 for the window and its
     # messages, msimg32 for AlphaBlend.
-    set(NAMPRACK_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
-    set(NAMPRACK_PLATFORM_VIEW_SOURCES
+    set(NAMP_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
+    set(NAMP_PLATFORM_VIEW_SOURCES
         ${NAMP_CORE_DIR}/platform/win32plugview.h
         ${NAMP_CORE_DIR}/platform/win32plugview.cpp)
 else()
-    pkg_check_modules(CAIROFT REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2 fontconfig)
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2 fontconfig)
     pkg_check_modules(CAIROX11 REQUIRED IMPORTED_TARGET cairo-xlib x11)
-    set(NAMPRACK_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
-    set(NAMPRACK_PLATFORM_VIEW_SOURCES
+    set(NAMP_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
+    set(NAMP_PLATFORM_VIEW_SOURCES
         ${NAMP_CORE_DIR}/platform/x11plugview.h
         ${NAMP_CORE_DIR}/platform/x11plugview.cpp)
 endif()
@@ -476,7 +476,7 @@ endif()
 # choose a plug-in search folder. Two browsers would drift, and the one the user already knows is
 # the one the rack should open.
 namp_add_gfx(NampGfx
-    CAIRO PkgConfig::CAIROFT
+    CAIRO PkgConfig::CAIRO
     SOURCES
         ${NAMP_CORE_DIR}/filebrowser.h
         ${NAMP_CORE_DIR}/filebrowser.cpp)
@@ -508,7 +508,7 @@ add_library(NampRackDspHeaders ALIAS NampDspHeaders)
 # validator has something to validate, which is by a wide margin the cheapest gate on the amp, and
 # the release script does not package it. See NAMPRACK_BUILD_VST3_BUNDLE.
 # ---------------------------------------------------------------------------
-set(NAMPRACK_PLUGIN_SOURCES
+set(NAMP_PLUGIN_SOURCES
     src/rationsids.h
     src/version.h
     src/geometry.h
@@ -539,7 +539,7 @@ set(NAMPRACK_PLUGIN_SOURCES
     src/rationsview.h
     src/rationsview.cpp
     ${NAMP_CORE_DIR}/platform/plugview.h
-    ${NAMPRACK_PLATFORM_VIEW_SOURCES}
+    ${NAMP_PLATFORM_VIEW_SOURCES}
 )
 
 # ---------------------------------------------------------------------------
@@ -553,11 +553,11 @@ set(NAMPRACK_PLUGIN_SOURCES
 # The *-base.png files in the same directory are the untrimmed source exports that gui/ trims these
 # out of. They are not listed because they are not shipped.
 # ---------------------------------------------------------------------------
-set(NAMPRACK_FONT_FILES
+set(NAMP_FONT_FILES
     fonts/Michroma-Regular.ttf
     fonts/Roboto-Regular.ttf
 )
-set(NAMPRACK_IMG_FILES
+set(NAMP_IMG_FILES
     img/head.png
     img/cabinet.png
     img/namp-badge.png
@@ -578,15 +578,15 @@ set(NAMPRACK_IMG_FILES
     # out would make landing the rack a packaging change as well as a code one.
     img/Gear.svg
 )
-set(NAMPRACK_RESOURCE_FILES ${NAMPRACK_FONT_FILES} ${NAMPRACK_IMG_FILES})
+set(NAMPRACK_RESOURCE_FILES ${NAMP_FONT_FILES} ${NAMP_IMG_FILES})
 
-set(NAMPRACK_FONT_PATHS "")
-foreach(_res IN LISTS NAMPRACK_FONT_FILES)
-    list(APPEND NAMPRACK_FONT_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
+set(NAMP_FONT_PATHS "")
+foreach(_res IN LISTS NAMP_FONT_FILES)
+    list(APPEND NAMP_FONT_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
 endforeach()
-set(NAMPRACK_IMG_PATHS "")
-foreach(_res IN LISTS NAMPRACK_IMG_FILES)
-    list(APPEND NAMPRACK_IMG_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
+set(NAMP_IMG_PATHS "")
+foreach(_res IN LISTS NAMP_IMG_FILES)
+    list(APPEND NAMP_IMG_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
 endforeach()
 
 # ---------------------------------------------------------------------------
@@ -602,9 +602,9 @@ endforeach()
 # different link-time treatment (the bundle re-exports three entry points and hides everything
 # else), and these are a few thousand lines.
 # ---------------------------------------------------------------------------
-add_library(NampRackPlugin STATIC ${NAMPRACK_PLUGIN_SOURCES})
+add_library(NampRackPlugin STATIC ${NAMP_PLUGIN_SOURCES})
 target_include_directories(NampRackPlugin PUBLIC ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
-target_link_libraries(NampRackPlugin PUBLIC sdk NampRackGfx ${NAMPRACK_PLATFORM_GUI_LIBS})
+target_link_libraries(NampRackPlugin PUBLIC sdk NampRackGfx ${NAMP_PLATFORM_GUI_LIBS})
 target_compile_features(NampRackPlugin PUBLIC cxx_std_17)
 target_compile_options(NampRackPlugin PRIVATE -ffast-math -Wall)
 set_target_properties(NampRackPlugin PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -612,23 +612,23 @@ namp_link_whole_dsp(NampRackPlugin)
 
 if(NAMPRACK_BUILD_VST3_BUNDLE)
     smtg_add_vst3plugin(NampRackAmp PACKAGE_NAME "NAMp-Rack-Amp"
-                        SOURCES_LIST ${NAMPRACK_PLUGIN_SOURCES})
+                        SOURCES_LIST ${NAMP_PLUGIN_SOURCES})
     smtg_target_configure_version_file(NampRackAmp)
     target_compile_features(NampRackAmp PUBLIC cxx_std_17)
     target_compile_options(NampRackAmp PRIVATE -ffast-math -Wall)
     target_include_directories(NampRackAmp PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
     namp_link_whole_dsp(NampRackAmp)
-    target_link_libraries(NampRackAmp PRIVATE sdk NampRackGfx ${NAMPRACK_PLATFORM_GUI_LIBS})
+    target_link_libraries(NampRackAmp PRIVATE sdk NampRackGfx ${NAMP_PLATFORM_GUI_LIBS})
 
     # The bundle carries its art in Contents/Resources rather than embedded, so it can be replaced
     # without a rebuild and so respath.cpp resolves it the same way here and in the offline render
     # rig. The standalone has no bundle to look in and carries the same files inside itself.
     smtg_target_add_plugin_resources(NampRackAmp
-        RESOURCES ${NAMPRACK_FONT_PATHS}
+        RESOURCES ${NAMP_FONT_PATHS}
         OUTPUT_SUBDIRECTORY fonts
     )
     smtg_target_add_plugin_resources(NampRackAmp
-        RESOURCES ${NAMPRACK_IMG_PATHS}
+        RESOURCES ${NAMP_IMG_PATHS}
         OUTPUT_SUBDIRECTORY img
     )
 endif()
@@ -653,7 +653,7 @@ add_custom_command(
             "-DNAMPRACK_EMBED_FILES=${NAMPRACK_RESOURCE_FILES}"
             "-DNAMPRACK_EMBED_OUTPUT=${NAMPRACK_EMBED_CPP}"
             -P "${NAMP_PRODUCT_DIR}/cmake/embedresources.cmake"
-    DEPENDS ${NAMPRACK_FONT_PATHS} ${NAMPRACK_IMG_PATHS}
+    DEPENDS ${NAMP_FONT_PATHS} ${NAMP_IMG_PATHS}
             "${NAMP_PRODUCT_DIR}/cmake/embedresources.cmake"
     COMMENT "Embedding the resource directory into the standalone"
     VERBATIM
@@ -1089,7 +1089,7 @@ rather than merely the code under it.")
         ${NAMP_PRODUCT_DIR}/src/host/hostiids.cpp
         ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
     )
-    if(NOT NAMPRACK_ENABLE_TSAN AND NOT WIN32)
+    if(NOT NAMP_ENABLE_TSAN AND NOT WIN32)
         list(APPEND NAMPRACK_CHAINCHECK_SRC ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp)
     endif()
     add_executable(namp_chaincheck ${NAMPRACK_CHAINCHECK_SRC})
@@ -1107,12 +1107,12 @@ rather than merely the code under it.")
     # it in a cross build fails at link with an unresolved __tsan_init rather than saying what is
     # wrong. Refuse it here instead, and say so, rather than letting the option look as though it
     # did something.
-    option(NAMPRACK_ENABLE_TSAN "Build the race gate under ThreadSanitizer" OFF)
-    if(NAMPRACK_ENABLE_TSAN AND WIN32)
+    option(NAMP_ENABLE_TSAN "Build the race gate under ThreadSanitizer" OFF)
+    if(NAMP_ENABLE_TSAN AND WIN32)
         message(WARNING
-            "[NAMp-Rack] NAMPRACK_ENABLE_TSAN is ignored for the Windows cross build: MinGW has "
+            "[NAMp-Rack] NAMP_ENABLE_TSAN is ignored for the Windows cross build: MinGW has "
             "no ThreadSanitizer runtime. Run the race gate natively on Linux.")
-    elseif(NAMPRACK_ENABLE_TSAN)
+    elseif(NAMP_ENABLE_TSAN)
         # Two race gates, not one. rations_racecheck is the AMP's — the channel-switch handshake
         # between the audio thread and the priming worker. namp_chaincheck is the HOST's: an LV2
         # plug-in's worker extension runs on a thread of ours, and a retired chain snapshot crosses
@@ -1219,14 +1219,14 @@ target_link_libraries(namp-rack
         NampRackRack
         NampRackHost
         sdk_hosting
-        ${NAMPRACK_PLATFORM_GUI_LIBS}
+        ${NAMP_PLATFORM_GUI_LIBS}
 )
 if(WIN32)
     # NampRackWinAudio carries both backends, WinMM MIDI and the PCM conversion, and brings its own
     # winmm/ole32/avrt/ksuser/uuid with it.
     target_link_libraries(namp-rack PRIVATE NampRackWinAudio)
 else()
-    target_link_libraries(namp-rack PRIVATE PkgConfig::NAMPRACK_JACK)
+    target_link_libraries(namp-rack PRIVATE PkgConfig::NAMP_JACK)
 endif()
 target_compile_features(namp-rack PRIVATE cxx_std_17)
 target_compile_options(namp-rack PRIVATE -Wall)

@@ -58,7 +58,7 @@ namespace
 {
 
 // Every raster layer the editor loads. Keep in step with gui/make_assets.sh and
-// with the RATIONS_IMG_FILES list in CMakeLists.txt.
+// with the NAMP_IMG_FILES list in CMakeLists.txt.
 const char *const kRequiredImages[] = {
     "head",         "cabinet",       "dial",          "led_on",        "led_off",
     "switch_up_ring", "switch_down_ring", "meter_track",

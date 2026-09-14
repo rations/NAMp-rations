@@ -17,9 +17,11 @@
 # and NAMP_CORE_INCLUDES from the dispatcher, which is the one place that knows the repository's
 # shape.
 #
-# Platform is spelled WIN32 and APPLE rather than through either product's own three-way split:
-# rations sets RATIONS_WINDOWS / RATIONS_MACOS / RATIONS_LINUX and the rack sets nothing at all, so
-# a function that named either product's variables would be a function only that product could call.
+# Platform is spelled WIN32 and APPLE here. It was written that way because rations set
+# RATIONS_WINDOWS / RATIONS_MACOS / RATIONS_LINUX and the rack set nothing at all, so a function
+# naming either product's variables would have been a function only that product could call. Stage
+# 6 moved that split to the dispatcher as NAMP_WINDOWS / NAMP_MACOS / NAMP_LINUX, so a function
+# here may now ask for the three-way answer when two values are not enough.
 
 # ---------------------------------------------------------------------------
 # namp_source(<out> <relative path>)

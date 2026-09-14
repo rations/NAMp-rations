@@ -277,23 +277,14 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 
 # ---------------------------------------------------------------------------
-# Platform split. One product on all three platforms; the only OS-specific code
-# is the single window class in src/platform, which arrives with the editor.
+# Per-platform build settings. One product on all three platforms; the only
+# OS-specific code is the single window class in src/platform.
 #
-# THREE values, not two. This used to be RATIONS_WINDOWS alone, and "not
-# Windows" silently meant Linux -- which was true while there were two
-# platforms and became a trap the moment there were three: every
-# if(NOT RATIONS_WINDOWS) in this file had to be re-read to find out whether it
-# meant "Linux" (the JACK standalone, the rtcheck allocation harness, cairo-xlib)
-# or genuinely "anything but Windows" (-fPIC, the module loader's else arm).
-# Naming all three makes each of those a decision at its site instead of an
-# inherited default.
+# NAMP_WINDOWS / NAMP_MACOS / NAMP_LINUX are set by the repository-root
+# dispatcher, which is also where the reason there are three of them and not
+# two is written down. This block is what each of them then implies HERE.
 # ---------------------------------------------------------------------------
-set(RATIONS_WINDOWS OFF)
-set(RATIONS_MACOS OFF)
-set(RATIONS_LINUX OFF)
 if(WIN32)
-    set(RATIONS_WINDOWS ON)
 
     # Both, and not because it is tidy.
     #
@@ -326,7 +317,6 @@ if(WIN32)
     # use for.
     add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 elseif(APPLE)
-    set(RATIONS_MACOS ON)
 
     # Objective-C++ is enabled immediately after project(), NOT here: it has to
     # precede the SDK's add_subdirectory. See the comment at that site.
@@ -343,7 +333,6 @@ elseif(APPLE)
     message(STATUS "[Rations] macOS slice: ${CMAKE_OSX_ARCHITECTURES}, deployment target "
                    "${CMAKE_OSX_DEPLOYMENT_TARGET}")
 else()
-    set(RATIONS_LINUX ON)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -352,7 +341,7 @@ endif()
 # exercise exactly the code the editor paints with, without X11 or VST3.
 # ---------------------------------------------------------------------------
 find_package(PkgConfig REQUIRED)
-if(RATIONS_WINDOWS)
+if(NAMP_WINDOWS)
     # fontconfig is deliberately absent: there is not one Fc* call in this tree
     # (FontStack loads its two TTFs by path), and cairo makes fontconfig optional
     # on Windows, so requiring it here would only add a dependency nothing calls.
@@ -382,7 +371,7 @@ if(RATIONS_WINDOWS)
     # on our own, because it describes how cairo must be USED, and it has to
     # reach every translation unit that includes a cairo header.
     target_compile_definitions(PkgConfig::CAIRO INTERFACE CAIRO_WIN32_STATIC_BUILD)
-elseif(RATIONS_MACOS)
+elseif(NAMP_MACOS)
     # The same shape as the Windows branch above, and for the same reasons.
     # No fontconfig: there is not one Fc* call in this tree. No cairo-xlib and
     # no cairo-quartz either -- the mac editor composes into the same offscreen
@@ -408,19 +397,19 @@ endif()
 # cairo-xlib and Xlib; on Windows it is GDI, because the Win32 view blits its
 # offscreen image surface through a DIB section rather than drawing to an X
 # drawable. Named once so the plug-in and the render tool cannot disagree.
-if(RATIONS_WINDOWS)
-    set(RATIONS_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
-elseif(RATIONS_MACOS)
+if(NAMP_WINDOWS)
+    set(NAMP_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
+elseif(NAMP_MACOS)
     # Cocoa for the NSView and its event and timer plumbing, CoreGraphics for
     # the one CGImage blit that puts the cairo surface on screen, and
     # CoreFoundation because macmain.cpp's bundleEntry/bundleExit take a
     # CFBundleRef. The SDK adds CoreFoundation itself in
     # smtg_target_make_plugin_package(); naming it here as well costs nothing
     # and keeps this list a complete statement of what the window layer needs.
-    set(RATIONS_PLATFORM_GUI_LIBS
+    set(NAMP_PLATFORM_GUI_LIBS
         "-framework Cocoa" "-framework CoreGraphics" "-framework CoreFoundation")
 else()
-    set(RATIONS_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
+    set(NAMP_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
 endif()
 
 # The graphics stack, built by the shared recipe in cmake/nampcore.cmake. No extra sources: the
@@ -457,14 +446,14 @@ add_library(RationsDspHeaders ALIAS NampDspHeaders)
 # render audits the art list so a layer that is drawn can never be absent from
 # the build. Naming them in one place is what keeps those two from disagreeing.
 # ---------------------------------------------------------------------------
-set(RATIONS_FONT_FILES
+set(NAMP_FONT_FILES
     fonts/Michroma-Regular.ttf
     fonts/Roboto-Regular.ttf
 )
 # The *-base.png files in resources/img are the untrimmed source exports that
 # gui/make_assets.sh reads; they are deliberately NOT in this list. What ships is
 # what the editor loads.
-set(RATIONS_IMG_FILES
+set(NAMP_IMG_FILES
     img/head.png
     # The head's title badge, drawn above "Rations" — see kBadgeH in src/geometry.h.
     img/namp-badge.png
@@ -497,13 +486,13 @@ set(RATIONS_IMG_FILES
 )
 # No badge: the "Rations" wordmark is drawn as text in Michroma at run time.
 
-set(RATIONS_FONT_PATHS "")
-foreach(_res IN LISTS RATIONS_FONT_FILES)
-    list(APPEND RATIONS_FONT_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
+set(NAMP_FONT_PATHS "")
+foreach(_res IN LISTS NAMP_FONT_FILES)
+    list(APPEND NAMP_FONT_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
 endforeach()
-set(RATIONS_IMG_PATHS "")
-foreach(_res IN LISTS RATIONS_IMG_FILES)
-    list(APPEND RATIONS_IMG_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
+set(NAMP_IMG_PATHS "")
+foreach(_res IN LISTS NAMP_IMG_FILES)
+    list(APPEND NAMP_IMG_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
 endforeach()
 
 # No captures are built into the bundle, and nothing here looks for any.
@@ -526,18 +515,18 @@ endforeach()
 # The native window class is picked here the same way ${NAMP_CORE_DIR}/platform/plugview.h
 # picks the type it declares, so exactly one of the two is ever compiled: the
 # other one's headers do not exist on this platform.
-if(RATIONS_WINDOWS)
-    set(RATIONS_PLATFORM_VIEW_SOURCES
+if(NAMP_WINDOWS)
+    set(NAMP_PLATFORM_VIEW_SOURCES
         ${NAMP_CORE_DIR}/platform/win32plugview.h
         ${NAMP_CORE_DIR}/platform/win32plugview.cpp
     )
-elseif(RATIONS_MACOS)
-    set(RATIONS_PLATFORM_VIEW_SOURCES
+elseif(NAMP_MACOS)
+    set(NAMP_PLATFORM_VIEW_SOURCES
         src/platform/macplugview.h
         src/platform/macplugview.mm
     )
 else()
-    set(RATIONS_PLATFORM_VIEW_SOURCES
+    set(NAMP_PLATFORM_VIEW_SOURCES
         ${NAMP_CORE_DIR}/platform/x11plugview.h
         ${NAMP_CORE_DIR}/platform/x11plugview.cpp
     )
@@ -551,7 +540,7 @@ endif()
 # dladdr by the same route in both — and therefore compiles none of this. A
 # library would only be a second name for one thing.
 # ---------------------------------------------------------------------------
-set(RATIONS_PLUGIN_SOURCES
+set(NAMP_PLUGIN_SOURCES
     src/rationsids.h
     src/version.h
     src/geometry.h
@@ -595,7 +584,7 @@ set(RATIONS_PLUGIN_SOURCES
     ${NAMP_CORE_DIR}/filebrowser.h
     ${NAMP_CORE_DIR}/filebrowser.cpp
     ${NAMP_CORE_DIR}/platform/plugview.h
-    ${RATIONS_PLATFORM_VIEW_SOURCES}
+    ${NAMP_PLATFORM_VIEW_SOURCES}
 )
 
 # The TARGET stays "Rations" and the PACKAGE is what carries the product name, which is the
@@ -606,7 +595,7 @@ set(RATIONS_PLUGIN_SOURCES
 # refers to. SOURCES_LIST is mandatory once PACKAGE_NAME is given — without it the sources land in
 # PARAMS_UNPARSED_ARGUMENTS and the target is built with none
 # (vst3sdk/cmake/modules/SMTG_AddVST3Library.cmake).
-smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${RATIONS_PLUGIN_SOURCES})
+smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${NAMP_PLUGIN_SOURCES})
 
 # macplugview.mm is Objective-C++ and is deliberately built WITHOUT -fobjc-arc,
 # unlike the SDK's module_mac.mm above. It owns its NSView the way its Win32
@@ -634,7 +623,7 @@ smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${RATIONS_P
 # named exactly like the bundle folder, i.e.
 # NAMp-rations.vst3/Contents/x86_64-win/NAMp-rations.vst3, which is what the SUFFIX/PREFIX
 # produce. A DLL called Rations.dll in the right folder does not load.
-if(RATIONS_WINDOWS)
+if(NAMP_WINDOWS)
     get_target_property(RATIONS_PKG_PATH Rations SMTG_PLUGIN_PACKAGE_PATH)
     get_target_property(RATIONS_PKG_CONTENTS Rations SMTG_PLUGIN_PACKAGE_CONTENTS)
     get_target_property(RATIONS_WIN_ARCH Rations SMTG_WIN_ARCHITECTURE_NAME)
@@ -678,7 +667,7 @@ endif()
 # stringPluginName in src/version.h is the same display string the DAW's plug-in
 # list shows, so the two cannot disagree.
 # ---------------------------------------------------------------------------
-if(RATIONS_MACOS)
+if(NAMP_MACOS)
     set(RATIONS_BUNDLE_EXECUTABLE "NAMp-rations")
     set(RATIONS_BUNDLE_DISPLAY_NAME "NAMp Rations")
     set(RATIONS_BUNDLE_IDENTIFIER "com.rations.vst3.namp-rations")
@@ -698,7 +687,7 @@ smtg_target_configure_version_file(Rations)
 # Title (Michroma) and body (Roboto) fonts, loaded straight out of the bundle by
 # FreeType — no system font installation needed.
 smtg_target_add_plugin_resources(Rations
-    RESOURCES ${RATIONS_FONT_PATHS}
+    RESOURCES ${NAMP_FONT_PATHS}
     OUTPUT_SUBDIRECTORY fonts
 )
 
@@ -706,13 +695,13 @@ smtg_target_add_plugin_resources(Rations
 # without a rebuild and so the resource resolver finds it the same way in the
 # bundle and in the offline render rig.
 smtg_target_add_plugin_resources(Rations
-    RESOURCES ${RATIONS_IMG_PATHS}
+    RESOURCES ${NAMP_IMG_PATHS}
     OUTPUT_SUBDIRECTORY img
 )
 
 target_compile_features(Rations PUBLIC cxx_std_17)
 target_compile_options(Rations PRIVATE -ffast-math -Wall)
-if(RATIONS_MACOS)
+if(NAMP_MACOS)
     # target_compile_features' cxx_std_17 sets CXX_STANDARD and nothing else, so
     # macplugview.mm would compile at whatever the compiler's default Objective-C++
     # dialect happens to be. It uses C++17 (constexpr, nullptr-typed members,
@@ -727,7 +716,7 @@ target_link_libraries(Rations
     PRIVATE
         sdk
         RationsGfx
-        ${RATIONS_PLATFORM_GUI_LIBS}
+        ${NAMP_PLATFORM_GUI_LIBS}
 )
 namp_link_whole_dsp(Rations)
 
@@ -751,7 +740,7 @@ namp_link_whole_dsp(Rations)
 # entry points macmain.cpp defines (_GetPluginFactory, _bundleEntry,
 # _bundleExit), so the mac bundle's exports are the same three the Windows one
 # gates on and the Linux one asserts.
-if(RATIONS_MACOS)
+if(NAMP_MACOS)
     target_link_options(Rations PRIVATE
         "-Wl,-exported_symbols_list,${VST3_SDK_DIR}/public.sdk/source/main/macexport.exp")
 else()
@@ -774,10 +763,10 @@ endif()
 # does and renders a signal through the whole chain, which is the only thing
 # that proves the BUNDLED bank resolves and the DSP is actually in circuit.
 # ---------------------------------------------------------------------------
-if(RATIONS_WINDOWS)
+if(NAMP_WINDOWS)
     set(RATIONS_MODULE_LOADER
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
-elseif(RATIONS_MACOS)
+elseif(NAMP_MACOS)
     # Objective-C++: it loads the bundle through CFBundle and reads
     # moduleinfo.json with NSBundle. enable_language(OBJCXX) is done just after
     # project(), and CMake picks the OBJCXX compiler off the .mm extension
@@ -804,7 +793,7 @@ endif()
 # tool below that names ${RATIONS_MODULE_LOADER}. RATIONS_MODULE_LOADER_LIBS is
 # empty on the other two platforms and disappears from their link lines.
 set(RATIONS_MODULE_LOADER_LIBS "")
-if(RATIONS_MACOS)
+if(NAMP_MACOS)
     set_source_files_properties(${RATIONS_MODULE_LOADER} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     find_library(RATIONS_COCOA_FRAMEWORK Cocoa REQUIRED)
     set(RATIONS_MODULE_LOADER_LIBS ${RATIONS_COCOA_FRAMEWORK})
@@ -906,16 +895,16 @@ target_compile_options(rations_fadecheck PRIVATE -Wall)
 # are present: it is a measurement rig, not part of the plug-in, and its absence
 # must not stop the plug-in from building.
 # ---------------------------------------------------------------------------
-# RATIONS_LINUX rather than NOT RATIONS_WINDOWS, which is what this said while
+# NAMP_LINUX rather than NOT NAMP_WINDOWS, which is what this said while
 # there were two platforms and which would now silently offer to build a JACK
 # client and an X11 standalone on macOS. JACK does exist there; it is not what a
 # mac user has, and standalone/ is X11 and Linux::IRunLoop throughout.
-if(RATIONS_LINUX)
+if(NAMP_LINUX)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
-        pkg_check_modules(RATIONS_JACK QUIET jack)
+        pkg_check_modules(NAMP_JACK QUIET jack)
     endif()
-    if(RATIONS_JACK_FOUND)
+    if(NAMP_JACK_FOUND)
         add_executable(rations_jackcheck
             ${NAMP_PRODUCT_DIR}/tools/rations_jackcheck.cpp
             ${RATIONS_MODULE_LOADER}
@@ -923,9 +912,9 @@ if(RATIONS_LINUX)
             ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
         )
         target_include_directories(rations_jackcheck
-            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_JACK_INCLUDE_DIRS})
-        target_link_libraries(rations_jackcheck PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES})
-        target_link_directories(rations_jackcheck PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
+            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_JACK_INCLUDE_DIRS})
+        target_link_libraries(rations_jackcheck PRIVATE sdk_hosting ${NAMP_JACK_LIBRARIES})
+        target_link_directories(rations_jackcheck PRIVATE ${NAMP_JACK_LIBRARY_DIRS})
         target_compile_features(rations_jackcheck PRIVATE cxx_std_17)
         target_compile_options(rations_jackcheck PRIVATE -Wall)
         add_dependencies(rations_jackcheck Rations)
@@ -967,10 +956,10 @@ if(RATIONS_LINUX)
             ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
         )
         target_include_directories(namp-rations-standalone
-            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_JACK_INCLUDE_DIRS})
+            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_JACK_INCLUDE_DIRS})
         target_link_libraries(namp-rations-standalone
-            PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES} ${RATIONS_PLATFORM_GUI_LIBS})
-        target_link_directories(namp-rations-standalone PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
+            PRIVATE sdk_hosting ${NAMP_JACK_LIBRARIES} ${NAMP_PLATFORM_GUI_LIBS})
+        target_link_directories(namp-rations-standalone PRIVATE ${NAMP_JACK_LIBRARY_DIRS})
         target_compile_features(namp-rations-standalone PRIVATE cxx_std_17)
         target_compile_options(namp-rations-standalone PRIVATE -Wall)
         add_dependencies(namp-rations-standalone Rations)
@@ -1017,7 +1006,7 @@ target_compile_options(rations_switchcheck PRIVATE -Wall)
 # with anything else, and it is deliberately built at -O1 rather than -Ofast:
 # TSan needs the accesses it is watching to actually happen.
 # ---------------------------------------------------------------------------
-option(RATIONS_ENABLE_TSAN "Build rations_racecheck with ThreadSanitizer" OFF)
+option(NAMP_ENABLE_TSAN "Build rations_racecheck with ThreadSanitizer" OFF)
 
 add_executable(rations_racecheck
     ${NAMP_CORE_DIR}/tools/rations_racecheck.cpp
@@ -1036,11 +1025,11 @@ target_compile_options(rations_racecheck PRIVATE -Wall)
 # so asking for it in a cross build fails at link with an unresolved
 # __tsan_init rather than saying what is wrong. Refuse it here instead, and say
 # so, rather than letting the option look as though it did something.
-if(RATIONS_ENABLE_TSAN AND RATIONS_WINDOWS)
+if(NAMP_ENABLE_TSAN AND NAMP_WINDOWS)
     message(WARNING
-        "[Rations] RATIONS_ENABLE_TSAN is ignored for the Windows cross build: MinGW has no "
+        "[Rations] NAMP_ENABLE_TSAN is ignored for the Windows cross build: MinGW has no "
         "ThreadSanitizer runtime. Run the race gate natively on Linux.")
-elseif(RATIONS_ENABLE_TSAN)
+elseif(NAMP_ENABLE_TSAN)
     target_compile_options(rations_racecheck PRIVATE -fsanitize=thread -g -O1)
     target_link_options(rations_racecheck PRIVATE -fsanitize=thread)
 endif()
@@ -1059,14 +1048,14 @@ endif()
 # nothing to it.
 #
 # macOS is excluded for the same reason Windows is, and had to be named rather
-# than left to fall through the old NOT RATIONS_WINDOWS: dlsym(RTLD_NEXT, ...)
+# than left to fall through the old NOT NAMP_WINDOWS: dlsym(RTLD_NEXT, ...)
 # compiles and links on Darwin, so mac would have built this target and run a
 # harness that does not intercept anything there -- dyld interposition is
 # DYLD_INSERT_LIBRARIES plus a __DATA,__interpose section, which that upstream
 # file does not implement. A gate that passes because it measured nothing is
 # worse than one that is absent.
 # ---------------------------------------------------------------------------
-if(RATIONS_LINUX)
+if(NAMP_LINUX)
 add_executable(rations_rtcheck
     ${NAMP_PRODUCT_DIR}/tools/rations_rtcheck.cpp
     ${NAMP_CORE_DIR}/irblend.cpp
@@ -1133,14 +1122,14 @@ target_compile_options(panelrender PRIVATE -Wall)
 # declared, and ${NAMP_CORE_DIR}/platform/x11plugview.cpp is the window underneath it. The
 # other two platforms ship the VST3 bundle and nothing else, as they already do.
 # ---------------------------------------------------------------------------
-if(RATIONS_LINUX)
+if(NAMP_LINUX)
     pkg_check_modules(RATIONS_LV2 QUIET lv2)
     # lilv is the reference discovery library and is what rations_lv2check asks.
     # It is a TEST dependency only: nothing in the bundle links it.
     pkg_check_modules(RATIONS_LILV QUIET lilv-0)
 endif()
 
-if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
+if(NAMP_LINUX AND RATIONS_LV2_FOUND)
     # Reported rather than assumed: any version-sensitive fact has to record the
     # version it was checked against, and the system package and the pristine
     # reference checkout under ~/third_party/source-lv2 are not the same release.
@@ -1158,12 +1147,12 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         ${NAMP_PRODUCT_DIR}/src/rationsview.cpp
         ${NAMP_CORE_DIR}/filebrowser.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp
-        ${RATIONS_PLATFORM_VIEW_SOURCES}
+        ${NAMP_PLATFORM_VIEW_SOURCES}
     )
     target_include_directories(rations_ttlgen
         PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_ttlgen
-        PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
+        PRIVATE sdk RationsGfx ${NAMP_PLATFORM_GUI_LIBS})
     namp_link_whole_dsp(rations_ttlgen)
     target_compile_features(rations_ttlgen PRIVATE cxx_std_17)
     target_compile_options(rations_ttlgen PRIVATE -Wall)
@@ -1214,7 +1203,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         ${NAMP_PRODUCT_DIR}/src/rationsview.cpp
         ${NAMP_CORE_DIR}/filebrowser.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp
-        ${RATIONS_PLATFORM_VIEW_SOURCES}
+        ${NAMP_PLATFORM_VIEW_SOURCES}
         # setComponentState takes an IBStream, and the state blob arrives from the
         # DSP half as bytes; MemoryStream is what turns one into the other.
         ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
@@ -1222,7 +1211,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
     target_include_directories(rations_lv2_ui
         PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_lv2_ui
-        PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
+        PRIVATE sdk RationsGfx ${NAMP_PLATFORM_GUI_LIBS})
     target_compile_features(rations_lv2_ui PRIVATE cxx_std_17)
     target_compile_options(rations_lv2_ui PRIVATE -ffast-math -Wall)
 
@@ -1260,7 +1249,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
     # keeps them two levels up under Contents/Resources instead, which is why
     # respath.cpp grew an explicit override rather than a second layout rule.
     set(RATIONS_LV2_STAMPS "")
-    foreach(_res IN LISTS RATIONS_FONT_FILES RATIONS_IMG_FILES)
+    foreach(_res IN LISTS NAMP_FONT_FILES NAMP_IMG_FILES)
         set(_out "${RATIONS_LV2_BUNDLE}/${_res}")
         add_custom_command(OUTPUT "${_out}"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1311,6 +1300,6 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
     else()
         message(STATUS "lilv not found - skipping rations_lv2check")
     endif()
-elseif(RATIONS_LINUX)
+elseif(NAMP_LINUX)
     message(STATUS "LV2 headers not found (lv2.pc) - skipping rations.lv2")
 endif()

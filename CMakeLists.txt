@@ -143,6 +143,33 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+# ---------------------------------------------------------------------------
+# Platform split. Set here, after project(), because WIN32 and APPLE do not exist before it, and
+# set ONCE for whichever product is being configured.
+#
+# THREE values, not two. This was rations' block, named RATIONS_WINDOWS / RATIONS_MACOS /
+# RATIONS_LINUX, and its own comment records why the third value exists: it used to be
+# RATIONS_WINDOWS alone, and "not Windows" silently meant Linux -- true while there were two
+# platforms, a trap the moment there were three, because every if(NOT RATIONS_WINDOWS) then had to
+# be re-read to find out whether it meant "Linux" (the JACK standalone, the rtcheck allocation
+# harness, cairo-xlib) or genuinely "anything but Windows" (-fPIC, the module loader's else arm).
+# Naming all three makes each of those a decision at its site instead of an inherited default.
+#
+# The rack had none of this and tests WIN32 and APPLE directly, which is why cmake/nampcore.cmake
+# spells platform that way: a function naming either product's variables would have been a function
+# only that product could call. Both products can now be given the same answer, and a shared
+# function may ask for it.
+set(NAMP_WINDOWS OFF)
+set(NAMP_MACOS OFF)
+set(NAMP_LINUX OFF)
+if(WIN32)
+    set(NAMP_WINDOWS ON)
+elseif(APPLE)
+    set(NAMP_MACOS ON)
+else()
+    set(NAMP_LINUX ON)
+endif()
+
 # The shared vocabulary: namp_source() and the fast-math assertion, plus the recipes each product
 # uses to build the amp's graphics and DSP libraries out of core/. Included HERE rather than from
 # each product, so both products meet one definition of each and a third product would inherit them
