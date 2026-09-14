@@ -51,10 +51,11 @@ endfunction()
 # namp_assert_no_fast_math(<target> <why>)
 #
 # Assert that a target is NOT built with fast math, and say at the failure site what breaks if it
-# is. RULES.md's clamp rule asks for exactly this and asks for it to be enforced by the build
-# rather than by review: -ffinite-math-only gives the compiler permission to assume the answer to
-# an isfinite() test and delete it, so a target whose whole job is to stop a NaN loses that job
-# silently, with nothing failing and nothing to read in a diff.
+# is. The end-of-chain clamp that stops a hosted plug-in's NaN reaching a speaker is built out of
+# an isfinite() test, and -ffinite-math-only gives the compiler permission to assume that test's
+# answer and delete it: a target whose whole job is to stop a NaN loses that job silently, with
+# nothing failing and nothing to read in a diff. So the flag's ABSENCE is asserted by the build
+# rather than left to review, which is what this function is for.
 #
 # Three places are checked, not one. The three hand-written copies this replaces each read only the
 # target's own COMPILE_OPTIONS, which is the narrowest of the three ways the flag can arrive:

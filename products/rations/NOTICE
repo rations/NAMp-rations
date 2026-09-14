@@ -222,9 +222,10 @@ LV2 — the Linux release's second plug-in format (rations.lv2)
   discovery library what a host would see in the built bundle. Nothing in
   rations.lv2 links any of them.
 
-  WHAT IS DELIBERATELY NOT READ: /home/human/src/guitarix-* is the largest body
-  of LV2 X11 UI code on this machine and it is GPL. It is named here so that the
-  exclusion is a recorded decision rather than an absence. The X11 UI in this
+  WHAT IS DELIBERATELY NOT READ: the guitarix sources are the largest body of
+  LV2 X11 UI code available to this project's author, and they are GPL, so they
+  are excluded from every LV2 question asked here. The exclusion is recorded so
+  that it reads as a decision rather than as an absence. The X11 UI in this
   project is the author's own, carried over from the VST3 editor
   (src/platform/x11plugview.cpp) and from the author's MIT-licensed lvtuner.
 
