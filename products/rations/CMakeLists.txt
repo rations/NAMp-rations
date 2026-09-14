@@ -13,11 +13,9 @@
 # pedalboard is built into the plug-in rather than hosting other people's. The plug-in itself links
 # neither JACK nor the SDK's hosting layer — only the standalone and the offline tools do.
 #
-# Builds two ways:
-#   - standalone: point the four dependency variables below at source trees (each defaults to an
-#     in-tree submodule directory) and configure this directory directly;
-#   - as a subdirectory of a project that already builds the VST3 SDK (the parent must provide
-#     the SDK targets and public_sdk_SOURCE_DIR).
+# Built through the repository-root dispatcher, which is the only way in: `cmake -S . -B build`.
+# The four dependency variables below can still be pointed at external source trees, but the
+# defaults, the shared core and the SDK targets all reach this file from the root.
 
 cmake_minimum_required(VERSION 3.25.0)
 
@@ -33,7 +31,31 @@ project(smtg-rations
     DESCRIPTION "Rations four-channel neural amp head VST3"
 )
 
-set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+# NAMP_PRODUCT_DIR, NAMP_REPO_ROOT and NAMP_CORE_DIR are set by the repository-root dispatcher and
+# are how this file names the three directories it cannot find on its own: itself, the root that
+# holds the four submodules, and the shared amp in core/. It had its own copy of the first of those
+# until stage 6, under a third name, which is why the check below is worth its five lines.
+#
+# Configuring this directory directly is what the header used to offer, and it has not worked since
+# the merge. Measured at the previous commit, it fails sixty lines down with "NAM_CORE_DIR does not
+# name a directory ('/NeuralAmpModelerCore')" and sends the reader to `git submodule update` --
+# the one remedy that cannot help, because the submodule is present and checked out and it is
+# NAMP_REPO_ROOT that is empty. Fail here instead, where the cause is still visible.
+if(NOT NAMP_REPO_ROOT OR NOT NAMP_PRODUCT_DIR)
+    message(FATAL_ERROR
+        "products/rations/CMakeLists.txt was configured directly, and it builds only as part of "
+        "the repository. Configure the repository root instead -- it dispatches to one product "
+        "per build directory:\n"
+        "    cmake -S . -B build      -G Ninja -DCMAKE_BUILD_TYPE=Release\n"
+        "    cmake -S . -B build-rack -G Ninja -DCMAKE_BUILD_TYPE=Release -DNAMP_PRODUCT=rack")
+endif()
+if(NOT NAMP_PRODUCT_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    message(FATAL_ERROR
+        "NAMP_PRODUCT_DIR is '${NAMP_PRODUCT_DIR}' but this file is in "
+        "'${CMAKE_CURRENT_SOURCE_DIR}'. The dispatcher added a different directory than the one "
+        "it named, and every path built from NAMP_PRODUCT_DIR below would point at the wrong "
+        "product.")
+endif()
 
 # The shared amp's include path, appended wherever this product's own src/ is already on it.
 #
@@ -49,12 +71,12 @@ set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # every quoted include in both products before and after the move and requiring each one to land on
 # the same file it landed on before.
 #
-# There is no ${RATIONS_ROOT}/src/* entry here any more, and that is the scaffolding stage 3 put up
-# coming down on schedule. It existed to keep a sibling lookup working while a byte-identical .cpp
+# There is no ${NAMP_PRODUCT_DIR}/src/* entry here any more, and that is the scaffolding stage 3
+# put up coming down on schedule. It existed to keep a sibling lookup working while a byte-identical .cpp
 # sat in core/ and its .h did not; both src/gfx and src/platform emptied of shared files as those
 # pairs unified. What is left in src/platform is macplugview, which this product alone has, and it
 # needs no entry of its own: macplugview.mm reaches its own header as a sibling, and core's
-# plugview.h reaches it as "platform/macplugview.h" through ${RATIONS_ROOT}/src above.
+# plugview.h reaches it as "platform/macplugview.h" through ${NAMP_PRODUCT_DIR}/src above.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
@@ -443,7 +465,7 @@ add_library(RationsGfx ALIAS NampGfx)
 # as "bbm/..." and "wdl/..." so the provenance of each block stays visible at every include site.
 # Both trees are header-only, so there is nothing to add to the source list.
 # ---------------------------------------------------------------------------
-namp_add_dsp(NampDsp NampDspHeaders INCLUDE_DIRS ${RATIONS_ROOT}/deps)
+namp_add_dsp(NampDsp NampDspHeaders INCLUDE_DIRS ${NAMP_PRODUCT_DIR}/deps)
 add_library(RationsDsp ALIAS NampDsp)
 add_library(RationsDspHeaders ALIAS NampDspHeaders)
 
@@ -496,11 +518,11 @@ set(RATIONS_IMG_FILES
 
 set(RATIONS_FONT_PATHS "")
 foreach(_res IN LISTS RATIONS_FONT_FILES)
-    list(APPEND RATIONS_FONT_PATHS "${RATIONS_ROOT}/resources/${_res}")
+    list(APPEND RATIONS_FONT_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
 endforeach()
 set(RATIONS_IMG_PATHS "")
 foreach(_res IN LISTS RATIONS_IMG_FILES)
-    list(APPEND RATIONS_IMG_PATHS "${RATIONS_ROOT}/resources/${_res}")
+    list(APPEND RATIONS_IMG_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
 endforeach()
 
 # No captures are built into the bundle, and nothing here looks for any.
@@ -683,7 +705,7 @@ if(RATIONS_MACOS)
     set(RATIONS_BUNDLE_COPYRIGHT
         "MIT licence; NAM DSP core (C) Steven Atkinson")
     configure_file(
-        "${RATIONS_ROOT}/packaging/mac/Info.plist.in"
+        "${NAMP_PRODUCT_DIR}/packaging/mac/Info.plist.in"
         "${CMAKE_CURRENT_BINARY_DIR}/mac/Info.plist"
         @ONLY)
     set_target_properties(Rations PROPERTIES
@@ -718,7 +740,7 @@ if(RATIONS_MACOS)
     # bundle.
     set_target_properties(Rations PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
 endif()
-target_include_directories(Rations PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES})
+target_include_directories(Rations PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
 
 target_link_libraries(Rations
     PRIVATE
@@ -808,7 +830,7 @@ if(RATIONS_MACOS)
 endif()
 
 add_executable(rations_offline
-    ${RATIONS_ROOT}/tools/rations_offline.cpp
+    ${NAMP_PRODUCT_DIR}/tools/rations_offline.cpp
     ${RATIONS_MODULE_LOADER}
     # For MemoryStream, which --save-state / --load-state need and which sdk_hosting
     # does not carry. Same reason rations_ircheck names it.
@@ -819,7 +841,7 @@ add_executable(rations_offline
 # The nlohmann header is here so the offline proof can read a capture's stated loudness straight
 # out of the .nam and assert that Normalized moves the output by exactly the amount that number
 # says it should. Header-only, and nothing else of the DSP is linked into this tool.
-target_include_directories(rations_offline PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES}
+target_include_directories(rations_offline PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES}
     ${NAM_CORE_DIR}/Dependencies/nlohmann)
 target_link_libraries(rations_offline PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_offline PRIVATE cxx_std_17)
@@ -838,14 +860,14 @@ add_dependencies(rations_offline Rations)
 # this covers everything between the pedal and the audio.
 # ---------------------------------------------------------------------------
 add_executable(rations_midicheck
-    ${RATIONS_ROOT}/tools/rations_midicheck.cpp
+    ${NAMP_PRODUCT_DIR}/tools/rations_midicheck.cpp
     ${RATIONS_MODULE_LOADER}
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
     ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
 )
-target_include_directories(rations_midicheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES})
+target_include_directories(rations_midicheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
 target_link_libraries(rations_midicheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_midicheck PRIVATE cxx_std_17)
 target_compile_options(rations_midicheck PRIVATE -Wall)
@@ -870,7 +892,7 @@ add_executable(rations_ircheck
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
     ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
 )
-target_include_directories(rations_ircheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES})
+target_include_directories(rations_ircheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
 target_link_libraries(rations_ircheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_ircheck PRIVATE cxx_std_17)
 target_compile_options(rations_ircheck PRIVATE -Wall)
@@ -882,10 +904,10 @@ add_dependencies(rations_ircheck Rations)
 # host, so what it measures is the arithmetic and nothing around it.
 # ---------------------------------------------------------------------------
 add_executable(rations_fadecheck
-    ${RATIONS_ROOT}/tools/rations_fadecheck.cpp
+    ${NAMP_PRODUCT_DIR}/tools/rations_fadecheck.cpp
     ${NAMP_CORE_DIR}/capturesource.cpp
 )
-target_include_directories(rations_fadecheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES})
+target_include_directories(rations_fadecheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
 # --whole-archive for the same reason the plug-in needs it: each network
 # architecture registers itself through a file-scope static initialiser, and the
 # linker drops those object files from a normal static link because nothing
@@ -914,13 +936,13 @@ if(RATIONS_LINUX)
     endif()
     if(RATIONS_JACK_FOUND)
         add_executable(rations_jackcheck
-            ${RATIONS_ROOT}/tools/rations_jackcheck.cpp
+            ${NAMP_PRODUCT_DIR}/tools/rations_jackcheck.cpp
             ${RATIONS_MODULE_LOADER}
             ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
             ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
         )
         target_include_directories(rations_jackcheck
-            PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_JACK_INCLUDE_DIRS})
+            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_JACK_INCLUDE_DIRS})
         target_link_libraries(rations_jackcheck PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES})
         target_link_directories(rations_jackcheck PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
         target_compile_features(rations_jackcheck PRIVATE cxx_std_17)
@@ -946,13 +968,13 @@ if(RATIONS_LINUX)
         # plug-in from building.
         # -------------------------------------------------------------------
         add_executable(namp-rations-standalone
-            ${RATIONS_ROOT}/standalone/main.cpp
-            ${RATIONS_ROOT}/standalone/runloop.h
-            ${RATIONS_ROOT}/standalone/runloop.cpp
-            ${RATIONS_ROOT}/standalone/jackclient.h
-            ${RATIONS_ROOT}/standalone/jackclient.cpp
+            ${NAMP_PRODUCT_DIR}/standalone/main.cpp
+            ${NAMP_PRODUCT_DIR}/standalone/runloop.h
+            ${NAMP_PRODUCT_DIR}/standalone/runloop.cpp
+            ${NAMP_PRODUCT_DIR}/standalone/jackclient.h
+            ${NAMP_PRODUCT_DIR}/standalone/jackclient.cpp
             ${NAMP_CORE_DIR}/standalone/midiroute.h
-            ${RATIONS_ROOT}/standalone/midiroute.cpp
+            ${NAMP_PRODUCT_DIR}/standalone/midiroute.cpp
             ${RATIONS_MODULE_LOADER}
             ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
             # The event list carries Note On to the plug-in - the one of the three
@@ -964,7 +986,7 @@ if(RATIONS_LINUX)
             ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
         )
         target_include_directories(namp-rations-standalone
-            PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_JACK_INCLUDE_DIRS})
+            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_JACK_INCLUDE_DIRS})
         target_link_libraries(namp-rations-standalone
             PRIVATE sdk_hosting ${RATIONS_JACK_LIBRARIES} ${RATIONS_PLATFORM_GUI_LIBS})
         target_link_directories(namp-rations-standalone PRIVATE ${RATIONS_JACK_LIBRARY_DIRS})
@@ -996,7 +1018,7 @@ add_executable(rations_switchcheck
     ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
 )
-target_include_directories(rations_switchcheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
+target_include_directories(rations_switchcheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
 namp_link_whole_dsp(rations_switchcheck)
 target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
 target_compile_options(rations_switchcheck PRIVATE -Wall)
@@ -1025,7 +1047,7 @@ add_executable(rations_racecheck
     ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
 )
-target_include_directories(rations_racecheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
+target_include_directories(rations_racecheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
 namp_link_whole_dsp(rations_racecheck)
 target_compile_features(rations_racecheck PRIVATE cxx_std_20)
 target_compile_options(rations_racecheck PRIVATE -Wall)
@@ -1065,14 +1087,14 @@ endif()
 # ---------------------------------------------------------------------------
 if(RATIONS_LINUX)
 add_executable(rations_rtcheck
-    ${RATIONS_ROOT}/tools/rations_rtcheck.cpp
+    ${NAMP_PRODUCT_DIR}/tools/rations_rtcheck.cpp
     ${NAMP_CORE_DIR}/irblend.cpp
     ${NAMP_CORE_DIR}/midilearn.cpp
     ${NAMP_CORE_DIR}/capturesource.cpp
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
     ${NAMP_CORE_DIR}/channelrack.cpp
-    ${RATIONS_ROOT}/src/pedals/pedalchain.cpp
+    ${NAMP_PRODUCT_DIR}/src/pedals/pedalchain.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
     # from throwing out of the worker thread. Linked in rather than taken from
     # RationsGfx because this target deliberately links no graphics at all — it
@@ -1087,7 +1109,7 @@ add_executable(rations_rtcheck
 # that header would be counting a copy of the matcher rather than the one that
 # ships.
 target_include_directories(rations_rtcheck
-    PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
+    PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
 namp_link_whole_dsp(rations_rtcheck)
 target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
 # The interception harness needs real calls to operator new, so the optimiser
@@ -1101,16 +1123,16 @@ endif()
 # bundle: the PRE chain is upstream of the amp models, so anything measured at
 # the plug-in's output has four neural captures and a cabinet in front of it.
 # ---------------------------------------------------------------------------
-add_executable(rations_pedalcheck ${RATIONS_ROOT}/tools/rations_pedalcheck.cpp)
+add_executable(rations_pedalcheck ${NAMP_PRODUCT_DIR}/tools/rations_pedalcheck.cpp)
 target_include_directories(rations_pedalcheck
-    PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_ROOT}/deps ${AUDIO_DSP_TOOLS_DIR} ${VST3_SDK_DIR})
+    PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_PRODUCT_DIR}/deps ${AUDIO_DSP_TOOLS_DIR} ${VST3_SDK_DIR})
 target_compile_features(rations_pedalcheck PRIVATE cxx_std_17)
 target_compile_options(rations_pedalcheck PRIVATE -Wall -Wextra -O2)
 
 # midilearn.cpp comes along because the settings page's text is not decoration:
 # what a binding reads as is what the audit has to measure, so the tool formats
 # it with the same function the panel does rather than with a mock string.
-add_executable(panelrender ${RATIONS_ROOT}/tools/panelrender.cpp
+add_executable(panelrender ${NAMP_PRODUCT_DIR}/tools/panelrender.cpp
                            ${NAMP_CORE_DIR}/midilearn.cpp)
 target_link_libraries(panelrender PRIVATE RationsGfx)
 target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
@@ -1150,15 +1172,15 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
     # parameter's range, default, step count and name, and those already exist
     # once in the controller. This links the real controller, asks it, and
     # refuses to write anything when the port table disagrees with it.
-    add_executable(rations_ttlgen ${RATIONS_ROOT}/tools/rations_ttlgen.cpp
-        ${RATIONS_ROOT}/src/rationscontroller.cpp
-        ${RATIONS_ROOT}/src/rationsview.cpp
+    add_executable(rations_ttlgen ${NAMP_PRODUCT_DIR}/tools/rations_ttlgen.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationscontroller.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationsview.cpp
         ${NAMP_CORE_DIR}/filebrowser.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp
         ${RATIONS_PLATFORM_VIEW_SOURCES}
     )
     target_include_directories(rations_ttlgen
-        PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
+        PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_ttlgen
         PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
     namp_link_whole_dsp(rations_ttlgen)
@@ -1169,18 +1191,18 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
     # The same sources the VST3 bundle compiles, minus the editor and minus the
     # factory: an LV2 plug-in has one entry point and it is not GetPluginFactory.
     add_library(rations_lv2 MODULE
-        ${RATIONS_ROOT}/lv2/rations_lv2.cpp
-        ${RATIONS_ROOT}/lv2/lv2message.cpp
-        ${RATIONS_ROOT}/lv2/lv2message.h
-        ${RATIONS_ROOT}/lv2/rationslv2.h
-        ${RATIONS_ROOT}/src/rationsprocessor.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/rations_lv2.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/lv2message.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/lv2message.h
+        ${NAMP_PRODUCT_DIR}/lv2/rationslv2.h
+        ${NAMP_PRODUCT_DIR}/src/rationsprocessor.cpp
         ${NAMP_CORE_DIR}/capturesource.cpp
         ${NAMP_CORE_DIR}/modelbank.cpp
         ${NAMP_CORE_DIR}/crossfadeengine.cpp
         ${NAMP_CORE_DIR}/channelrack.cpp
         ${NAMP_CORE_DIR}/irblend.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp
-        ${RATIONS_ROOT}/src/pedals/pedalchain.cpp
+        ${NAMP_PRODUCT_DIR}/src/pedals/pedalchain.cpp
         ${NAMP_CORE_DIR}/platform/respath.cpp
         ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         # The three SDK helpers a HOST needs and a plug-in does not, which is why
@@ -1194,7 +1216,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
     )
     target_include_directories(rations_lv2
-        PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
+        PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_lv2 PRIVATE sdk)
     namp_link_whole_dsp(rations_lv2)
     target_compile_features(rations_lv2 PRIVATE cxx_std_17)
@@ -1205,10 +1227,10 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
 
     # --- the UI half -------------------------------------------------------
     add_library(rations_lv2_ui MODULE
-        ${RATIONS_ROOT}/lv2/rations_lv2_ui.cpp
-        ${RATIONS_ROOT}/lv2/lv2message.cpp
-        ${RATIONS_ROOT}/src/rationscontroller.cpp
-        ${RATIONS_ROOT}/src/rationsview.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/rations_lv2_ui.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/lv2message.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationscontroller.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationsview.cpp
         ${NAMP_CORE_DIR}/filebrowser.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp
         ${RATIONS_PLATFORM_VIEW_SOURCES}
@@ -1217,7 +1239,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
     )
     target_include_directories(rations_lv2_ui
-        PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
+        PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_lv2_ui
         PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
     target_compile_features(rations_lv2_ui PRIVATE cxx_std_17)
@@ -1261,8 +1283,8 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         set(_out "${RATIONS_LV2_BUNDLE}/${_res}")
         add_custom_command(OUTPUT "${_out}"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${RATIONS_ROOT}/resources/${_res}" "${_out}"
-            DEPENDS "${RATIONS_ROOT}/resources/${_res}"
+                    "${NAMP_PRODUCT_DIR}/resources/${_res}" "${_out}"
+            DEPENDS "${NAMP_PRODUCT_DIR}/resources/${_res}"
             COMMENT "lv2 bundle: ${_res}")
         list(APPEND RATIONS_LV2_STAMPS "${_out}")
     endforeach()
@@ -1291,13 +1313,14 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         # vstinitiids.cpp is where the VST3 interface IIDs are DEFINED rather than
         # declared; a host-side translation unit that uses IMessage and
         # IAttributeList needs it, and the SDK expects each host to name it.
-        add_executable(rations_lv2check ${RATIONS_ROOT}/tools/rations_lv2check.cpp
-            ${RATIONS_ROOT}/lv2/lv2message.cpp
+        add_executable(rations_lv2check ${NAMP_PRODUCT_DIR}/tools/rations_lv2check.cpp
+            ${NAMP_PRODUCT_DIR}/lv2/lv2message.cpp
             ${VST3_SDK_DIR}/public.sdk/source/vst/vstinitiids.cpp
             ${VST3_SDK_DIR}/pluginterfaces/base/coreiids.cpp
             ${VST3_SDK_DIR}/pluginterfaces/base/funknown.cpp)
         target_include_directories(rations_lv2check
-            PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR}
+            PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES}
+            ${VST3_SDK_DIR}
                     ${RATIONS_LV2_INCLUDE_DIRS} ${RATIONS_LILV_INCLUDE_DIRS})
         target_link_libraries(rations_lv2check
             PRIVATE base ${RATIONS_LILV_LIBRARIES} PkgConfig::CAIROX11 ${CMAKE_DL_LIBS})
