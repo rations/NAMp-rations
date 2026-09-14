@@ -28,6 +28,10 @@
 #else
 #define stringFileDescription stringPluginName
 #endif
+// The category a host files the plug-in under. Named here rather than written into the factory,
+// because the LV2 bundle has to say the same thing in its own vocabulary and a second literal in
+// a second file is how the two formats end up in different folders of the same host's browser.
+#define stringSubCategory "Fx|Distortion"
 #define stringCompanyName "rations"
 #define stringCompanyWeb "https://github.com/rations/NAMp-rations"
 #define stringCompanyEmail "mailto:ehqcar@proton.me"

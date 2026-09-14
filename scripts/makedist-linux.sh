@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build NAMp Rations for 64-bit Linux and package the release tarball into dist/.
 #
-# TWO PRODUCTS, ONE TARBALL, AND NEITHER NEEDS THE OTHER TO BE INSTALLED.
+# THREE PRODUCTS, ONE TARBALL.
 #
 #   NAMp-rations.vst3        the plug-in, for a DAW. It links cairo, FreeType, fontconfig and libX11
 #                       and NOTHING else - in particular it does not link JACK, which is checked
@@ -14,6 +14,12 @@
 #                       dladdr() relative to the loaded module, so a standalone that linked the
 #                       plug-in in would be resolving resources by a different route from the one
 #                       every user's DAW uses.
+#   rations.lv2         the same plug-in again, as LV2, for a host that wants that format. It is
+#                       not a second plug-in and not a second copy of the DSP: both shared objects
+#                       inside it host the very same RationsProcessor and RationsEditorView the
+#                       VST3 bundle carries, wrapped for LV2's four callbacks (lv2/rationslv2.h
+#                       says why, and what it cost). Unlike the standalone it is self-contained -
+#                       it carries its own art and needs neither of the other two installed.
 #
 # WINDOWS IS A SEPARATE RELEASE and ships the plug-in only; see scripts/makedist-windows.sh.
 #
@@ -118,6 +124,19 @@ fi
 cp "$STANDALONE" "$PKGDIR/"
 strip --strip-unneeded "$PKGDIR/namp-rations-standalone"
 
+# --- the LV2 bundle ---------------------------------------------------------
+# A shipped component like the standalone, so a build that skipped it is refused rather than
+# quietly producing a two-product tarball that claims to hold three.
+LV2BUNDLE="$BUILD/lv2/rations.lv2"
+if [ ! -d "$LV2BUNDLE" ]; then
+  echo "rations.lv2 was not built - install the LV2 development files (lv2-dev)" >&2
+  echo "and re-run, or the release would ship the VST3 only." >&2
+  exit 1
+fi
+cp -r "$LV2BUNDLE" "$PKGDIR/"
+PKGLV2="$PKGDIR/rations.lv2"
+strip --strip-unneeded "$PKGLV2/rations.so" "$PKGLV2/rations_ui.so"
+
 # --- gates ------------------------------------------------------------------
 # THE PLUG-IN MUST NOT LINK THE AUDIO BACKEND. Only the standalone hosts JACK; a bundle that
 # linked it would refuse to load on every machine without libjack installed, which is most of
@@ -169,6 +188,54 @@ if ! printf '%s' "$STANDALONE_HELP" | grep -q "usage: namp-rations-standalone"; 
   exit 1
 fi
 
+# THE LV2 BUNDLE'S SHAPE. The same three questions the VST3 is asked, plus two of its own.
+#
+# EXACTLY ONE EXPORT EACH, and here "exactly" is affordable where it was not for the VST3: these
+# are built from our own sources with -fvisibility=hidden and --exclude-libs,ALL and carry no
+# module entry point, so anything else in the dynamic table is a symbol a second plug-in in the
+# same host process can be merged with. This tree ships the VST3 and the LV2 of the SAME plug-in
+# on Linux, so a host with both installed is exactly that collision path.
+for _pair in "rations.so lv2_descriptor" "rations_ui.so lv2ui_descriptor"; do
+  set -- $_pair
+  _got="$(nm -D --defined-only "$PKGLV2/$1" | awk '$2 == "T" { print $3 }' | tr '\n' ' ')"
+  if [ "$(echo $_got)" != "$2" ]; then
+    echo "rations.lv2/$1 exports [$(echo $_got)] rather than exactly $2." >&2
+    exit 1
+  fi
+done
+
+# NO STB_GNU_UNIQUE, for the reason spelled out above the VST3's own check.
+for _so in rations.so rations_ui.so; do
+  _unique="$(nm -D --defined-only "$PKGLV2/$_so" | awk '$2 == "u" { print $3 }')"
+  if [ -n "$_unique" ]; then
+    echo "rations.lv2/$_so exports STB_GNU_UNIQUE symbols:" >&2
+    echo "$_unique" | head -10 | sed 's/^/  /' >&2
+    exit 1
+  fi
+done
+
+# NEITHER HALF MAY LINK JACK, and the DSP half may not link the editor's libraries either: it
+# draws nothing, and a headless host has to be able to run it with no X server present at all.
+if ldd "$PKGLV2/rations.so" | grep -qi 'libjack'; then
+  echo "rations.lv2/rations.so links libjack. Only namp-rations-standalone may." >&2
+  exit 1
+fi
+if ldd "$PKGLV2/rations.so" | grep -qE 'libX11|libcairo'; then
+  echo "rations.lv2/rations.so links X11 or cairo; the DSP half draws nothing." >&2
+  ldd "$PKGLV2/rations.so" | grep -E 'libX11|libcairo' >&2
+  exit 1
+fi
+
+# THE BUNDLE'S CONTENTS. Its Turtle and the five load-bearing resources, which the UI loads from
+# the bundle_path a host hands it rather than from any computed location.
+for _f in manifest.ttl rations.ttl fonts/Michroma-Regular.ttf fonts/Roboto-Regular.ttf \
+          img/head.png img/cabinet.png img/dial.png img/File.svg; do
+  if [ ! -f "$PKGLV2/$_f" ]; then
+    echo "rations.lv2 is missing $_f" >&2
+    exit 1
+  fi
+done
+
 # --- licence, attribution, launcher -----------------------------------------
 cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
@@ -186,6 +253,7 @@ cat > "$PKGDIR/install.sh" <<'EOF'
 # installed outside your home directory.
 #
 #   NAMp-rations.vst3         -> ~/.vst3                                   (the plug-in, for a DAW)
+#   rations.lv2               -> ~/.lv2                                    (the same plug-in, as LV2)
 #   namp-rations-standalone   -> ~/.local/bin                              (the amp, on JACK)
 #   namp-rations.desktop      -> ~/.local/share/applications               (the launcher entry)
 #   namp-rations-<size>.png   -> ~/.local/share/icons/hicolor/<size>/apps  (its icon)
@@ -196,6 +264,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VST3_DIR="$HOME/.vst3"
+LV2_DIR="$HOME/.lv2"
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/applications"
 ICON_ROOT="$HOME/.local/share/icons/hicolor"
@@ -207,6 +276,7 @@ refresh() {
 
 if [ "${1:-}" = "--uninstall" ]; then
   rm -rf "$VST3_DIR/NAMp-rations.vst3"
+  rm -rf "$LV2_DIR/rations.lv2"
   rm -f "$BIN_DIR/namp-rations-standalone"
   rm -f "$APP_DIR/namp-rations.desktop"
   for SIZE in 256 128 64 48; do
@@ -219,9 +289,19 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-mkdir -p "$VST3_DIR" "$BIN_DIR" "$APP_DIR"
+mkdir -p "$VST3_DIR" "$LV2_DIR" "$BIN_DIR" "$APP_DIR"
 rm -rf "$VST3_DIR/NAMp-rations.vst3"
 cp -r "$HERE/NAMp-rations.vst3" "$VST3_DIR/"
+# A copy under /usr/lib/lv2 or /usr/local/lib/lv2 would SHADOW this one, and the only symptom is
+# a host running a version you did not install. Say so rather than leaving it to be discovered.
+rm -rf "$LV2_DIR/rations.lv2"
+cp -r "$HERE/rations.lv2" "$LV2_DIR/"
+for SHADOW in /usr/local/lib/lv2/rations.lv2 /usr/lib/lv2/rations.lv2; do
+  if [ -e "$SHADOW" ]; then
+    echo "Note: $SHADOW exists and will be used INSTEAD of the copy just installed."
+    echo "      Remove it (it needs root) if you want this one."
+  fi
+done
 install -m 755 "$HERE/namp-rations-standalone" "$BIN_DIR/namp-rations-standalone"
 install -m 644 "$HERE/desktop/namp-rations.desktop" "$APP_DIR/namp-rations.desktop"
 for SIZE in 256 128 64 48; do
@@ -232,10 +312,12 @@ refresh
 
 echo "Installed:"
 echo "  plug-in     $VST3_DIR/NAMp-rations.vst3"
+echo "  lv2         $LV2_DIR/rations.lv2"
 echo "  standalone  $BIN_DIR/namp-rations-standalone"
 echo "  launcher    $APP_DIR/namp-rations.desktop"
 echo
-echo "Rescan plug-ins in your DAW to pick up the VST3."
+echo "Rescan plug-ins in your DAW to pick up the VST3 or the LV2 - they are the same amp,"
+echo "so install whichever your host prefers and ignore the other."
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "Note: $BIN_DIR is not on your PATH, so 'namp-rations-standalone' will not be"
@@ -249,14 +331,17 @@ chmod +x "$PKGDIR/install.sh"
 cat > "$PKGDIR/INSTALL.txt" <<EOF
 NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head for Linux
 
-This archive holds two things, and they are the same amp twice:
+This archive holds three things, and they are the same amp three times:
 
     NAMp-rations.vst3        the plug-in, for your DAW
+    rations.lv2              the same plug-in as LV2, if your host prefers that
     namp-rations-standalone  the amp on its own, on JACK, with its own window
 
-The standalone is a HOST rather than a second copy: it loads
-NAMp-rations.vst3. Keep the two together, or install both with the script
-below.
+The VST3 and the LV2 are the same DSP and the same panel in two wrappers, so
+install whichever your host handles best and ignore the other; there is nothing
+to choose between them in sound or in features. The standalone is a HOST rather
+than a second copy: it loads NAMp-rations.vst3, so keep those two together, or
+install everything with the script below.
 
 Install
 -------
@@ -265,6 +350,7 @@ Install
 Everything goes under your home directory and nothing needs root:
 
     ~/.vst3/NAMp-rations.vst3                   the plug-in
+    ~/.lv2/rations.lv2                          the LV2 build
     ~/.local/bin/namp-rations-standalone        the standalone
     ~/.local/share/applications/           a menu entry, with an icon
 

@@ -1,13 +1,13 @@
-NAMp Rations — a four-channel Neural Amp Modeler amp head, a VST3 plug-in for Linux
-and Windows
+NAMp Rations — a four-channel Neural Amp Modeler amp head. A VST3 plug-in for Linux,
+Windows and macOS, and an LV2 plug-in for Linux.
 Copyright (c) 2026 rations
 
 This project builds on NeuralAmpModelerPlugin by Steven Atkinson, and directly
 on the author's own NAMp. The original upstream project is available at:
   https://github.com/sdatkinson/NeuralAmpModelerPlugin
 
-NAMp Rations itself (the VST3 integration, the crossfade and channel-switch engines
-and the editor under src/) is released under the MIT Licence; see LICENSE. The
+NAMp Rations itself (the VST3 and LV2 integrations, the crossfade and channel-switch
+engines and the editor under src/) is released under the MIT Licence; see LICENSE. The
 third-party components it links, vendors and redistributes are covered by the
 licences below.
 
@@ -157,6 +157,10 @@ JACK's client library (LGPL 2.1, dynamically linked, and likewise not
 redistributed here). The VST3 bundle does NOT link it, and the release script
 checks that rather than asserting it; nothing on Windows links it at all.
 
+rations.lv2's UI half links the same graphics stack the VST3 editor does, for
+the plain reason that it IS that editor. Its DSP half links none of it — it
+draws nothing — and the release script checks that too.
+
 On Windows there is no system copy of any of them, so the Windows release
 STATICALLY LINKS and therefore redistributes them inside NAMp-rations.vst3. That changes
 the licence character of the shipped binary, so they are named here in full,
@@ -196,6 +200,33 @@ with the versions scripts/build-win-deps.sh pins:
   substitute their own cairo and rebuild. If cairo's LGPL terms are ever
   inconvenient, its MPL 1.1 arm is available instead — no cairo source file is
   modified either way.
+
+-------------------------------------------------------------------------------
+
+LV2 — the Linux release's second plug-in format (rations.lv2)
+
+  LV2 1.18, https://lv2plug.in/     ISC licence.
+
+  HEADER-ONLY, which is the whole of what there is to say about it in a binary:
+  `pkg-config --libs lv2` is empty, nothing is linked and nothing is
+  redistributed. The headers used are the system package's (1.18.10 here); the
+  pristine reference checkout every spec fact was verified against is
+  ~/third_party/source-lv2 (1.18.11), and the two differ only in include-quote
+  style, include-guard names and two UI type macros this build does not use.
+
+  The ISC licence is a two-clause permissive licence of the same character as
+  MIT, so it satisfies the licence rule this project is built to.
+
+  lilv 0.24 (ISC) and its serd / sord / zix dependencies are used by
+  tools/rations_lv2check.cpp, which is a TEST rig: it asks the reference
+  discovery library what a host would see in the built bundle. Nothing in
+  rations.lv2 links any of them.
+
+  WHAT IS DELIBERATELY NOT READ: /home/human/src/guitarix-* is the largest body
+  of LV2 X11 UI code on this machine and it is GPL. It is named here so that the
+  exclusion is a recorded decision rather than an absence. The X11 UI in this
+  project is the author's own, carried over from the VST3 editor
+  (src/platform/x11plugview.cpp) and from the author's MIT-licensed lvtuner.
 
 -------------------------------------------------------------------------------
 

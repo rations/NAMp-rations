@@ -193,6 +193,19 @@ protected:
         return mWindow != 0;
     }
 
+public:
+    // The embedded child window's X id, or 0 before it exists.
+    //
+    // PUBLIC and not protected, which every other hook here is, because the one caller is outside
+    // the editor entirely: LV2's ui:X11UI contract says the LV2UI_Widget a UI hands back IS an X
+    // window id (lv2/ui/ui.h), and the window this class created is the one to hand over. A VST3
+    // host never asks — it gave us the parent and has no business with the child — so nothing in
+    // the VST3 path calls this and nothing about it changes.
+    ::Window nativeWindow() const
+    {
+        return mWindow;
+    }
+
 private:
     bool openWindow(::Window parent);
     void closeWindow();

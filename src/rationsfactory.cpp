@@ -10,7 +10,7 @@
 BEGIN_FACTORY_DEF(stringCompanyName, stringCompanyWeb, stringCompanyEmail, 2)
 
 DEF_CLASS(Rations::RationsProcessorUID, Steinberg::PClassInfo::kManyInstances, kVstAudioEffectClass,
-          stringPluginName, Steinberg::Vst::kDistributable, "Fx|Distortion", FULL_VERSION_STR,
+          stringPluginName, Steinberg::Vst::kDistributable, stringSubCategory, FULL_VERSION_STR,
           kVstVersionString, Rations::RationsProcessor::createInstance, nullptr)
 
 DEF_CLASS(Rations::RationsControllerUID, Steinberg::PClassInfo::kManyInstances,

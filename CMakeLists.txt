@@ -1246,3 +1246,198 @@ add_executable(panelrender ${RATIONS_ROOT}/tools/panelrender.cpp
 target_link_libraries(panelrender PRIVATE RationsGfx)
 target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
 target_compile_options(panelrender PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
+# The LV2 build: rations.lv2, a second FORMAT rather than a second plug-in.
+#
+# Both shared objects host the very same C++ objects a VST3 DAW loads -- one a
+# RationsProcessor driven through IAudioProcessor, the other a RationsController
+# and a RationsEditorView driven through IPlugView -- so there is one DSP path,
+# one editor, and one state format, and everything this project has measured
+# about them is a statement about this build too. lv2/rationslv2.h carries the
+# reasoning; lv2/rations_lv2_ui.cpp carries the run-loop half of it.
+#
+# Linux only, because the editor half is X11: ui:X11UI is the only UI type
+# declared, and src/platform/x11plugview.cpp is the window underneath it. The
+# other two platforms ship the VST3 bundle and nothing else, as they already do.
+# ---------------------------------------------------------------------------
+if(RATIONS_LINUX)
+    pkg_check_modules(RATIONS_LV2 QUIET lv2)
+    # lilv is the reference discovery library and is what rations_lv2check asks.
+    # It is a TEST dependency only: nothing in the bundle links it.
+    pkg_check_modules(RATIONS_LILV QUIET lilv-0)
+endif()
+
+if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
+    # Reported rather than assumed: any version-sensitive fact has to record the
+    # version it was checked against, and the system package and the pristine
+    # reference checkout under ~/third_party/source-lv2 are not the same release.
+    message(STATUS "LV2 ${RATIONS_LV2_VERSION} found - building rations.lv2")
+
+    set(RATIONS_LV2_BUNDLE "${CMAKE_BINARY_DIR}/lv2/rations.lv2")
+
+    # --- the TTL generator -------------------------------------------------
+    # Not a hand-written pair of .ttl files: an LV2 bundle states every
+    # parameter's range, default, step count and name, and those already exist
+    # once in the controller. This links the real controller, asks it, and
+    # refuses to write anything when the port table disagrees with it.
+    add_executable(rations_ttlgen ${RATIONS_ROOT}/tools/rations_ttlgen.cpp
+        ${RATIONS_ROOT}/src/rationscontroller.cpp
+        ${RATIONS_ROOT}/src/rationsview.cpp
+        ${RATIONS_ROOT}/src/filebrowser.cpp
+        ${RATIONS_ROOT}/src/midilearn.cpp
+        ${RATIONS_PLATFORM_VIEW_SOURCES}
+    )
+    target_include_directories(rations_ttlgen
+        PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${RATIONS_LV2_INCLUDE_DIRS})
+    target_link_libraries(rations_ttlgen
+        PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
+    rations_link_whole_dsp(rations_ttlgen)
+    target_compile_features(rations_ttlgen PRIVATE cxx_std_17)
+    target_compile_options(rations_ttlgen PRIVATE -Wall)
+
+    # --- the DSP half ------------------------------------------------------
+    # The same sources the VST3 bundle compiles, minus the editor and minus the
+    # factory: an LV2 plug-in has one entry point and it is not GetPluginFactory.
+    add_library(rations_lv2 MODULE
+        ${RATIONS_ROOT}/lv2/rations_lv2.cpp
+        ${RATIONS_ROOT}/lv2/lv2message.cpp
+        ${RATIONS_ROOT}/lv2/lv2message.h
+        ${RATIONS_ROOT}/lv2/rationslv2.h
+        ${RATIONS_ROOT}/src/rationsprocessor.cpp
+        ${RATIONS_ROOT}/src/capturesource.cpp
+        ${RATIONS_ROOT}/src/modelbank.cpp
+        ${RATIONS_ROOT}/src/crossfadeengine.cpp
+        ${RATIONS_ROOT}/src/channelrack.cpp
+        ${RATIONS_ROOT}/src/irblend.cpp
+        ${RATIONS_ROOT}/src/midilearn.cpp
+        ${RATIONS_ROOT}/src/pedals/pedalchain.cpp
+        ${RATIONS_ROOT}/src/platform/respath.cpp
+        ${RATIONS_ROOT}/src/gfx/resourcestore.cpp
+        # The three SDK helpers a HOST needs and a plug-in does not, which is why
+        # the `sdk` target does not carry them: the pre-allocated parameter and
+        # event queues run() fills, and the memory stream getState/setState are
+        # handed. The JACK standalone gets the same three from sdk_hosting; this
+        # takes the files, because sdk_hosting also brings a module loader and a
+        # plug-in provider that an LV2 bundle has no use for.
+        ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/parameterchanges.cpp
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+    )
+    target_include_directories(rations_lv2
+        PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${RATIONS_LV2_INCLUDE_DIRS})
+    target_link_libraries(rations_lv2 PRIVATE sdk)
+    rations_link_whole_dsp(rations_lv2)
+    target_compile_features(rations_lv2 PRIVATE cxx_std_17)
+    # -ffast-math to match the VST3 bundle exactly. The pedals' behaviour was
+    # measured under it (D26), and a second build of the same DSP at a different
+    # floating-point contract would be a second set of numbers.
+    target_compile_options(rations_lv2 PRIVATE -ffast-math -Wall)
+
+    # --- the UI half -------------------------------------------------------
+    add_library(rations_lv2_ui MODULE
+        ${RATIONS_ROOT}/lv2/rations_lv2_ui.cpp
+        ${RATIONS_ROOT}/lv2/lv2message.cpp
+        ${RATIONS_ROOT}/src/rationscontroller.cpp
+        ${RATIONS_ROOT}/src/rationsview.cpp
+        ${RATIONS_ROOT}/src/filebrowser.cpp
+        ${RATIONS_ROOT}/src/midilearn.cpp
+        ${RATIONS_PLATFORM_VIEW_SOURCES}
+        # setComponentState takes an IBStream, and the state blob arrives from the
+        # DSP half as bytes; MemoryStream is what turns one into the other.
+        ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+    )
+    target_include_directories(rations_lv2_ui
+        PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${RATIONS_LV2_INCLUDE_DIRS})
+    target_link_libraries(rations_lv2_ui
+        PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
+    target_compile_features(rations_lv2_ui PRIVATE cxx_std_17)
+    target_compile_options(rations_lv2_ui PRIVATE -ffast-math -Wall)
+
+    # The bundle's file names are fixed by the TTL the generator writes, so the
+    # usual lib<name>.so would leave a manifest naming a binary that is not
+    # there.
+    foreach(_lv2_target rations_lv2 rations_lv2_ui)
+        string(REPLACE "rations_lv2_ui" "rations_ui" _lv2_name "${_lv2_target}")
+        string(REPLACE "rations_lv2" "rations" _lv2_name "${_lv2_name}")
+        set_target_properties(${_lv2_target} PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "${_lv2_name}"
+            LIBRARY_OUTPUT_DIRECTORY "${RATIONS_LV2_BUNDLE}"
+            POSITION_INDEPENDENT_CODE ON
+            # Two plug-ins in one host process that both export the same inline
+            # or template symbol can be merged by the dynamic linker through
+            # STB_GNU_UNIQUE, leaving one of them running the other's code. This
+            # tree will ship the VST3 and the LV2 of the SAME plug-in on Linux,
+            # so a host with both installed is the collision path -- and the NAM
+            # architecture registry is a file-scope static initialiser, which is
+            # exactly the kind of symbol involved. Hidden by default, and the
+            # archives bound locally below, leaves lv2_descriptor and
+            # lv2ui_descriptor (which carry LV2_SYMBOL_EXPORT) as the entire
+            # public surface. scripts/lv2-gate.sh measures that rather than
+            # trusting it.
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON
+        )
+        target_link_options(${_lv2_target} PRIVATE -Wl,--exclude-libs,ALL)
+    endforeach()
+
+    # --- the bundle --------------------------------------------------------
+    # Art and fonts go in beside the binaries, which is the LV2 layout, and the
+    # UI is handed that directory as instantiate()'s bundle_path. A VST3 bundle
+    # keeps them two levels up under Contents/Resources instead, which is why
+    # respath.cpp grew an explicit override rather than a second layout rule.
+    set(RATIONS_LV2_STAMPS "")
+    foreach(_res IN LISTS RATIONS_FONT_FILES RATIONS_IMG_FILES)
+        set(_out "${RATIONS_LV2_BUNDLE}/${_res}")
+        add_custom_command(OUTPUT "${_out}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${RATIONS_ROOT}/resources/${_res}" "${_out}"
+            DEPENDS "${RATIONS_ROOT}/resources/${_res}"
+            COMMENT "lv2 bundle: ${_res}")
+        list(APPEND RATIONS_LV2_STAMPS "${_out}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT "${RATIONS_LV2_BUNDLE}/manifest.ttl" "${RATIONS_LV2_BUNDLE}/rations.ttl"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RATIONS_LV2_BUNDLE}"
+        COMMAND rations_ttlgen "${RATIONS_LV2_BUNDLE}"
+        DEPENDS rations_ttlgen
+        COMMENT "lv2 bundle: manifest.ttl and rations.ttl (checked against the controller)")
+
+    add_custom_target(rations_lv2_bundle ALL
+        DEPENDS "${RATIONS_LV2_BUNDLE}/manifest.ttl" "${RATIONS_LV2_BUNDLE}/rations.ttl"
+                ${RATIONS_LV2_STAMPS} rations_lv2 rations_lv2_ui)
+
+    # --- the bundle's own gate ---------------------------------------------
+    # What a host actually sees, asked of lilv rather than of the source tree.
+    # rations_ttlgen checks the code against the controller; this checks the
+    # BUNDLE against the code, loads the binary, runs it and round-trips its
+    # state — none of which the ordinary build can say anything about, and all
+    # of which fail silently at runtime rather than at build time.
+    if(RATIONS_LILV_FOUND)
+        # lv2message.cpp comes along rather than being restated: the capture test
+        # writes a message with the plug-in's OWN codec, so what it exercises is
+        # the wire format the two halves use and not a second description of it.
+        # vstinitiids.cpp is where the VST3 interface IIDs are DEFINED rather than
+        # declared; a host-side translation unit that uses IMessage and
+        # IAttributeList needs it, and the SDK expects each host to name it.
+        add_executable(rations_lv2check ${RATIONS_ROOT}/tools/rations_lv2check.cpp
+            ${RATIONS_ROOT}/lv2/lv2message.cpp
+            ${VST3_SDK_DIR}/public.sdk/source/vst/vstinitiids.cpp
+            ${VST3_SDK_DIR}/pluginterfaces/base/coreiids.cpp
+            ${VST3_SDK_DIR}/pluginterfaces/base/funknown.cpp)
+        target_include_directories(rations_lv2check
+            PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${VST3_SDK_DIR}
+                    ${RATIONS_LV2_INCLUDE_DIRS} ${RATIONS_LILV_INCLUDE_DIRS})
+        target_link_libraries(rations_lv2check
+            PRIVATE base ${RATIONS_LILV_LIBRARIES} PkgConfig::CAIROX11 ${CMAKE_DL_LIBS})
+        target_link_directories(rations_lv2check PRIVATE ${RATIONS_LILV_LIBRARY_DIRS})
+        target_compile_features(rations_lv2check PRIVATE cxx_std_17)
+        target_compile_options(rations_lv2check PRIVATE -Wall)
+    else()
+        message(STATUS "lilv not found - skipping rations_lv2check")
+    endif()
+elseif(RATIONS_LINUX)
+    message(STATUS "LV2 headers not found (lv2.pc) - skipping rations.lv2")
+endif()

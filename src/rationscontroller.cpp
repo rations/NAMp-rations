@@ -143,6 +143,15 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     outputMode->appendString(STR16("Normalized"));
     outputMode->appendString(STR16("Calibrated"));
     outputMode->setNormalized(normFromOutputMode(kOutputNormalized));
+    // And the DEFAULT as well as the current value, which are two different fields and were not
+    // saying the same thing. StringListParameter has no default in its constructor, so
+    // defaultNormalizedValue stayed at 0 — Raw — while setNormalized above put the live value at
+    // Normalized. Everything a player sees came from the live value, so the plug-in behaved
+    // correctly and only a host's own "reset this parameter" would have landed on Raw, silently
+    // contradicting the whole reason Normalized is the default. Found by the LV2 build, where the
+    // two stop being separable: an LV2 host initialises a control port FROM lv2:default, so the
+    // wrong field there is not a reset-only case but what a fresh instance comes up sounding like.
+    outputMode->getInfo().defaultNormalizedValue = normFromOutputMode(kOutputNormalized);
     parameters.addParameter(outputMode);
 
     parameters.addParameter(STR16("Calibrate Input"), nullptr, 1, 0.0,

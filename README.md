@@ -6,7 +6,9 @@
 
 A four-channel amp head built on [Neural Amp Modeler](https://github.com/sdatkinson/neural-amp-modeler)
 captures. A **raw VST3** plug-in — no JUCE, no iPlug2, no VSTGUI — for **Linux and Windows**, plus
-a JACK standalone on Linux for playing it without a DAW. There is also an
+an **LV2** build and a JACK standalone on Linux for playing it without a DAW. The LV2 is the same
+amp and not a port: the same DSP and the same panel behind a second set of callbacks, so pick
+whichever your host likes better. There is also an
 **[experimental macOS build](#macos-experimental)**, which nobody involved has been able to play
 yet — read that section before downloading it.
 
@@ -54,8 +56,10 @@ thing to do after installing is load your own into them.
 
 ### Linux
 
-The tarball holds the plug-in and the standalone, which are the same amp twice — the standalone
-*hosts* `NAMp-rations.vst3` rather than duplicating it, so keep the two together.
+The tarball holds three things and they are the same amp three times: the VST3, the LV2, and the
+standalone. The VST3 and the LV2 are interchangeable — install whichever your host handles best and
+ignore the other. The standalone *hosts* `NAMp-rations.vst3` rather than duplicating it, so keep
+those two together.
 
 ```
 tar xf NAMp-rations-*-linux-x86_64.tar.gz
@@ -67,14 +71,37 @@ Everything goes under your home directory and nothing needs root:
 
 | | |
 |---|---|
-| `~/.vst3/NAMp-rations.vst3` | the plug-in |
+| `~/.vst3/NAMp-rations.vst3` | the plug-in, VST3 |
+| `~/.lv2/rations.lv2` | the plug-in, LV2 |
 | `~/.local/bin/namp-rations-standalone` | the standalone |
 | `~/.local/share/applications/` | a menu entry, with an icon |
 
-Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all three again.
+Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all of it again.
 
-You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` by hand if you only want the
-plug-in, and run `./namp-rations-standalone` where you extracted it. cairo, FreeType and fontconfig come
+If a host shows you an older version of the LV2 after installing, check for `rations.lv2` under
+`/usr/lib/lv2` or `/usr/local/lib/lv2`: a copy there shadows the one in your home directory. The
+installer says so if it finds one.
+
+**A note on the LV2.** It is the same binary DSP and the same editor as the VST3 — one source
+tree, one state format — so a project saved by one is the same settings the other would have saved,
+and every measured figure in this repository is a statement about both. Three things are worth
+knowing before you decide it is misbehaving:
+
+- **It is Linux only.** The editor is X11, and `ui:X11UI` is the only UI type the bundle declares.
+  The Windows and macOS releases are the VST3 alone.
+- **How your host lists it is your host's business.** The bundle names its maintainer, so a host
+  that shows a vendor will show `rations` — but several only do that when you ask them to, and some
+  append the channel layout (`1->2ch`, which is this plug-in being mono in and stereo out) to the
+  name whether you asked or not. Neither is coming from the plug-in.
+- **Your host's global bypass button does not reach it.** VST3 has a flag for "this parameter is
+  the bypass" and LV2's nearest equivalent means the inverse of what this plug-in's `Bypass` port
+  means, so designating it would change what a saved value stands for. The panel's own BYPASS
+  switch works, and so does the `Bypass` port from automation — it is only the host's own button
+  that is not wired to it.
+
+You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` or `rations.lv2` into
+`~/.lv2/` by hand if you only want the plug-in, and run `./namp-rations-standalone` where you
+extracted it. cairo, FreeType and fontconfig come
 from your system; the standalone additionally wants a JACK server (jackd, or a PipeWire desktop,
 which provides one).
 
@@ -184,6 +211,24 @@ What it was playing is kept in `~/.config/NAMp-rations/standalone.state`; `--no-
 `scripts/makedist-linux.sh` packages the two into a tarball with a launcher entry and an
 `install.sh`. There is no standalone on Windows — that release is the plug-in only.
 
+### The LV2 build (Linux)
+
+The same build also produces `build/lv2/rations.lv2` when LV2's headers are present (`lv2-dev`),
+and skips it with a status line when they are not. Install it by copying the bundle into `~/.lv2/`.
+
+It is a second set of **callbacks**, not a second plug-in: `rations.so` instantiates the same
+processor a DAW instantiates and drives it through the VST3 audio interface, and `rations_ui.so`
+instantiates the same controller and the same editor. Nothing about the amp is written twice.
+
+The bundle's `.ttl` is **generated** rather than maintained, by `rations_ttlgen`, which links the
+real controller and reads every port's range, default, step count, name, unit and enum label out of
+it. It refuses to write anything when the port table and the controller disagree, so a parameter
+added to the plug-in and forgotten there fails the build instead of becoming a control no LV2 host
+can reach.
+
+`scripts/makedist-linux.sh` packages it alongside the VST3 and the standalone, and the `install.sh`
+it generates puts it in `~/.lv2` and warns about a root-owned copy that would shadow it.
+
 ### macOS, built on GitHub Actions
 
 There is no macOS build on this repository's own machine and there is not meant to be one: Apple
@@ -226,6 +271,7 @@ host does, and `scripts/` holds the gates that run them:
 | `scripts/switch-gate.sh` | the channel switch in a live JACK process callback, zero xruns |
 | `scripts/ir-gate.sh` | the two-IR blend against real cabinet impulse responses |
 | `scripts/pedal-gate.sh` | each pedal against the source its topology was derived from |
+| `scripts/lv2-gate.sh` | the installed LV2 bundle, as **lilv** sees it, then run and written to |
 | `rations_switchcheck` | post-catch-up convergence on a running reference to within 1e-6 |
 | `rations_racecheck` | the prime worker under ThreadSanitizer |
 | `panelrender` | every editor page rendered offline, with art and text-clearance audits |
