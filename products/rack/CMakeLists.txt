@@ -603,7 +603,7 @@ set(NAMPRACK_PLUGIN_SOURCES
     src/rationscontroller.cpp
     # The state blob's string reads, shared by the two functions above that decode one.
     ${NAMP_CORE_DIR}/statestream.h
-    src/rationsfactory.cpp
+    ${NAMP_CORE_DIR}/rationsfactory.cpp
     ${NAMP_CORE_DIR}/engineconfig.h
     ${NAMP_CORE_DIR}/spscqueue.h
     ${NAMP_CORE_DIR}/bank.h
