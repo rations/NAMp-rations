@@ -194,22 +194,31 @@ A note on AudioDSPTools' Lanczos resampler
 
 -------------------------------------------------------------------------------
 
-The bundled pedals (rations-pedals, built here as a pinned submodule):
+The pedals (rations-pedals) — NOT YET SHIPPED BY THIS PROJECT:
 
   Copyright (c) 2026 rations — MIT Licence.
 
-  Five plug-ins — Boost, Chorus, Flanger, Delay, Reverb — built by this project's
-  build and packaged by its release script, then loaded into the rack like any
-  other plug-in. They are a separate project with their own history and their own
-  NOTICE, which travels with the submodule and which governs the third-party
-  components they vendor (among them WDL under the zlib Licence, whose
-  verbengine.h is the Reverb's engine and is in turn derived from the
+  Five plug-ins — Boost, Chorus, Flanger, Delay, Reverb — intended to ship
+  alongside the rack and to be loaded into it like any other plug-in. They are a
+  separate project with their own history and their own NOTICE, which governs the
+  third-party components they vendor (among them WDL under the zlib Licence,
+  whose verbengine.h is the Reverb's engine and is in turn derived from the
   public-domain Freeverb by Jezar at Dreampoint).
 
-  Because this project's release script packages those binaries, it redistributes
-  those components: read the submodule's own NOTICE as part of this one. Nothing
-  in the pedals reaches this tree's include graph — they are separate binaries
-  loaded at run time, not linked.
+  THIS ENTRY DESCRIBES AN INTENTION AND SAYS SO. An earlier version of it was
+  written in the present tense — "built here as a pinned submodule", "packaged by
+  its release script" — and none of that was true: there is no such submodule,
+  nothing in this build produces those bundles, and neither release script
+  packages them. A NOTICE file exists to be accurate about what is redistributed,
+  so an aspiration stated as fact is a defect in it rather than a harmless
+  anticipation. The entry is kept, marked, and will be rewritten in the present
+  tense on the commit that actually makes it true.
+
+  When that happens this project will redistribute those binaries and therefore
+  the components they vendor, and the pedals' own NOTICE must then be read as
+  part of this one. Nothing in the pedals reaches this tree's include graph in
+  either case — they are separate binaries loaded at run time, never linked — so
+  they are not part of any Corresponding Source this project owes.
 
 -------------------------------------------------------------------------------
 
