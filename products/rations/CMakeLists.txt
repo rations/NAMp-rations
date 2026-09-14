@@ -424,7 +424,13 @@ endif()
 # file browser is compiled into the plug-in and the LV2 modules here rather than into this library,
 # which is where the rack puts it, and that difference is why core/ is a source tree and not one
 # prebuilt library.
-namp_add_gfx(RationsGfx CAIRO PkgConfig::CAIRO)
+namp_add_gfx(NampGfx CAIRO PkgConfig::CAIRO)
+
+# The name this product's own targets have always used. An ALIAS is a second name for one target,
+# not a second target: it costs nothing, it cannot be linked twice, and it keeps this rename out of
+# the ~10 link lines below so that if anything moved in this commit it moved because of the rename
+# and not because a call site was missed. Both aliases go in the next stage, with the call sites.
+add_library(RationsGfx ALIAS NampGfx)
 
 # ---------------------------------------------------------------------------
 # The NAM DSP core as a static library, linked --whole-archive by the plug-in, plus the INTERFACE
@@ -437,7 +443,9 @@ namp_add_gfx(RationsGfx CAIRO PkgConfig::CAIRO)
 # as "bbm/..." and "wdl/..." so the provenance of each block stays visible at every include site.
 # Both trees are header-only, so there is nothing to add to the source list.
 # ---------------------------------------------------------------------------
-namp_add_dsp(RationsDsp RationsDspHeaders INCLUDE_DIRS ${RATIONS_ROOT}/deps)
+namp_add_dsp(NampDsp NampDspHeaders INCLUDE_DIRS ${RATIONS_ROOT}/deps)
+add_library(RationsDsp ALIAS NampDsp)
+add_library(RationsDspHeaders ALIAS NampDspHeaders)
 
 # ---------------------------------------------------------------------------
 # Art, fonts and captures, named once.

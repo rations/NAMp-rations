@@ -477,11 +477,17 @@ endif()
 # the plug-in because it is drawn with Canvas and nothing else, and the rack needs the same one to
 # choose a plug-in search folder. Two browsers would drift, and the one the user already knows is
 # the one the rack should open.
-namp_add_gfx(NampRackGfx
+namp_add_gfx(NampGfx
     CAIRO PkgConfig::CAIROFT
     SOURCES
         ${NAMP_CORE_DIR}/filebrowser.h
         ${NAMP_CORE_DIR}/filebrowser.cpp)
+
+# The name this product's own targets have always used. An ALIAS is a second name for one target,
+# not a second target: it costs nothing, it cannot be linked twice, and it keeps this rename out of
+# the ~10 link lines below so that if anything moved in this commit it moved because of the rename
+# and not because a call site was missed. Both aliases go in the next stage, with the call sites.
+add_library(NampRackGfx ALIAS NampGfx)
 
 # ---------------------------------------------------------------------------
 # The NAM DSP core as a static library, linked --whole-archive by everything that runs a model,
@@ -493,7 +499,9 @@ namp_add_gfx(NampRackGfx
 # No INCLUDE_DIRS: rations passes its own deps/ for the pedalboard's vendored DSP, and this product
 # has no pedals to vendor any for.
 # ---------------------------------------------------------------------------
-namp_add_dsp(NampRackDsp NampRackDspHeaders)
+namp_add_dsp(NampDsp NampDspHeaders)
+add_library(NampRackDsp ALIAS NampDsp)
+add_library(NampRackDspHeaders ALIAS NampDspHeaders)
 
 # ---------------------------------------------------------------------------
 # The amp, as a VST3 bundle.
