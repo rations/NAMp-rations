@@ -40,9 +40,9 @@ set(NAMPRACK_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # the same file it landed on before.
 #
 # The two ${NAMPRACK_ROOT}/src/* entries are scaffolding with a known end. They exist only because
-# canvas.h, resourcestore.h, respath.{h,cpp}, x11plugview.h and win32plugview.cpp still differ
-# between the products; when those unify into core/ the entries come out and the sibling lookups
-# are sibling lookups again.
+# resourcestore.h, respath.{h,cpp}, x11plugview.h and win32plugview.cpp still differ between the
+# products; when those unify into core/ the entries come out and the sibling lookups are sibling
+# lookups again.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
@@ -603,7 +603,7 @@ set(NAMPRACK_PLUGIN_SOURCES
     src/rationscontroller.h
     src/rationscontroller.cpp
     # The state blob's string reads, shared by the two functions above that decode one.
-    src/statestream.h
+    ${NAMP_CORE_DIR}/statestream.h
     src/rationsfactory.cpp
     ${NAMP_CORE_DIR}/engineconfig.h
     ${NAMP_CORE_DIR}/spscqueue.h

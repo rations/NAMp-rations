@@ -65,11 +65,11 @@ inline bool readStr8Checked(Steinberg::IBStreamer &streamer, std::string &out)
     // and is free to check — a one-byte checksum on every string field. It earns its place on
     // DESYNC: a reader that has lost its place reads a garbage length, and while most garbage
     // fails the bound above, a value that lands inside it would consume that many bytes and carry
-    // on, feeding nonsense into the trims and bindings that follow — all of which
-    // are plausible-looking doubles that nothing downstream can reject. This is the second,
-    // independent gate on the same read. Without it the failure is silent rather than loud: a
-    // corrupt "/caps/JCM800" becomes "/caps/JCM80", a path that resolves to nothing and looks to
-    // the user like a folder that moved rather than a project file that is damaged.
+    // on, feeding nonsense into the trims, the bindings and whatever the product appends after
+    // them — all of which are plausible-looking doubles that nothing downstream can reject. This
+    // is the second, independent gate on the same read. Without it the failure is silent rather
+    // than loud: a corrupt "/caps/JCM800" becomes "/caps/JCM80", a path that resolves to nothing
+    // and looks to the user like a folder that moved rather than a project file that is damaged.
     if (buf[static_cast<size_t>(length - 1)] != '\0')
         return false;
 
