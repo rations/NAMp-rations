@@ -43,7 +43,7 @@
 # or a second copy of this script will disturb the server underneath it and produce numbers that
 # look like measurements and are not.
 #
-# --budgets rewrites the kSwitchModelBudget line in src/engineconfig.h and rebuilds once per
+# --budgets rewrites the kSwitchModelBudget line in core/engineconfig.h and rebuilds once per
 # value. The original value is put back when the script exits, however it exits, AND the tree is
 # rebuilt from it — leaving the source saying one budget and the binary beside it built with
 # another would make every later measurement a measurement of a number nobody chose. Nothing else
@@ -51,9 +51,20 @@
 
 set -u
 
+# The REPOSITORY root, which is not this product's directory. Both matter and they are different
+# places: the build directories, the four dependency submodules, the shared core/ and the top-level
+# LICENSE live at the repository root, while this product's own resources, packaging, installer and
+# NOTICE live beside this script. Deriving only one of the two is what broke every one of these
+# scripts when the products moved under products/ -- silently, because none of them is run by the
+# phase gate.
 root=$(cd "$(dirname "$0")/.." && pwd)
-build="${RATIONS_BUILD_DIR:-$root/build}"
-config="$root/src/engineconfig.h"
+repo=$(cd "$root/../.." && pwd)
+build="${RATIONS_BUILD_DIR:-$repo/build}"
+# engineconfig.h is SHARED and lives in core/: both products switch channels on the same budget,
+# so --budgets sweeps one file and rebuilds whichever product is configured. It was
+# $root/src/engineconfig.h until the file moved, after which the sweep read nothing and the
+# gate carried on with an unreported budget.
+config="$repo/core/engineconfig.h"
 
 periods="128 256"
 budgets=""

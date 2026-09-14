@@ -31,7 +31,13 @@
 # particular restarts jackd, which is not a thing a packaging script may do to someone's session.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# PRODUCT is this product's own directory; REPO is the REPOSITORY root, and they have been
+# different places since the two products moved under products/. This script needs both: the build
+# directory, the CMake source root and the top-level LICENCE are the repository's, while the
+# resources, packaging, installer, NOTICE and README are this product's. Naming the product
+# directory "REPO" is what hid three separate breakages here, so it is named for what it is.
+PRODUCT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$PRODUCT/../.." && pwd)"
 BUILD="${RATIONS_BUILD_DIR:-$REPO/build}"
 ARCH="$(uname -m)"
 
@@ -42,7 +48,7 @@ cmake --build "$BUILD" --parallel "$(nproc)"
 # than duplicated, and read the SAME way makedist-windows.sh reads it, so the two releases cannot
 # be tagged differently from one another.
 VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
-  "$REPO/CMakeLists.txt" | head -1)"
+  "$PRODUCT/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2
   exit 1
@@ -237,15 +243,15 @@ for _f in manifest.ttl rations.ttl fonts/Michroma-Regular.ttf fonts/Roboto-Regul
 done
 
 # --- licence, attribution, launcher -----------------------------------------
-cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
+cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PRODUCT/README.md" "$PKGDIR/"
 
-if [ ! -f "$REPO/packaging/icons/namp-rations-256.png" ]; then
+if [ ! -f "$PRODUCT/packaging/icons/namp-rations-256.png" ]; then
   echo "the application icons are missing - run gui/make_icon.sh" >&2
   exit 1
 fi
 mkdir -p "$PKGDIR/desktop"
-cp "$REPO/packaging/namp-rations.desktop" "$PKGDIR/desktop/"
-cp "$REPO"/packaging/icons/namp-rations-*.png "$PKGDIR/desktop/"
+cp "$PRODUCT/packaging/namp-rations.desktop" "$PKGDIR/desktop/"
+cp "$PRODUCT"/packaging/icons/namp-rations-*.png "$PKGDIR/desktop/"
 
 cat > "$PKGDIR/install.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -482,8 +488,8 @@ Licence
 MIT. See LICENSE, and NOTICE for third-party attribution.
 EOF
 
-mkdir -p "$REPO/dist"
-TARBALL="$REPO/dist/NAMp-rations-${VERSION}-linux-${ARCH}.tar.gz"
+mkdir -p "$PRODUCT/dist"
+TARBALL="$PRODUCT/dist/NAMp-rations-${VERSION}-linux-${ARCH}.tar.gz"
 rm -f "$TARBALL"
 tar -czf "$TARBALL" -C "$STAGEDIR" "NAMp-rations-${VERSION}"
 

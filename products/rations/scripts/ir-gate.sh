@@ -20,7 +20,10 @@
 set -uo pipefail
 
 root="${RATIONS_IR_DIR:-$HOME/Impulse-Responses}"
-build="${RATIONS_BUILD_DIR:-build}"
+# The build directory is at the REPOSITORY root, two levels up from this product. It used to be
+# written as a bare relative "build", which resolved against whatever directory the caller
+# happened to be in and so appeared to work from the repository root and nowhere else.
+build="${RATIONS_BUILD_DIR:-$(cd "$(dirname "$0")/../../.." && pwd)/build}"
 bundle="$build/VST3/Release/NAMp-rations.vst3"
 tool="$build/rations_ircheck"
 # The cabinet stage is measured through the whole chain, so the channels have to be sounding

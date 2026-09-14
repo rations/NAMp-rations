@@ -68,8 +68,15 @@
 
 set -u
 
+# The REPOSITORY root, which is not this product's directory. Both matter and they are different
+# places: the build directories, the four dependency submodules, the shared core/ and the top-level
+# LICENSE live at the repository root, while this product's own resources, packaging, installer and
+# NOTICE live beside this script. Deriving only one of the two is what broke every one of these
+# scripts when the products moved under products/ -- silently, because none of them is run by the
+# phase gate.
 root=$(cd "$(dirname "$0")/.." && pwd)
-build="${RATIONS_BUILD_DIR:-$root/build}"
+repo=$(cd "$root/../.." && pwd)
+build="${RATIONS_BUILD_DIR:-$repo/build}"
 export DISPLAY="${DISPLAY:-:0}"
 
 size="1133x403"

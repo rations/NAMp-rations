@@ -32,7 +32,13 @@
 # for them, and it is a person listening.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# PRODUCT is this product's own directory; REPO is the REPOSITORY root, and they have been
+# different places since the two products moved under products/. This script needs both: the build
+# directory, the CMake source root and the top-level LICENCE are the repository's, while the
+# resources, packaging, installer, NOTICE and README are this product's. Naming the product
+# directory "REPO" is what hid three separate breakages here, so it is named for what it is.
+PRODUCT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$PRODUCT/../.." && pwd)"
 BUILD="${RATIONS_BUILD_DIR:-$REPO/build}"
 
 BUNDLES=()
@@ -58,7 +64,7 @@ done
 # makedist-windows.sh read it, so the three releases cannot be tagged differently
 # from one another.
 VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
-  "$REPO/CMakeLists.txt" | head -1)"
+  "$PRODUCT/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2
   exit 1
@@ -277,7 +283,7 @@ if [ -n "${RATIONS_NOTARIZE_PROFILE:-}" ]; then
 fi
 
 # --- licence, attribution, installer ----------------------------------------
-cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
+cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PRODUCT/README.md" "$PKGDIR/"
 
 cat > "$PKGDIR/install.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -487,13 +493,13 @@ EOF
 # (iPlug2/Scripts/notarise.sh). It preserves the resource forks and extended
 # attributes that an ordinary zip drops and that bsdtar turns into stray ._
 # files, which is what keeps the code signature intact through the download.
-mkdir -p "$REPO/dist"
+mkdir -p "$PRODUCT/dist"
 if [ "${#BUNDLES[@]}" -gt 1 ]; then
   SUFFIX="universal"
 else
   SUFFIX="$(uname -m)"
 fi
-ARCHIVE="$REPO/dist/NAMp-rations-${VERSION}-macos-${SUFFIX}.zip"
+ARCHIVE="$PRODUCT/dist/NAMp-rations-${VERSION}-macos-${SUFFIX}.zip"
 rm -f "$ARCHIVE"
 ditto -c -k --keepParent "$PKGDIR" "$ARCHIVE"
 

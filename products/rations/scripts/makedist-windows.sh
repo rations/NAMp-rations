@@ -34,7 +34,13 @@
 #                       NAMp-rations-install.exe.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# PRODUCT is this product's own directory; REPO is the REPOSITORY root, and they have been
+# different places since the two products moved under products/. This script needs both: the build
+# directory, the CMake source root and the top-level LICENCE are the repository's, while the
+# resources, packaging, installer, NOTICE and README are this product's. Naming the product
+# directory "REPO" is what hid three separate breakages here, so it is named for what it is.
+PRODUCT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="$(cd "$PRODUCT/../.." && pwd)"
 BUILD="$REPO/build-win"
 TRIPLE="${RATIONS_WIN_TRIPLE:-x86_64-w64-mingw32}"
 OBJDUMP="$TRIPLE-objdump"
@@ -75,14 +81,14 @@ if [ "${RATIONS_SKIP_INSTALLER:-0}" != "1" ] && [ -z "$MAKENSIS" ]; then
 fi
 
 cmake -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/toolchain-mingw-w64.cmake" -S "$REPO"
+      -DCMAKE_TOOLCHAIN_FILE="$PRODUCT/cmake/toolchain-mingw-w64.cmake" -S "$REPO"
 cmake --build "$BUILD" --parallel "$(nproc)"
 
 # The project() version, which is the first VERSION line in the top-level lists
 # file. Read rather than duplicated, so a release cannot be tagged one thing and
 # packaged as another.
 VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
-  "$REPO/CMakeLists.txt" | head -1)"
+  "$PRODUCT/CMakeLists.txt" | head -1)"
 if [ -z "$VERSION" ]; then
   echo "could not read the project version from CMakeLists.txt" >&2
   exit 1
@@ -315,23 +321,23 @@ else
     exit 1
   fi
 
-  "$LINUX_PANELRENDER" "$PANELS/lin" "$REPO/resources" 1.0 >/dev/null
+  "$LINUX_PANELRENDER" "$PANELS/lin" "$PRODUCT/resources" 1.0 >/dev/null
   # The resource directory is passed explicitly rather than left to
   # respath.cpp's module-relative fallback, which resolves to nothing for a
   # bare .exe sitting outside a bundle.
   wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
-       "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
+       "$(winepath -w "$PRODUCT/resources")" 1.0 >/dev/null
 
   # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
   # calls too -- one implementation, so the two platforms' figures are
   # produced the same way and stay comparable. The thresholds stay HERE
   # because they are this pair's measurement, not that script's.
   PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
-    "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
+    "$PRODUCT/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
 fi
 
 # --- licence, attribution and instructions ----------------------------------
-cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
+cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PRODUCT/README.md" "$PKGDIR/"
 
 cat > "$PKGDIR/INSTALL.txt" <<EOF
 NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head,
@@ -490,7 +496,7 @@ else
     "-DVERSION=$VERSION" "-DVERSION4=$VERSION4" \
     "-DBUNDLE_DIR=$PKGBUNDLE" "-DDOC_DIR=$PKGDIR" \
     "-DOUTFILE=$PKGDIR/NAMp-rations-install.exe" \
-    "$REPO/installer/namp-rations.nsi"
+    "$PRODUCT/installer/namp-rations.nsi"
 
   if [ ! -s "$PKGDIR/NAMp-rations-install.exe" ]; then
     echo "makensis produced no NAMp-rations-install.exe" >&2
@@ -504,8 +510,8 @@ else
   fi
 fi
 
-mkdir -p "$REPO/dist"
-ZIP="$REPO/dist/NAMp-rations-${VERSION}-windows-x86_64.zip"
+mkdir -p "$PRODUCT/dist"
+ZIP="$PRODUCT/dist/NAMp-rations-${VERSION}-windows-x86_64.zip"
 rm -f "$ZIP"
 # python3 rather than zip(1): zip is not installed everywhere and this needs no
 # extra package. -c takes the directory and stores it with its own name at the
