@@ -232,8 +232,8 @@ requires it in the product itself, not only in NOTICE."
   # its line breaks -- and a check that demanded one line would fail on a correctly formatted file.
   # It did: the notice sits across two lines at NOTICE:265-266 and the first version of this gate
   # called it missing.
-  tr -s '[:space:]' ' ' < "$PRODUCT/NOTICE" | grep -qF "$ASIO_NOTICE" ||
-    namp_dist_die "products/rack/NOTICE does not carry the ASIO trademark notice verbatim."
+  tr -s '[:space:]' ' ' < "$REPO/NOTICE" | grep -qF "$ASIO_NOTICE" ||
+    namp_dist_die "NOTICE does not carry the ASIO trademark notice verbatim."
 fi
 
 # THE SDK IS NOT IN THE WORKING TREE. The phase gate sweeps for this too, and it is repeated here
@@ -486,7 +486,7 @@ NOTEOF
 fi
 
 # --- licence, attribution, instructions --------------------------------------
-cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PKGDIR/"
+cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 if [ "$WANT_ASIO" = "ON" ]; then
   cp "$PRODUCT/COPYING.GPL-3" "$PRODUCT/LICENSE-windows-asio.txt" "$PKGDIR/"
 fi

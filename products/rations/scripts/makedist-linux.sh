@@ -143,7 +143,7 @@ namp_dist_abi_baseline "rations.lv2/rations.so"    "$PKGLV2/rations.so"
 namp_dist_abi_baseline "rations.lv2/rations_ui.so" "$PKGLV2/rations_ui.so"
 
 # --- licence, attribution, installer ----------------------------------------
-cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PRODUCT/README.md" "$PKGDIR/"
+cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
 {
   cat <<'EOF'

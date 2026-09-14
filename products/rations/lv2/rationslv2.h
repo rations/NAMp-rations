@@ -60,8 +60,19 @@ inline constexpr const char *kUiUri = "https://github.com/rations/NAMp-rations#u
 // LV2 has no major version, only these two, so the mapping from a three-part project version is a
 // decision rather than an arithmetic. It is made once here and CHECKED: the asserts below refuse
 // to build rather than let a version be carried across that would claim something untrue.
-inline constexpr int kLv2MinorVersion = SUB_VERSION_INT;
-inline constexpr int kLv2MicroVersion = RELEASE_NUMBER_INT;
+//
+// THE MAPPING IS DOUBLING, AND THE PROJECT'S OWN VERSION IS NOT CONSTRAINED BY IT. An earlier
+// version of this file used the project's numbers directly, which quietly made LV2's convention
+// into a rule about the product: 0.3.0 would not build, because 3 is odd. That is backwards. A
+// project numbers its releases; LV2 numbers a BUNDLE, and what its numbers describe is port-table
+// compatibility and release status, not a product. The two are different facts and only one of
+// them is anybody's to choose.
+//
+// So the project version is whatever the project says, and the bundle's is derived from it by
+// doubling: even by construction, monotonically increasing with the project's own numbering, and
+// needing no second list for anyone to keep in step. Nothing is skipped and no release is renamed.
+inline constexpr int kLv2MinorVersion = 2 * SUB_VERSION_INT;
+inline constexpr int kLv2MicroVersion = 2 * RELEASE_NUMBER_INT;
 static_assert(MAJOR_VERSION_INT == 0,
               "LV2 has no major version. Decide how the project's MAJOR maps onto "
               "lv2:minorVersion before releasing 1.0, and keep lv2:minorVersion monotonically "
@@ -70,8 +81,10 @@ static_assert(kLv2MinorVersion != 0,
               "lv2:minorVersion 0 declares a pre-release plug-in that hosts are told not to show "
               "by default. Give this release an even, non-zero minor version.");
 static_assert(kLv2MinorVersion % 2 == 0 && kLv2MicroVersion % 2 == 0,
-              "LV2 reads an odd lv2:minorVersion or lv2:microVersion as a development build. "
-              "Choose the even numbers this release should carry.");
+              "LV2 reads an odd lv2:minorVersion or lv2:microVersion as a development build that "
+              "hosts SHOULD NOT expose by default. The doubling above makes that impossible, so "
+              "this fires only if the mapping itself was changed - which is a decision to make "
+              "deliberately, not a number to adjust.");
 
 // The VST3 files the plug-in under stringSubCategory. LV2's taxonomy is a class rather than a
 // string, and this is that category's name in it (verified against lv2core.ttl, where

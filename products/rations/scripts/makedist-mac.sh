@@ -283,7 +283,7 @@ if [ -n "${RATIONS_NOTARIZE_PROFILE:-}" ]; then
 fi
 
 # --- licence, attribution, installer ----------------------------------------
-cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PRODUCT/README.md" "$PKGDIR/"
+cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
 cat > "$PKGDIR/install.sh" <<'EOF'
 #!/usr/bin/env bash

@@ -353,7 +353,7 @@ else
 fi
 
 # --- licence, attribution and instructions ----------------------------------
-cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PRODUCT/README.md" "$PKGDIR/"
+cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
 cat > "$PKGDIR/INSTALL.txt" <<EOF
 NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head,

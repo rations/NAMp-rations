@@ -217,7 +217,7 @@ pedals looks complete and is not."
 cp "$REPO/rations-pedals/NOTICE" "$PKGDIR/pedals/NOTICE"
 
 # --- licence, attribution, installer ----------------------------------------
-cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PKGDIR/"
+cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
 {
   cat <<'EOF'
