@@ -855,16 +855,10 @@ else()
 endif()
 
 # NO -ffast-math ON THIS TARGET, and the absence is asserted rather than left to review.
-# clampChainOutput() in chainengine.cpp is built out of an std::isfinite() test, and
-# -ffinite-math-only gives the compiler permission to assume that test's answer and delete it — at
-# which point a hosted plug-in emitting NaN reaches the speakers and nothing in the tree says so.
-get_target_property(_namprack_host_flags NampRackHost COMPILE_OPTIONS)
-if(_namprack_host_flags MATCHES "ffast-math|ffinite-math-only")
-    message(FATAL_ERROR
-        "NampRackHost carries ${_namprack_host_flags}. The end-of-chain NaN clamp in "
-        "chainengine.cpp is an std::isfinite() test, and -ffinite-math-only lets the compiler "
-        "delete it. Whatever added that flag has to exclude this target.")
-endif()
+namp_assert_no_fast_math(NampRackHost
+    "clampChainOutput() in chainengine.cpp is built out of an std::isfinite() test, and \
+-ffinite-math-only gives the compiler permission to assume that test's answer and delete it — at \
+which point a hosted plug-in emitting NaN reaches the speakers and nothing in the tree says so.")
 
 # ---------------------------------------------------------------------------
 # NampRackRack — the rack strip's model and its drawing. Links NampRackGfx (cairo/freetype) and
@@ -886,6 +880,29 @@ target_link_libraries(NampRackRack PUBLIC NampRackGfx NampRackHost)
 target_compile_features(NampRackRack PUBLIC cxx_std_17)
 set_target_properties(NampRackRack PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(NampRackRack PRIVATE -Wall)
+
+# The fourth target on the no-fast-math side of the split, and its reason is NOT the other three's.
+# Measured rather than asserted: src/rack/ contains no isfinite(), no isnan() and no NaN test of any
+# kind, so there is today no check here for -ffinite-math-only to delete. Two things put it on this
+# side anyway.
+#
+# The first is what the code does. GenericPanel reads a parameter value out of a HOSTED plug-in's
+# binary and turns it into a position, and turns a pointer position back into a value it hands to
+# that plug-in. That is the same untrusted-float boundary NampRackHost and NampRackWinAudio guard,
+# one layer up and facing the user instead of the speaker, and it is where the first such test in
+# this library will be written. A guard added the day the test appears is a guard added after the
+# window in which it would have mattered.
+#
+# The second is that the split is a declaration, and an incomplete one is not enforceable.
+# -ffast-math is ON for every *Dsp target, both bundles, NampRackPlugin and both LV2 modules, and
+# OFF here; a build change that adds it broadly is caught on three of the four targets that must
+# not have it, and "caught on most of them" is not a property anyone can rely on. Note that
+# NampRackGfx is also unguarded and is also built without the flag -- it draws what it is given and
+# reads no hosted value, so it is left out deliberately rather than overlooked.
+namp_assert_no_fast_math(NampRackRack
+    "It reads parameter values out of hosted plug-ins and turns them into geometry, and it is \
+declared to be on the no-fast-math side of the split along with NampRackHost, NampRackWinAudio \
+and namp_audiocheck.")
 
 # ---------------------------------------------------------------------------
 # NampRackWinAudio — the Windows audio backends and MIDI input.
@@ -955,14 +972,9 @@ if(WIN32)
         target_compile_definitions(NampRackWinAudio PUBLIC NAMPRACK_HAVE_ASIO=0)
     endif()
 
-    get_target_property(_namprack_winaudio_flags NampRackWinAudio COMPILE_OPTIONS)
-    if(_namprack_winaudio_flags MATCHES "ffast-math|ffinite-math-only")
-        message(FATAL_ERROR
-            "NampRackWinAudio carries ${_namprack_winaudio_flags}. pcmsamples.h's conversion is "
-            "what stops a NaN from becoming a full-scale square wave at the device, and "
-            "-ffinite-math-only lets the compiler delete the test that does it. Whatever added that "
-            "flag has to exclude this target.")
-    endif()
+    namp_assert_no_fast_math(NampRackWinAudio
+        "pcmsamples.h's conversion is what stops a NaN from becoming a full-scale square wave at \
+the device, and -ffinite-math-only lets the compiler delete the test that does it.")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -1088,11 +1100,9 @@ if(NAMPRACK_BUILD_TOOLS)
     target_compile_options(namp_audiocheck PRIVATE -Wall -Wextra)
     # Same rule as NampRackWinAudio, and here it is the gate itself that would be defeated: with
     # -ffinite-math-only the compiler may assume the NaN case away in the very code under test.
-    get_target_property(_namprack_audiocheck_flags namp_audiocheck COMPILE_OPTIONS)
-    if(_namprack_audiocheck_flags MATCHES "ffast-math|ffinite-math-only")
-        message(FATAL_ERROR "namp_audiocheck must not be built with fast math: it is the gate on "
-                            "what happens to a NaN.")
-    endif()
+    namp_assert_no_fast_math(namp_audiocheck
+        "It is the gate on what happens to a NaN, so fast math would defeat the gate itself \
+rather than merely the code under it.")
 
     # The offline panel render: every page drawn without a host, which is the cheapest UI
     # regression test in the tree and the gate on every layout change.

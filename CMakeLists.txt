@@ -111,29 +111,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-# The include path's rule, made usable by a source list. Resolve a repository-relative path
-# against this product first and the shared core second -- the same order, for the same reason, as
-# NAMP_CORE_INCLUDES in each product's own file.
-#
-# It exists because a source list can hold a path built from a loop variable, and such a path
-# cannot be repointed file by file. products/rack builds its offline proofs in two foreach loops,
-# and each loop now names some tools that are shared and some that are not; without this, keeping
-# them in one loop would mean deciding by hand which is which and writing the answer down twice.
-#
-# Only the top-level directories that core/ mirrors exactly -- tools/, standalone/, deps/ -- can be
-# resolved this way. core/ deliberately does NOT mirror src/: a product's src/foo.h is core/foo.h,
-# because core/ IS a source root rather than a directory inside one. Source paths under src/ are
-# written out in full and say which tree they mean.
-function(namp_source out rel)
-    if(EXISTS "${NAMP_PRODUCT_DIR}/${rel}")
-        set(${out} "${NAMP_PRODUCT_DIR}/${rel}" PARENT_SCOPE)
-    elseif(EXISTS "${NAMP_CORE_DIR}/${rel}")
-        set(${out} "${NAMP_CORE_DIR}/${rel}" PARENT_SCOPE)
-    else()
-        message(FATAL_ERROR
-            "namp_source: '${rel}' is in neither products/${NAMP_PRODUCT}/ nor core/.")
-    endif()
-endfunction()
+# The shared vocabulary: namp_source() and the fast-math assertion, plus the recipes each product
+# uses to build the amp's graphics and DSP libraries out of core/. Included HERE rather than from
+# each product, so both products meet one definition of each and a third product would inherit them
+# by existing. It defines functions only -- no targets, no variables, nothing that depends on which
+# product is being configured.
+include("${NAMP_REPO_ROOT}/cmake/nampcore.cmake")
 
 message(STATUS "")
 message(STATUS "[NAMp] product: ${NAMP_PRODUCT}  (products/${NAMP_PRODUCT})")
