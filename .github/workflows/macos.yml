@@ -19,7 +19,7 @@
 # capture-dependent proof (rations_offline, ir-gate.sh, rations_switchcheck, most
 # of rations_midicheck) needs .nam banks, and the plug-in ships none because the
 # captures are not ours to distribute. The macOS DSP path is therefore unmeasured,
-# and docs/macos-testing.md is what stands in for it -- a person listening. The
+# and products/rations/docs/macos-testing.md is what stands in for it -- a person listening. The
 # thing that would close it properly is a synthetic .nam fixture generator, which
 # would close it for Linux and Windows at the same time.
 name: macOS
@@ -40,18 +40,27 @@ name: macOS
 on:
   push:
     branches: ['**']
+    # EIGHT OF THESE ENTRIES MATCHED NOTHING until stage 7 repaired them. They were
+    # written when this repository was one product with a src/ and a scripts/ at the
+    # top, and stage 2 moved every one of those under products/rations/. A dead
+    # paths-ignore entry fails in the safe direction -- the job runs when it need not
+    # -- which is exactly why nobody noticed for five stages.
+    #
+    # Only 'scripts/build-win-deps.sh' is a repository-root path again, because stage
+    # 7 made that script shared and moved it back to the root on purpose.
     paths-ignore: &docs_only
       - '**.md'
-      - 'docs/**'
+      - 'products/rations/docs/**'
       - 'LICENSE'
-      - 'NOTICE'
+      - 'products/*/NOTICE'
       - '.gitignore'
-      - 'installer/**'
-      - 'standalone/**'
-      - 'scripts/makedist-linux.sh'
-      - 'scripts/makedist-windows.sh'
+      - 'products/rations/installer/**'
+      - 'products/rations/standalone/**'
+      - 'products/rations/scripts/makedist-linux.sh'
+      - 'products/rations/scripts/makedist-windows.sh'
       - 'scripts/build-win-deps.sh'
-      - 'gui/**'
+      - 'products/rations/gui/**'
+      - 'products/rack/**'
   pull_request:
     paths-ignore: *docs_only
   workflow_dispatch:
@@ -137,7 +146,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/third_party/mac-deps
-          key: macdeps-${{ matrix.arch }}-${{ hashFiles('scripts/build-mac-deps.sh') }}
+          key: macdeps-${{ matrix.arch }}-${{ hashFiles('products/rations/scripts/build-mac-deps.sh') }}
 
       # Run unconditionally, cache hit or not: the script is idempotent through
       # per-module stamp files that live inside the cached tree, so on a hit it
@@ -145,7 +154,7 @@ jobs:
       # if a cached tree is incomplete or has acquired a dylib. Gating it on
       # cache-miss would mean a corrupt cache is discovered at link time.
       - name: Dependency sysroot (static cairo/freetype/pixman/png/zlib)
-        run: scripts/build-mac-deps.sh
+        run: products/rations/scripts/build-mac-deps.sh
         env:
           RATIONS_MAC_ARCH: ${{ matrix.arch }}
 
@@ -206,7 +215,7 @@ jobs:
       - name: Render and audit the editor pages
         run: |
           mkdir -p panels
-          ./build/panelrender panels/mac resources 1.0
+          ./build/panelrender panels/mac products/rations/resources 1.0
 
       # moduleinfo.json is generated for us: SMTG_CREATE_MODULE_INFO defaults ON
       # and its POST_BUILD step runs a natively-built moduleinfotool, which is why
@@ -330,7 +339,7 @@ jobs:
     # matter -- but the label still has to be one that exists. See the matrix.
     runs-on: macos-15
     steps:
-      # For scripts/makedist-mac.sh and for the version, which it reads out of
+      # For products/rations/scripts/makedist-mac.sh and for the version, which it reads out of
       # CMakeLists.txt the same way the Linux and Windows scripts do so the three
       # releases cannot be tagged differently. No submodules and no build here.
       - uses: actions/checkout@v5
@@ -357,7 +366,7 @@ jobs:
       - name: Package
         id: package
         run: |
-          scripts/makedist-mac.sh \
+          products/rations/scripts/makedist-mac.sh \
             --bundle slices/arm64/NAMp-rations.vst3 \
             --bundle slices/x86_64/NAMp-rations.vst3
 
@@ -409,7 +418,7 @@ jobs:
   # push. Comparing against the LINUX render would need this repository to carry
   # 1.5 MB of committed PNGs that go stale on every art edit; that comparison is
   # run by hand instead -- download the panels-arm64 artifact and point
-  # scripts/panel-diff.sh at it and at a local `build/panelrender` render.
+  # products/rations/scripts/panel-diff.sh at it and at a local `build/panelrender` render.
   #
   # THE THRESHOLDS ARE MEASURED. They were a placeholder borrowed from the
   # Linux-versus-Windows diff until this pair had ever been run; it has now, at
@@ -464,5 +473,5 @@ jobs:
           PANEL_MAX_DELTA: 1
         run: |
           ls -R panels
-          scripts/panel-diff.sh \
+          products/rations/scripts/panel-diff.sh \
             panels/panels-arm64 mac panels/panels-x86_64 mac arm64 x86_64
