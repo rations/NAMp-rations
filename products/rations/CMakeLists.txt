@@ -50,10 +50,10 @@ set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # the same file it landed on before.
 #
 # The ${RATIONS_ROOT}/src/platform entry is scaffolding with a known end. It exists only because
-# x11plugview.h and win32plugview.cpp still differ between the products; when those unify the
-# entry comes out and the sibling lookups are sibling lookups again. src/gfx has already gone that
-# way -- canvas.h and resourcestore.h were the last two files in it, and its entry came out with
-# them.
+# x11plugview.h still differs between the products, and products/rations additionally keeps a
+# macplugview it alone has; when x11plugview.h unifies the entry can come out for the rack. src/gfx
+# has already gone that way -- canvas.h and resourcestore.h were the last two files in it, and its
+# entry came out with them.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
@@ -665,7 +665,7 @@ endforeach()
 if(RATIONS_WINDOWS)
     set(RATIONS_PLATFORM_VIEW_SOURCES
         ${NAMP_CORE_DIR}/platform/win32plugview.h
-        src/platform/win32plugview.cpp
+        ${NAMP_CORE_DIR}/platform/win32plugview.cpp
     )
 elseif(RATIONS_MACOS)
     set(RATIONS_PLATFORM_VIEW_SOURCES
