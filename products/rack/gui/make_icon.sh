@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# NAMp Rations — generate the application icon for the Linux standalone (ImageMagick 7).
+# NAMp Rack — generate the application icon for the standalone (ImageMagick 7).
 # Copyright (c) 2026 rations. MIT licence (see LICENSE).
 #
 # The icon is the amp head wearing its own wordmark, drawn in the panel's own face:
 # resources/img/icon-base.png is a bare head — no wordmark, because the panel's wordmark is
 # composed at run time and does not exist as one picture anywhere — and this script stacks the
-# NAMp badge over "Rations" onto its faceplate, exactly as src/rationsview.cpp draws them, then
+# NAMp badge over "Rack" onto its faceplate, exactly as src/rationsview.cpp draws them, then
 # cuts the icon sizes from the result.
 #
 # THE STACK IS THE PANEL'S; ITS PROPORTIONS ARE NOT, and the reason is measured below. Two other
@@ -32,7 +32,7 @@ BASE="$REPO/resources/img/icon-base.png"
 BADGE="$REPO/resources/img/namp-badge.png"
 FONT="$REPO/resources/fonts/Michroma-Regular.ttf"
 OUT="$REPO/packaging/icons"
-TEXT="${RATIONS_ICON_TEXT:-Rations}"
+TEXT="${NAMP_ICON_TEXT:-Rack}"
 
 # THE SPLIT IS THE ICON'S OWN, and it was settled by rendering four of them and looking at the
 # 48 px result rather than by arithmetic. The panel puts a 72-unit badge over a word whose cap
@@ -46,11 +46,17 @@ TEXT="${RATIONS_ICON_TEXT:-Rations}"
 # script assumed: giving the badge MORE of the height makes the icon more identifiable at 48 px,
 # not less. At 52 the badge is 5.5 px and does not read as "NAMp" - it is a gold smear with a word
 # under it. At 70 it is 7.5 px and reads. The word is what pays, dropping from 4.4 px to 2.5, and
-# that is the right trade because THE BADGE IS THE IDENTITY: no seven-letter word inside a third of
-# a 48 px icon is readable at any split, so a word large enough to look readable there is only
-# taking room from the element that genuinely is. The word comes back at 64 px and up, which is
-# where it is worth having. 76 was rejected for that reason at the other end - the word stops being
-# a second line at all.
+# that is the right trade because THE BADGE IS THE IDENTITY: no word inside a third of a 48 px icon
+# is readable at any split, so a word large enough to look readable there is only taking room from
+# the element that genuinely is. The word comes back at 64 px and up, which is where it is worth
+# having. 76 was rejected for that reason at the other end - the word stops being a second line at
+# all.
+#
+# THE SHARE SETS THE WORD'S HEIGHT, NOT ITS LENGTH, so a shorter word does not come out taller --
+# it comes out NARROWER at the same ink height. "Rack" measures the same 2.5 px on the 48 px icon
+# as the sibling's seven-letter mark does; what four letters buy is legibility from 64 px up,
+# where the same ink is spread over less width. That is why this product inherits the shares
+# unchanged instead of re-running the comparison for its own word.
 BADGE_HEIGHT_SHARE=70 # of the usable faceplate height
 GAP_SHARE=6           # between the badge's ink and the word's cap top; the rest is the word
 MIN_MARGIN=4          # px of faceplate that must stay clear on every side, at the base art's scale
@@ -105,7 +111,7 @@ mid_y, mid_x = H // 2, W // 2
 h_runs = runs([x for x in range(W) if gold(px(x, mid_y))])
 v_runs = runs([y for y in range(H) if gold(px(mid_x, y))])
 if len(h_runs) < 2 or len(v_runs) < 2:
-    sys.exit("make_icon.sh: no gold piping found in the base art - is this a NAMp Rations head?")
+    sys.exit("make_icon.sh: no gold piping found in the base art - is this a NAMp head?")
 
 # The innermost run on each side: the last one before the middle, and the first one after it.
 left = max(r for r in h_runs if r[1] < mid_x)[1]
@@ -128,7 +134,7 @@ echo "make_icon.sh: faceplate ${PANEL_W}x${PANEL_H} at +${PANEL_X}+${PANEL_Y}, t
 # --- lay the stack out on the faceplate ------------------------------------
 # Everything is measured at its INK. The badge PNG carries a transparent margin (make_assets.sh
 # borders it before the resize) and a font's label box carries ascender and descender space the
-# word "Rations" does not use, so sizing either one by its canvas would leave the stack floating
+# word "Rack" does not use, so sizing either one by its canvas would leave the stack floating
 # inside a box of nothing and would make the two elements disagree about what "the same width"
 # means. -trim on the label and an alpha bounding box on the badge give the real marks.
 BASE_W="$(magick "$BASE" -format '%w' info:)"
@@ -172,7 +178,10 @@ echo "make_icon.sh: badge ${BADGE_W}x${BADGE_H}, \"$TEXT\" ${TEXT_W}x${TEXT_H} a
 #
 # TWO FLOORS, BECAUSE THE TWO ELEMENTS DO DIFFERENT JOBS. Both are measured at INK - not at the
 # font's box or the PNG's canvas, which are half again as tall and which an earlier version of this
-# script compared against, reporting 6.6 px for a "Rations Amp" that was really 4.25.
+# script compared against, reporting 6.6 px for a two-word mark that was really 4.25. That
+# measurement was made on the sibling product's longer wordmark, which is where these shares
+# and both floors come from; a shorter word than that one can only do better at the same ink
+# height, so they are inherited rather than re-derived here.
 #
 # Neither number is a claim that the element is READABLE at that size; they are regression gates,
 # set below what this design achieves with margin, the same way the IR blend and the Windows panel
@@ -233,6 +242,14 @@ magick "$BASE" \
 # FULL BLEED ACROSS THE TILE, decided by looking at 48-pixel candidates rather than by taste: the
 # head inset to 92% of the width lost enough of the name to matter at 64 px and at 48 px, and the
 # tile's corners are pure tolex either way because the head occupies about a third of the height.
+#
+# NO CLOCK IN THE OUTPUT. ImageMagick writes a tIME chunk and three date:create / date:modify /
+# date:timestamp tEXt chunks into every PNG, so re-running this script produces four files that
+# differ from the committed ones in their bytes while being identical in every pixel -- measured,
+# not assumed: the IDAT is the same length and `magick compare -metric AE` reports 0 at all four
+# sizes. That is the same shape as the PE TimeDateStamp the Windows link used to carry, and it has
+# the same cost: it makes "the art did not move" uncheckable by hash, which is this project's one
+# verification method. Excluding the two chunk groups makes a re-run byte-identical.
 mkdir -p "$OUT"
 for SIZE in 256 128 64 48; do
   INNER=$SIZE
@@ -242,7 +259,8 @@ for SIZE in 256 128 64 48; do
        -fill "$TOLEX" -draw "roundrectangle 0,0 $((SIZE - 1)),$((SIZE - 1)) $RADIUS,$RADIUS" \) \
     \( "$tmp/head.png" -resize ${INNER}x \) \
     -gravity center -compose over -composite \
-    "PNG32:$OUT/namp-rations-${SIZE}.png"
+    -define png:exclude-chunk=date,time \
+    "PNG32:$OUT/namp-rack-${SIZE}.png"
 done
 
-echo "make_icon.sh: wrote $OUT/namp-rations-{256,128,64,48}.png"
+echo "make_icon.sh: wrote $OUT/namp-rack-{256,128,64,48}.png"

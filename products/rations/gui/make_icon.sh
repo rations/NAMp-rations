@@ -32,7 +32,7 @@ BASE="$REPO/resources/img/icon-base.png"
 BADGE="$REPO/resources/img/namp-badge.png"
 FONT="$REPO/resources/fonts/Michroma-Regular.ttf"
 OUT="$REPO/packaging/icons"
-TEXT="${RATIONS_ICON_TEXT:-Rations}"
+TEXT="${NAMP_ICON_TEXT:-Rations}"
 
 # THE SPLIT IS THE ICON'S OWN, and it was settled by rendering four of them and looking at the
 # 48 px result rather than by arithmetic. The panel puts a 72-unit badge over a word whose cap
@@ -233,6 +233,14 @@ magick "$BASE" \
 # FULL BLEED ACROSS THE TILE, decided by looking at 48-pixel candidates rather than by taste: the
 # head inset to 92% of the width lost enough of the name to matter at 64 px and at 48 px, and the
 # tile's corners are pure tolex either way because the head occupies about a third of the height.
+#
+# NO CLOCK IN THE OUTPUT. ImageMagick writes a tIME chunk and three date:create / date:modify /
+# date:timestamp tEXt chunks into every PNG, so re-running this script produces four files that
+# differ from the committed ones in their bytes while being identical in every pixel -- measured,
+# not assumed: the IDAT is the same length and `magick compare -metric AE` reports 0 at all four
+# sizes. That is the same shape as the PE TimeDateStamp the Windows link used to carry, and it has
+# the same cost: it makes "the art did not move" uncheckable by hash, which is this project's one
+# verification method. Excluding the two chunk groups makes a re-run byte-identical.
 mkdir -p "$OUT"
 for SIZE in 256 128 64 48; do
   INNER=$SIZE
@@ -242,6 +250,7 @@ for SIZE in 256 128 64 48; do
        -fill "$TOLEX" -draw "roundrectangle 0,0 $((SIZE - 1)),$((SIZE - 1)) $RADIUS,$RADIUS" \) \
     \( "$tmp/head.png" -resize ${INNER}x \) \
     -gravity center -compose over -composite \
+    -define png:exclude-chunk=date,time \
     "PNG32:$OUT/namp-rations-${SIZE}.png"
 done
 
