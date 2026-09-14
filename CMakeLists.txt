@@ -28,13 +28,12 @@
 # exactly one place each, with no use of CMAKE_SOURCE_DIR anywhere. That is why this costs five
 # lines per product rather than a rewrite.
 #
-# include() rather than add_subdirectory(), because the product file must run in THIS scope: it
-# sets CMAKE_OSX_DEPLOYMENT_TARGET and CMAKE_OSX_ARCHITECTURES before its own project() call, and
-# those are read during compiler detection and by every try_compile the SDK's checks run. A
-# subdirectory would call project() in a scope of its own, after this file had already configured
-# a compiler, and the macOS slice would be probed against one deployment target and compiled
-# against another. The comment at that site in products/rations/CMakeLists.txt says the same thing
-# from the other end.
+# add_subdirectory() rather than include(), which was tried first and does not work. A top-level
+# file must contain a LITERAL project() call; without one CMake invents project(Project) on line 1
+# and detects a compiler THERE, ahead of the CMAKE_OSX_* variables below, which is exactly the
+# ordering those variables exist to prevent. Hoisting them here and calling project() here fixes
+# that -- and then the product file has to run as a subdirectory anyway, because under include()
+# its relative source paths would resolve against this directory instead of its own.
 
 cmake_minimum_required(VERSION 3.25.0)
 
@@ -46,6 +45,19 @@ set_property(CACHE NAMP_PRODUCT PROPERTY STRINGS rations rack)
 # NeuralAmpModelerCore, one AudioDSPTools and one eigen in this tree, at the pins both trees
 # already agreed on, and a second copy of any of them is a way for the two products to differ.
 set(NAMP_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+
+# The shared amp. Sources only -- core/ defines no targets and is not a subdirectory of the build:
+# each product compiles these files into targets of its own, with its own compile options. That is
+# forced by three measured facts rather than chosen: the two products' gfx libraries do not have the
+# same membership, the rack compiles the amp twice with different link treatment, and -ffast-math is
+# on for some consumers and asserted OFF for others. A single prebuilt core library could satisfy
+# none of the three.
+#
+# A product's own src/ comes FIRST on the include path and core/ second, so a header that exists in
+# both resolves to the product's. That is how "which product am I in" stays an include-path fact
+# instead of an #ifdef: core/gfx/widgets.h includes "canvas.h" and gets whichever canvas.h belongs
+# to the product being built.
+set(NAMP_CORE_DIR "${NAMP_REPO_ROOT}/core")
 
 set(NAMP_PRODUCT_DIR "${NAMP_REPO_ROOT}/products/${NAMP_PRODUCT}")
 if(NOT EXISTS "${NAMP_PRODUCT_DIR}/CMakeLists.txt")
@@ -98,6 +110,30 @@ project(NAMp LANGUAGES C CXX)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+# The include path's rule, made usable by a source list. Resolve a repository-relative path
+# against this product first and the shared core second -- the same order, for the same reason, as
+# NAMP_CORE_INCLUDES in each product's own file.
+#
+# It exists because a source list can hold a path built from a loop variable, and such a path
+# cannot be repointed file by file. products/rack builds its offline proofs in two foreach loops,
+# and each loop now names some tools that are shared and some that are not; without this, keeping
+# them in one loop would mean deciding by hand which is which and writing the answer down twice.
+#
+# Only the top-level directories that core/ mirrors exactly -- tools/, standalone/, deps/ -- can be
+# resolved this way. core/ deliberately does NOT mirror src/: a product's src/foo.h is core/foo.h,
+# because core/ IS a source root rather than a directory inside one. Source paths under src/ are
+# written out in full and say which tree they mean.
+function(namp_source out rel)
+    if(EXISTS "${NAMP_PRODUCT_DIR}/${rel}")
+        set(${out} "${NAMP_PRODUCT_DIR}/${rel}" PARENT_SCOPE)
+    elseif(EXISTS "${NAMP_CORE_DIR}/${rel}")
+        set(${out} "${NAMP_CORE_DIR}/${rel}" PARENT_SCOPE)
+    else()
+        message(FATAL_ERROR
+            "namp_source: '${rel}' is in neither products/${NAMP_PRODUCT}/ nor core/.")
+    endif()
+endfunction()
 
 message(STATUS "")
 message(STATUS "[NAMp] product: ${NAMP_PRODUCT}  (products/${NAMP_PRODUCT})")

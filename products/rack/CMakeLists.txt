@@ -25,6 +25,34 @@ project(namp-rack
 
 set(NAMPRACK_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+# The shared amp's include path, appended wherever this product's own src/ is already on it.
+#
+# ORDER IS THE MECHANISM: the product's src/ stays FIRST and core/ follows, so a header that exists
+# in both resolves to this product's copy. That is what lets core/gfx/widgets.h say #include
+# "canvas.h" and get the canvas.h belonging to whichever product is being built, with no #ifdef and
+# nothing in core/ knowing which product it is in.
+#
+# The subdirectory entries are not decoration. A quoted #include is resolved against the including
+# FILE's own directory first, so core/gfx/canvas.cpp reaching a sibling "resourcestore.h" stopped
+# being a sibling lookup the moment the two files landed in different trees. Each entry below is
+# the directory that restores exactly one such pair, and no more: the set was derived by resolving
+# every quoted include in both products before and after the move and requiring each one to land on
+# the same file it landed on before.
+#
+# The two ${NAMPRACK_ROOT}/src/* entries are scaffolding with a known end. They exist only because
+# canvas.h, resourcestore.h, respath.{h,cpp}, x11plugview.h and win32plugview.cpp still differ
+# between the products; when those unify into core/ the entries come out and the sibling lookups
+# are sibling lookups again.
+set(NAMP_CORE_INCLUDES
+    ${NAMP_CORE_DIR}
+    ${NAMP_CORE_DIR}/platform
+    ${NAMP_CORE_DIR}/tools
+    ${NAMP_CORE_DIR}/standalone
+    ${NAMP_CORE_DIR}/deps/tonestack
+    ${NAMPRACK_ROOT}/src/gfx
+    ${NAMPRACK_ROOT}/src/platform)
+
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
@@ -434,7 +462,7 @@ if(WIN32)
     # messages, msimg32 for AlphaBlend.
     set(NAMPRACK_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
     set(NAMPRACK_PLATFORM_VIEW_SOURCES
-        ${NAMPRACK_ROOT}/src/platform/win32plugview.h
+        ${NAMP_CORE_DIR}/platform/win32plugview.h
         ${NAMPRACK_ROOT}/src/platform/win32plugview.cpp)
 else()
     pkg_check_modules(CAIROFT REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2 fontconfig)
@@ -442,24 +470,24 @@ else()
     set(NAMPRACK_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
     set(NAMPRACK_PLATFORM_VIEW_SOURCES
         ${NAMPRACK_ROOT}/src/platform/x11plugview.h
-        ${NAMPRACK_ROOT}/src/platform/x11plugview.cpp)
+        ${NAMP_CORE_DIR}/platform/x11plugview.cpp)
 endif()
 
 add_library(NampRackGfx STATIC
-    ${NAMPRACK_ROOT}/src/gfx/canvas.cpp
-    ${NAMPRACK_ROOT}/src/gfx/fontstack.cpp
-    ${NAMPRACK_ROOT}/src/gfx/image.cpp
-    ${NAMPRACK_ROOT}/src/gfx/svg.cpp
+    ${NAMP_CORE_DIR}/gfx/canvas.cpp
+    ${NAMP_CORE_DIR}/gfx/fontstack.cpp
+    ${NAMP_CORE_DIR}/gfx/image.cpp
+    ${NAMP_CORE_DIR}/gfx/svg.cpp
     ${NAMPRACK_ROOT}/src/gfx/resourcestore.h
-    ${NAMPRACK_ROOT}/src/gfx/resourcestore.cpp
+    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
     ${NAMPRACK_ROOT}/src/platform/respath.cpp
     # The in-plug-in file browser lives here rather than with the plug-in because it is drawn with
     # Canvas and nothing else, and the rack needs the same one to choose a plug-in search folder.
     # Two browsers would drift, and the one the user already knows is the one the rack should open.
-    ${NAMPRACK_ROOT}/src/filebrowser.h
-    ${NAMPRACK_ROOT}/src/filebrowser.cpp
+    ${NAMP_CORE_DIR}/filebrowser.h
+    ${NAMP_CORE_DIR}/filebrowser.cpp
 )
-target_include_directories(NampRackGfx PUBLIC ${NAMPRACK_ROOT}/src)
+target_include_directories(NampRackGfx PUBLIC ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
 target_link_libraries(NampRackGfx PUBLIC PkgConfig::CAIROFT ${CMAKE_DL_LIBS})
 target_compile_features(NampRackGfx PUBLIC cxx_std_17)
 set_target_properties(NampRackGfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -488,7 +516,7 @@ add_library(NampRackDsp STATIC
     ${AUDIO_DSP_TOOLS_DIR}/dsp/NoiseGate.cpp
     ${AUDIO_DSP_TOOLS_DIR}/dsp/RecursiveLinearFilter.cpp
     ${AUDIO_DSP_TOOLS_DIR}/dsp/wav.cpp
-    ${NAMPRACK_ROOT}/deps/tonestack/ToneStack.cpp
+    ${NAMP_CORE_DIR}/deps/tonestack/ToneStack.cpp
 )
 
 # What it takes to COMPILE against those headers, held on an INTERFACE library separate from the
@@ -577,25 +605,25 @@ set(NAMPRACK_PLUGIN_SOURCES
     # The state blob's string reads, shared by the two functions above that decode one.
     src/statestream.h
     src/rationsfactory.cpp
-    src/engineconfig.h
-    src/spscqueue.h
-    src/bank.h
-    src/nativeresampler.h
-    src/capturesource.h
-    src/capturesource.cpp
-    src/modelbank.h
-    src/modelbank.cpp
-    src/crossfadeengine.h
-    src/crossfadeengine.cpp
-    src/channelrack.h
-    src/channelrack.cpp
-    src/irblend.h
-    src/irblend.cpp
+    ${NAMP_CORE_DIR}/engineconfig.h
+    ${NAMP_CORE_DIR}/spscqueue.h
+    ${NAMP_CORE_DIR}/bank.h
+    ${NAMP_CORE_DIR}/nativeresampler.h
+    ${NAMP_CORE_DIR}/capturesource.h
+    ${NAMP_CORE_DIR}/capturesource.cpp
+    ${NAMP_CORE_DIR}/modelbank.h
+    ${NAMP_CORE_DIR}/modelbank.cpp
+    ${NAMP_CORE_DIR}/crossfadeengine.h
+    ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/channelrack.h
+    ${NAMP_CORE_DIR}/channelrack.cpp
+    ${NAMP_CORE_DIR}/irblend.h
+    ${NAMP_CORE_DIR}/irblend.cpp
     src/midilearn.h
-    src/midilearn.cpp
+    ${NAMP_CORE_DIR}/midilearn.cpp
     src/rationsview.h
     src/rationsview.cpp
-    src/platform/plugview.h
+    ${NAMP_CORE_DIR}/platform/plugview.h
     ${NAMPRACK_PLATFORM_VIEW_SOURCES}
 )
 
@@ -660,7 +688,7 @@ endforeach()
 # else), and these are a few thousand lines.
 # ---------------------------------------------------------------------------
 add_library(NampRackPlugin STATIC ${NAMPRACK_PLUGIN_SOURCES})
-target_include_directories(NampRackPlugin PUBLIC ${NAMPRACK_ROOT}/src)
+target_include_directories(NampRackPlugin PUBLIC ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
 target_link_libraries(NampRackPlugin PUBLIC sdk NampRackGfx ${NAMPRACK_PLATFORM_GUI_LIBS})
 target_compile_features(NampRackPlugin PUBLIC cxx_std_17)
 target_compile_options(NampRackPlugin PRIVATE -ffast-math -Wall)
@@ -673,7 +701,7 @@ if(NAMPRACK_BUILD_VST3_BUNDLE)
     smtg_target_configure_version_file(NampRackAmp)
     target_compile_features(NampRackAmp PUBLIC cxx_std_17)
     target_compile_options(NampRackAmp PRIVATE -ffast-math -Wall)
-    target_include_directories(NampRackAmp PRIVATE ${NAMPRACK_ROOT}/src)
+    target_include_directories(NampRackAmp PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
     namprack_link_whole_dsp(NampRackAmp)
     target_link_libraries(NampRackAmp PRIVATE sdk NampRackGfx ${NAMPRACK_PLATFORM_GUI_LIBS})
 
@@ -810,7 +838,7 @@ if(NAMPRACK_BUILD_LV2_HOST)
 endif()
 
 add_library(NampRackHost STATIC ${NAMPRACK_HOST_SOURCES})
-target_include_directories(NampRackHost PUBLIC ${NAMPRACK_ROOT}/src ${NAMPRACK_ROOT}/src/host)
+target_include_directories(NampRackHost PUBLIC ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAMPRACK_ROOT}/src/host)
 target_link_libraries(NampRackHost PUBLIC sdk_hosting ${CMAKE_DL_LIBS})
 target_compile_features(NampRackHost PUBLIC cxx_std_17)
 target_compile_options(NampRackHost PRIVATE -Wall)
@@ -853,7 +881,7 @@ add_library(NampRackRack STATIC
     ${NAMPRACK_ROOT}/src/rack/rackview.h
     ${NAMPRACK_ROOT}/src/rack/rackview.cpp
 )
-target_include_directories(NampRackRack PUBLIC ${NAMPRACK_ROOT}/src)
+target_include_directories(NampRackRack PUBLIC ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
 target_link_libraries(NampRackRack PUBLIC NampRackGfx NampRackHost)
 target_compile_features(NampRackRack PUBLIC cxx_std_17)
 set_target_properties(NampRackRack PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -899,7 +927,7 @@ if(WIN32)
 
     add_library(NampRackWinAudio STATIC ${NAMPRACK_WIN_AUDIO_SOURCES})
     target_include_directories(NampRackWinAudio
-        PUBLIC ${NAMPRACK_ROOT}/src ${NAMPRACK_ROOT}/standalone)
+        PUBLIC ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAMPRACK_ROOT}/standalone)
     # winmm for the MIDI input, ole32 for the COM the audio endpoints are, avrt for the audio
     # thread's scheduling class, ksuser for the KSDATAFORMAT subtype GUIDs a WAVEFORMATEXTENSIBLE
     # names, uuid for the interface IIDs __uuidof resolves to.
@@ -947,8 +975,9 @@ if(NAMPRACK_BUILD_TOOLS)
     # than linking the DSP directly. That is the point of them: they answer questions about the
     # product a host loads, not about the sources.
     foreach(_tool rations_offline rations_ircheck rations_midicheck)
+        namp_source(_tool_src tools/${_tool}.cpp)
         add_executable(${_tool}
-            ${NAMPRACK_ROOT}/tools/${_tool}.cpp
+            ${_tool_src}
             ${NAMPRACK_MODULE_LOADER}
             # For MemoryStream, which the state round-trips need and which sdk_hosting does not
             # carry.
@@ -959,7 +988,7 @@ if(NAMPRACK_BUILD_TOOLS)
         # The nlohmann header is here so the offline proof can read a capture's stated loudness
         # straight out of the .nam and assert that Normalized moves the output by exactly the
         # amount that number says it should. Header-only; nothing else of the DSP is linked in.
-        target_include_directories(${_tool} PRIVATE ${NAMPRACK_ROOT}/src
+        target_include_directories(${_tool} PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES}
             ${NAM_CORE_DIR}/Dependencies/nlohmann)
         target_link_libraries(${_tool} PRIVATE sdk_hosting)
         target_compile_features(${_tool} PRIVATE cxx_std_17)
@@ -972,27 +1001,28 @@ if(NAMPRACK_BUILD_TOOLS)
     # The crossfade proof: one bank, one dial, and the convergence assertion.
     add_executable(rations_fadecheck
         ${NAMPRACK_ROOT}/tools/rations_fadecheck.cpp
-        ${NAMPRACK_ROOT}/src/capturesource.cpp
+        ${NAMP_CORE_DIR}/capturesource.cpp
     )
-    target_include_directories(rations_fadecheck PRIVATE ${NAMPRACK_ROOT}/src)
+    target_include_directories(rations_fadecheck PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
     namprack_link_whole_dsp(rations_fadecheck)
     target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
     target_compile_options(rations_fadecheck PRIVATE -Wall)
 
     # The channel-switch proof and the race gate: the same engine sources, driven differently.
     foreach(_tool rations_switchcheck rations_racecheck)
+        namp_source(_tool_src tools/${_tool}.cpp)
         add_executable(${_tool}
-            ${NAMPRACK_ROOT}/tools/${_tool}.cpp
-            ${NAMPRACK_ROOT}/src/capturesource.cpp
-            ${NAMPRACK_ROOT}/src/modelbank.cpp
-            ${NAMPRACK_ROOT}/src/crossfadeengine.cpp
-            ${NAMPRACK_ROOT}/src/channelrack.cpp
+            ${_tool_src}
+            ${NAMP_CORE_DIR}/capturesource.cpp
+            ${NAMP_CORE_DIR}/modelbank.cpp
+            ${NAMP_CORE_DIR}/crossfadeengine.cpp
+            ${NAMP_CORE_DIR}/channelrack.cpp
             # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path from
             # throwing out of the worker thread.
             ${NAMPRACK_ROOT}/src/platform/respath.cpp
-            ${NAMPRACK_ROOT}/src/gfx/resourcestore.cpp
+            ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         )
-        target_include_directories(${_tool} PRIVATE ${NAMPRACK_ROOT}/src ${VST3_SDK_DIR})
+        target_include_directories(${_tool} PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
         namprack_link_whole_dsp(${_tool})
         target_compile_features(${_tool} PRIVATE cxx_std_20)
         target_compile_options(${_tool} PRIVATE -Wall)
@@ -1012,14 +1042,14 @@ if(NAMPRACK_BUILD_TOOLS)
     if(NOT WIN32)
     add_executable(rations_rtcheck
         ${NAMPRACK_ROOT}/tools/rations_rtcheck.cpp
-        ${NAMPRACK_ROOT}/src/irblend.cpp
-        ${NAMPRACK_ROOT}/src/midilearn.cpp
-        ${NAMPRACK_ROOT}/src/capturesource.cpp
-        ${NAMPRACK_ROOT}/src/modelbank.cpp
-        ${NAMPRACK_ROOT}/src/crossfadeengine.cpp
-        ${NAMPRACK_ROOT}/src/channelrack.cpp
+        ${NAMP_CORE_DIR}/irblend.cpp
+        ${NAMP_CORE_DIR}/midilearn.cpp
+        ${NAMP_CORE_DIR}/capturesource.cpp
+        ${NAMP_CORE_DIR}/modelbank.cpp
+        ${NAMP_CORE_DIR}/crossfadeengine.cpp
+        ${NAMP_CORE_DIR}/channelrack.cpp
         ${NAMPRACK_ROOT}/src/platform/respath.cpp
-        ${NAMPRACK_ROOT}/src/gfx/resourcestore.cpp
+        ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp
     )
     # The SDK is on the include path for HEADERS only — nothing from it is linked and no VST3
@@ -1027,7 +1057,7 @@ if(NAMPRACK_BUILD_TOOLS)
     # parameter, and a counted path that could not see that header would be counting a copy of the
     # matcher rather than the one that ships.
     target_include_directories(rations_rtcheck
-        PRIVATE ${NAMPRACK_ROOT}/src ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
+        PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
     namprack_link_whole_dsp(rations_rtcheck)
     target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
     # -O0 and -UNDEBUG, and both are load-bearing rather than cautious. The harness works by
@@ -1068,7 +1098,7 @@ if(NAMPRACK_BUILD_TOOLS)
     # regression test in the tree and the gate on every layout change.
     add_executable(panelrender
         ${NAMPRACK_ROOT}/tools/panelrender.cpp
-        ${NAMPRACK_ROOT}/src/midilearn.cpp)
+        ${NAMP_CORE_DIR}/midilearn.cpp)
     target_link_libraries(panelrender PRIVATE NampRackGfx)
     target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
     target_compile_options(panelrender PRIVATE -Wall)
@@ -1224,7 +1254,7 @@ set(NAMPRACK_STANDALONE_SOURCES
     ${NAMPRACK_ROOT}/standalone/pluginwindow.cpp
     ${NAMPRACK_ROOT}/standalone/panelwindow.h
     ${NAMPRACK_ROOT}/standalone/panelwindow.cpp
-    ${NAMPRACK_ROOT}/standalone/midiroute.h
+    ${NAMP_CORE_DIR}/standalone/midiroute.h
     ${NAMPRACK_ROOT}/standalone/midiroute.cpp
     ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
     ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
@@ -1255,7 +1285,7 @@ endif()
 # which does not carry them.
 add_executable(namp-rack ${NAMPRACK_STANDALONE_SOURCES})
 target_include_directories(namp-rack
-    PRIVATE ${NAMPRACK_ROOT}/src ${NAMPRACK_ROOT}/standalone)
+    PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAMPRACK_ROOT}/standalone)
 target_link_libraries(namp-rack
     PRIVATE
         NampRackPlugin
