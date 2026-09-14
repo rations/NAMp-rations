@@ -1465,7 +1465,7 @@ constexpr int kOutputTextX = 26;
 // are played. This one sits in a list of settings rows, at the bottom of a page
 // that is read rather than performed, and a lever drawn in that company reads as
 // a stray piece of another panel. The shape is the grandparent's own slide
-// switch (/home/human/NAMix); the colour is this project's gold rather than its
+// switch (the grandparent project NAMix); the colour is this project's gold rather than its
 // azure. See gfx/widgets.h, which both the editor and panelrender draw it with.
 //
 // The pair sits well to the RIGHT of the column the rows above start in, and close to the value

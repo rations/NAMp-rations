@@ -17,7 +17,7 @@ namespace Rations
 //------------------------------------------------------------------------
 // A pill toggle: a rounded track with a round handle that slides to the end that is on.
 //
-// The shape is the grandparent's slide switch (/home/human/NAMix, src/namview.cpp:235) and the
+// The shape is the grandparent project NAMix's slide switch (its src/namview.cpp:235) and the
 // proportions are its: a track twice as wide as it is tall, and a handle inset two units at each
 // end, so the handle's diameter is the track's height less four and there is no second constant
 // to keep in step with the first. What differs is the colour — NAMix's azure is its own theme,
