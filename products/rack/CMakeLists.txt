@@ -40,9 +40,8 @@ set(NAMPRACK_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # the same file it landed on before.
 #
 # The two ${NAMPRACK_ROOT}/src/* entries are scaffolding with a known end. They exist only because
-# resourcestore.h, respath.{h,cpp}, x11plugview.h and win32plugview.cpp still differ between the
-# products; when those unify into core/ the entries come out and the sibling lookups are sibling
-# lookups again.
+# resourcestore.h, x11plugview.h and win32plugview.cpp still differ between the products; when
+# those unify into core/ the entries come out and the sibling lookups are sibling lookups again.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
@@ -480,7 +479,7 @@ add_library(NampRackGfx STATIC
     ${NAMP_CORE_DIR}/gfx/svg.cpp
     ${NAMPRACK_ROOT}/src/gfx/resourcestore.h
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
-    ${NAMPRACK_ROOT}/src/platform/respath.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
     # The in-plug-in file browser lives here rather than with the plug-in because it is drawn with
     # Canvas and nothing else, and the rack needs the same one to choose a plug-in search folder.
     # Two browsers would drift, and the one the user already knows is the one the rack should open.
@@ -1019,7 +1018,7 @@ if(NAMPRACK_BUILD_TOOLS)
             ${NAMP_CORE_DIR}/channelrack.cpp
             # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path from
             # throwing out of the worker thread.
-            ${NAMPRACK_ROOT}/src/platform/respath.cpp
+            ${NAMP_CORE_DIR}/platform/respath.cpp
             ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         )
         target_include_directories(${_tool} PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
@@ -1048,7 +1047,7 @@ if(NAMPRACK_BUILD_TOOLS)
         ${NAMP_CORE_DIR}/modelbank.cpp
         ${NAMP_CORE_DIR}/crossfadeengine.cpp
         ${NAMP_CORE_DIR}/channelrack.cpp
-        ${NAMPRACK_ROOT}/src/platform/respath.cpp
+        ${NAMP_CORE_DIR}/platform/respath.cpp
         ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp
     )

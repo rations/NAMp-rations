@@ -50,9 +50,8 @@ set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # the same file it landed on before.
 #
 # The two ${RATIONS_ROOT}/src/* entries are scaffolding with a known end. They exist only because
-# resourcestore.h, respath.{h,cpp}, x11plugview.h and win32plugview.cpp still differ between the
-# products; when those unify into core/ the entries come out and the sibling lookups are sibling
-# lookups again.
+# resourcestore.h, x11plugview.h and win32plugview.cpp still differ between the products; when
+# those unify into core/ the entries come out and the sibling lookups are sibling lookups again.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
@@ -427,7 +426,7 @@ add_library(RationsGfx STATIC
     ${NAMP_CORE_DIR}/gfx/svg.cpp
     ${RATIONS_ROOT}/src/gfx/resourcestore.h
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
-    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
 )
 target_include_directories(RationsGfx PUBLIC ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES})
 target_link_libraries(RationsGfx PUBLIC PkgConfig::CAIRO ${CMAKE_DL_LIBS})
@@ -1073,7 +1072,7 @@ if(RATIONS_LINUX)
         # ~/.config/Rations/standalone.state.
         #
         # It is a HOST: the bundle is loaded as a module rather than linked in, so
-        # the editor's dladdr-based resource lookup (src/platform/respath.cpp)
+        # the editor's dladdr-based resource lookup (core/platform/respath.cpp)
         # resolves Contents/Resources exactly as it does inside a DAW, and there is
         # no second compilation of the plug-in to keep in step with the first.
         # Nothing of src/ is compiled here; the include path is for rationsids.h's
@@ -1131,7 +1130,7 @@ add_executable(rations_switchcheck
     ${NAMP_CORE_DIR}/channelrack.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
     # from throwing out of the worker thread.
-    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
 )
 target_include_directories(rations_switchcheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
@@ -1160,7 +1159,7 @@ add_executable(rations_racecheck
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
     ${NAMP_CORE_DIR}/channelrack.cpp
-    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
 )
 target_include_directories(rations_racecheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
@@ -1215,7 +1214,7 @@ add_executable(rations_rtcheck
     # from throwing out of the worker thread. Linked in rather than taken from
     # RationsGfx because this target deliberately links no graphics at all — it
     # is measuring allocations on the audio path.
-    ${RATIONS_ROOT}/src/platform/respath.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
     ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp
 )
@@ -1319,7 +1318,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         ${NAMP_CORE_DIR}/irblend.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp
         ${RATIONS_ROOT}/src/pedals/pedalchain.cpp
-        ${RATIONS_ROOT}/src/platform/respath.cpp
+        ${NAMP_CORE_DIR}/platform/respath.cpp
         ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         # The three SDK helpers a HOST needs and a plug-in does not, which is why
         # the `sdk` target does not carry them: the pre-allocated parameter and
