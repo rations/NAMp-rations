@@ -33,6 +33,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# This product's own root is ROOT; the shared core and the four dependency submodules live at the
+# REPOSITORY root, two levels up, because there is one vst3sdk in this tree and both products build
+# against it. Derived rather than assumed: the two paths stopped being the same directory when the
+# products moved under products/, and this script went on passing -I"$ROOT/vst3sdk" at a path that
+# no longer existed until the SDK header it needs went missing.
+REPO="$(cd "$ROOT/../.." && pwd)"
+for _d in "$REPO/vst3sdk/pluginterfaces" "$REPO/core/platform"; do
+  if [ ! -d "$_d" ]; then
+    echo "mac-syntax-check: expected $_d; this script's idea of the repository root is wrong" >&2
+    exit 1
+  fi
+done
+
 CLANG="${RATIONS_CLANG:-}"
 if [ -z "$CLANG" ]; then
   for c in clang++ clang++-19 clang++-18 clang++-17; do
@@ -66,7 +79,7 @@ CAIRO_INC="$(pkg-config --cflags cairo)"
 # it on every include. Neither says anything about our code.
 FLAGS=(-x objective-c++ -fsyntax-only -std=c++17 -Wall -Wno-pragma-pack
        -DRELEASE=1 -DNDEBUG
-       -I"$ROOT/tools/macstub" -I"$ROOT/src" -I"$ROOT/vst3sdk"
+       -I"$ROOT/tools/macstub" -I"$ROOT/src" -I"$REPO/core" -I"$REPO/vst3sdk"
        -I"$OBJC_INC")
 # shellcheck disable=SC2206
 FLAGS+=($CAIRO_INC)
