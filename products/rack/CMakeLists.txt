@@ -80,13 +80,25 @@ option(NAMPRACK_BUILD_VST3_BUNDLE "Build the amp as a VST3 bundle for validator 
 # project already ships. WASAPI is the RUNTIME fallback for a machine with no vendor ASIO driver,
 # never a substitute for shipping ASIO.
 #
-# THE LICENCE IS A CONDITION ON PUBLISHING, NOT ON BUILDING. The SDK is dual-licensed and this
-# project is on the proprietary arm — the GPLv3 arm is closed, because no GPLv3 code may enter this
-# include graph. Under that arm the SDK costs nothing and is non-royalty-bearing, but it must never
-# be redistributed, which is why it reaches the build only through the untracked dependency sysroot
-# and why NOTICE carries the trademark notice the agreement fixes. Turning this OFF produces a
-# WASAPI-only standalone that needs no agreement with anyone; leaving it ON needs the countersigned
-# agreement before a binary is published, and nothing before a binary is built.
+# THIS OPTION DECIDES THE LICENCE OF THE BINARY, WHICH IS WHY IT IS COMMENTED AT THIS LENGTH.
+#
+# The SDK is dual-licensed — a proprietary Steinberg agreement, or GPLv3 — and this project takes
+# the GPLv3 arm. So ON and OFF produce artefacts under DIFFERENT LICENCES from the same MIT source:
+#
+#   ON   namp-rack.exe contains ASIO code and is conveyed under GPLv3, with its Complete
+#        Corresponding Source assembled and published alongside it. Nothing is gated on a
+#        signature; the obligation is source disclosure, and the packaging script enforces it.
+#   OFF  a WASAPI-only standalone containing no ASIO code at all, MIT like every other artefact
+#        this project builds.
+#
+# No source file changes licence either way: MIT combines into a GPLv3 work, and that is the whole
+# mechanism. products/rack/LICENSE-windows-asio.txt is the full statement and ships in the archive.
+#
+# NEITHER SETTING GATES THE COMPILER. Building and testing an ASIO binary requires nothing from
+# anybody, exactly as before — what changed is that publishing one now requires source rather than
+# a countersigned contract. The SDK still reaches the build only through the untracked dependency
+# sysroot, and NOTICE still carries the trademark notice, which GPLv3 leaves optional but which
+# Steinberg's usage guidelines govern the moment the name is used at all — and this product uses it.
 if(WIN32)
     # WAS ASIO ASKED FOR, OR IS IT MERELY THE DEFAULT? The two deserve different answers when the
     # SDK turns out to be missing, and this is the only moment they can still be told apart: a -D on
@@ -302,8 +314,8 @@ endif()
 #   * DEFAULTED (nobody said anything) — a loud warning and a demotion to WASAPI-only for this
 #     configure. The person has a checkout, no SDK, and no opinion yet; refusing to configure at all
 #     tells them to go and accept a third party's download terms before they can compile a line of
-#     an MIT project. They are not publishing anything, and the licence is a condition on publishing
-#     rather than on building.
+#     an MIT project. They are not publishing anything, and the SDK's terms bite on what is
+#     published rather than on what is compiled.
 #
 # The demotion sets a normal variable that shadows the cache entry for the rest of this configure
 # and deliberately does NOT rewrite the cache. Writing OFF into the cache would make the fallback
@@ -338,15 +350,15 @@ if(NAMPRACK_WIN_ASIO)
         list(GET _asio_missing 0 _asio_first_missing)
         set(_asio_where
             "  Run scripts/build-win-deps.sh, which fetches it into that prefix and verifies what "
-            "arrived. It is never committed to this repository — Steinberg's licence forbids "
-            "redistributing the SDK — so the sysroot is the only place it can come from.")
+            "arrived. It is never committed to this repository — the tree does not carry "
+            "dependencies it does not own — so the sysroot is the only place it can come from.")
         if(NAMPRACK_WIN_ASIO_EXPLICIT)
             message(FATAL_ERROR
                 "NAMPRACK_WIN_ASIO is ON but the ASIO SDK is not in the dependency sysroot: "
                 "${_asio_first_missing} is missing.\n"
                 ${_asio_where} "\n"
                 "  To build the Windows standalone WITHOUT ASIO support, which is a WASAPI-only "
-                "product and needs no agreement with anyone, configure with "
+                "product and stays MIT rather than GPLv3, configure with "
                 "-DNAMPRACK_WIN_ASIO=OFF.")
         endif()
         message(WARNING
@@ -356,10 +368,11 @@ if(NAMPRACK_WIN_ASIO)
             "the latency depends on; WASAPI is the runtime fallback for a machine with no vendor "
             "driver. A release binary is built with ASIO.\n"
             ${_asio_where} "\n"
-            "  Nothing here needs an agreement with anyone: the licence is a condition on "
-            "publishing a binary, never on building one. Pass -DNAMPRACK_WIN_ASIO=ON to make a "
-            "missing SDK a hard error instead of this warning, or -DNAMPRACK_WIN_ASIO=OFF to ask "
-            "for the WASAPI-only build deliberately and silence it.")
+            "  Nothing here needs an agreement with anyone, and nothing ever did for building. "
+            "Note that this WASAPI-only binary is MIT, where the ASIO one is GPLv3. Pass "
+            "-DNAMPRACK_WIN_ASIO=ON to make a missing SDK a hard error instead of this warning, or "
+            "-DNAMPRACK_WIN_ASIO=OFF to ask for the WASAPI-only build deliberately and silence "
+            "it.")
         # Shadows the cache entry for this configure only — see the header comment above.
         set(NAMPRACK_WIN_ASIO OFF)
         set(NAMPRACK_ASIO_DEMOTED ON)

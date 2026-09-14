@@ -15,15 +15,20 @@
 #
 # ASIO is what interface drivers actually expose and what the latency of this program depends on,
 # so it is the backend the Windows standalone opens first, with WASAPI as the runtime fallback for
-# a machine with no vendor driver. The SDK is dual-licensed, this project is on the proprietary arm
-# because the GPLv3 arm is closed to it, and under that arm PUBLISHING a binary requires the
-# countersigned agreement -- but building, testing and every gate below require nothing from
-# anybody. That distinction is the licence's own and it is deliberate here: this script builds,
-# checks and packages a testable ASIO binary with no agreement in sight.
+# a machine with no vendor driver.
 #
-# The SDK reaches the compiler through the dependency sysroot and through nothing else, because it
-# is untracked build output and a copy inside the repository would be a licence breach that a later
-# deletion does not undo. scripts/build-win-deps.sh puts it there.
+# THIS ARCHIVE IS GPLv3, AND IT IS THE ONLY THING THIS PROJECT SHIPS THAT IS NOT MIT. The ASIO SDK
+# is dual-licensed -- proprietary Steinberg agreement, or GPLv3 -- and this project takes the GPLv3
+# arm. So there is no signature to wait for and nothing here is gated on one. What GPLv3 asks for
+# instead is Corresponding Source, and that IS gated, below: an archive that ships without it is a
+# licence breach on the release. The source itself stays MIT and no file was relicensed; only this
+# one binary is conveyed under GPLv3, because only this one binary contains ASIO code.
+# products/rack/LICENSE-windows-asio.txt is the full explanation and it ships in the archive.
+#
+# The SDK still reaches the compiler through the untracked dependency sysroot and through nothing
+# else. Under the proprietary arm that was a prohibition; under GPLv3 it is a tidiness rule that
+# also keeps the proprietary arm available. scripts/build-win-deps.sh puts it there, pinned by
+# SHA-256, and scripts/corresponding-source.sh collects the same nine files at release time.
 #
 # ASIO is asked for EXPLICITLY below, which matters: left to default, a missing SDK demotes the
 # configure to WASAPI-only with a warning, and the point of running this script is to get an ASIO
@@ -38,10 +43,11 @@
 #
 # Environment:
 #   NAMP_SKIP_ASIO=1      configure WASAPI-only, for a build that touches no third-party SDK.
-#   NAMP_ASIO_AGREEMENT_SIGNED=1
-#                         drop the -TESTBUILD mark from the archive name. Nothing here can know
-#                         whether the agreement is signed, so it is declared rather than detected.
-#                         It changes the NAME only: every check runs and the binary is identical.
+#   NAMP_SKIP_CORRESPONDING_SOURCE=1
+#                         do not assemble the Corresponding Source tarball. For iterating locally.
+#                         The archive is then named -NOSOURCE and MUST NOT be published: shipping a
+#                         GPLv3 binary without its source is a licence breach. It changes the NAME
+#                         and one text file; every check runs and the binary is identical.
 #   WINEPREFIX            defaults to ~/.wine-rations.
 #   NAMP_RACK_SKIP_WINE=1 package without the Wine verification. Says so loudly.
 set -euo pipefail
@@ -219,8 +225,11 @@ requires it in the product itself, not only in NOTICE."
 fi
 
 # THE SDK IS NOT IN THE WORKING TREE. The phase gate sweeps for this too, and it is repeated here
-# because this is the one script that deliberately puts ASIO sources on a compiler's command line:
-# a breach committed is not undone by a later deletion, so the check belongs where the risk is.
+# because this is the one script that deliberately puts ASIO sources on a compiler's command line,
+# so the check belongs where the risk is. Under GPLv3 a committed copy is no longer a licence
+# breach -- the source is redistributable, and the Corresponding Source step below redistributes
+# exactly these files on purpose. It is still a dependency this tree does not own and the one act
+# that would close off a return to the proprietary arm, so the sweep stays at full strength.
 #
 # EXACT BASENAMES, NEVER GLOBS, and the reason is measured rather than stylistic. asiodrivers.*
 # also matches asiodrivers.cpp.obj, and a Windows build directory is FULL of those -- CMake mirrors
@@ -324,8 +333,80 @@ else
     "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
 fi
 
+# --- the GPLv3 obligations ---------------------------------------------------
+# WHAT THIS SECTION IS FOR. With ASIO compiled in, this binary is a combined work containing GPLv3
+# code and is conveyed under GPLv3. Two of that licence's requirements are mechanical, so they are
+# machine-checked here rather than remembered:
+#
+#   section 4  "give all recipients a copy of this License along with the Program"
+#              -> COPYING.GPL-3 goes in the archive.
+#   section 6  the Complete Corresponding Source must be available to whoever got the binary
+#              -> scripts/corresponding-source.sh assembles it, and CORRESPONDING-SOURCE.txt --
+#                 the "clear directions" 6(d) asks for -- goes in the archive beside the .exe.
+#
+# THE MARK IS MEASURED NOW, NOT DECLARED. An earlier version of this script named the archive
+# -TESTBUILD unless it was TOLD the Steinberg agreement had been signed, because nothing here could
+# check that. Under GPLv3 there is nothing to declare and the one thing that matters is something
+# this script can actually verify: whether the Corresponding Source for this exact binary exists.
+# So the mark now tracks a fact. An archive named -NOSOURCE is one whose source was not assembled,
+# and publishing it would be the breach.
+CS_DIRECTIONS="$PKGDIR/CORRESPONDING-SOURCE.txt"
+NOSOURCE=""
+if [ "$WANT_ASIO" != "ON" ]; then
+  # No ASIO, no GPLv3 code, no obligation: a WASAPI-only build is MIT like everything else here.
+  echo "WASAPI-only build: MIT, no Corresponding Source obligation."
+elif [ "${NAMP_SKIP_CORRESPONDING_SOURCE:-0}" = "1" ]; then
+  NOSOURCE="asked for with NAMP_SKIP_CORRESPONDING_SOURCE=1"
+elif ! git -C "$REPO" diff --quiet HEAD -- 2>/dev/null; then
+  # Corresponding Source is identified by a commit. A dirty tree cannot produce it honestly, so the
+  # archive is marked rather than the build refused -- this is the ordinary state while working,
+  # and the whole point is that building is never gated.
+  NOSOURCE="the working tree has uncommitted changes"
+else
+  echo
+  echo "== Corresponding Source (GPLv3 section 6) =="
+  "$REPO/scripts/corresponding-source.sh" "$PRODUCT/dist"
+  "$REPO/scripts/corresponding-source.sh" --directions > "$CS_DIRECTIONS"
+fi
+
+if [ -n "$NOSOURCE" ]; then
+  cat > "$PKGDIR/NOT-A-RELEASE.txt" <<NOTEOF
+This archive is NOT a release and MUST NOT be published.
+
+It contains a GPLv3 binary -- namp-rack.exe with the ASIO backend compiled in --
+whose Corresponding Source was not assembled, because ${NOSOURCE}.
+GPLv3 section 6 requires that source to be available to anyone who receives the
+binary, so distributing this archive as it stands would be a licence breach.
+
+The binary itself is fine and every check passed. To make a publishable archive,
+commit the tree and run products/rack/scripts/makedist-windows.sh again without
+NAMP_SKIP_CORRESPONDING_SOURCE.
+NOTEOF
+fi
+
 # --- licence, attribution, instructions --------------------------------------
 cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PKGDIR/"
+if [ "$WANT_ASIO" = "ON" ]; then
+  cp "$PRODUCT/COPYING.GPL-3" "$PRODUCT/LICENSE-windows-asio.txt" "$PKGDIR/"
+fi
+
+# The licence paragraph differs between the two configurations and says so plainly, because "this
+# program is MIT" printed on a GPLv3 binary is the kind of wrong that a user acts on.
+if [ "$WANT_ASIO" = "ON" ]; then
+  LICENCE_PARA="This build is under the GNU GPL version 3, not MIT, and the reason is worth
+knowing: it hosts ASIO, Steinberg's SDK for that is dual-licensed, and this
+project takes its GPLv3 arm rather than sign a proprietary agreement. So you
+get this program under GPLv3 and you are entitled to its complete source.
+COPYING.GPL-3 has the terms, CORRESPONDING-SOURCE.txt says where the source is,
+and LICENSE-windows-asio.txt explains the whole arrangement in one page.
+
+The project's own code is MIT and stays MIT - see LICENSE. Only this particular
+binary, the Windows one with ASIO in it, is GPLv3. The Linux build, the plug-ins
+and the LV2 bundle are all MIT."
+else
+  LICENCE_PARA="MIT. See LICENSE. This build has no ASIO in it, which is what keeps it MIT -
+the Windows build WITH ASIO is GPLv3 instead."
+fi
 
 cat > "$PKGDIR/INSTALL.txt" <<EOF
 NAMp Rack ${VERSION} - a four-channel Neural Amp Modeler amp head, and a rack
@@ -389,24 +470,49 @@ linked, and so is the C++ runtime.
 
 Licence
 -------
-MIT. See LICENSE, and NOTICE for third-party attribution - which matters more
-for this build than for the Linux one, because it statically links cairo,
-pixman, FreeType, libpng and zlib and therefore redistributes them.
+${LICENCE_PARA}
+
+NOTICE has the third-party attribution, which matters more for this build than
+for the Linux one: it statically links cairo, pixman, FreeType, libpng and zlib
+and therefore redistributes them.
 
 ASIO is a trademark of Steinberg Media Technologies GmbH, registered in Europe
 and other countries.
 EOF
 
 MARK=""
-if [ "$WANT_ASIO" = "ON" ] && [ "${NAMP_ASIO_AGREEMENT_SIGNED:-0}" != "1" ]; then
-  MARK="-TESTBUILD"
+if [ -n "$NOSOURCE" ]; then
+  MARK="-NOSOURCE"
   echo
-  echo "This build hosts ASIO, and publishing an ASIO binary needs the countersigned" >&2
-  echo "Steinberg agreement. Nothing here can know whether that is in place, so the" >&2
-  echo "archive is named -TESTBUILD. Building and testing need no agreement and were" >&2
-  echo "not gated on one; only the NAME changed. Set NAMP_ASIO_AGREEMENT_SIGNED=1 to" >&2
-  echo "drop the mark once it is signed -- the binary is identical either way." >&2
+  echo "WARNING: this archive contains a GPLv3 binary whose Corresponding Source was" >&2
+  echo "not assembled, because $NOSOURCE." >&2
+  echo "It is named -NOSOURCE and MUST NOT be published -- GPLv3 section 6 requires the" >&2
+  echo "source to be available to whoever receives the binary. The binary itself is fine" >&2
+  echo "and every check above passed; commit the tree and re-run to get a releasable one." >&2
   echo
+fi
+
+# THE LICENCE FILES ARE ASSERTED, NOT ASSUMED. GPLv3 section 4 requires the licence text to travel
+# with the program and section 6(d) requires the directions to the source to sit next to the object
+# code. Both are one `cp` away from being silently dropped by an edit to the block above, and
+# neither absence would break anything a user would notice -- which is exactly the shape of mistake
+# a gate is for.
+if [ "$WANT_ASIO" = "ON" ]; then
+  namp_dist_require_files "$PKGDIR" "the GPLv3 archive" \
+    COPYING.GPL-3 LICENSE-windows-asio.txt NOTICE LICENSE
+  if [ -z "$NOSOURCE" ]; then
+    namp_dist_require_files "$PKGDIR" "the GPLv3 archive" CORRESPONDING-SOURCE.txt
+    CS_TARBALL="$PRODUCT/dist/namp-rack-${VERSION}-corresponding-source.tar.gz"
+    [ -f "$CS_TARBALL" ] ||
+      namp_dist_die "the Corresponding Source tarball was not produced at $CS_TARBALL. A GPLv3
+binary may not be published without it."
+  else
+    namp_dist_require_files "$PKGDIR" "the unpublishable archive" NOT-A-RELEASE.txt
+  fi
+  # The GPL text must be the real one. A truncated or reflowed copy is not the licence, and this
+  # file is copied around by hand often enough to be worth checking rather than trusting.
+  grep -qx '                       Version 3, 29 June 2007' "$PKGDIR/COPYING.GPL-3" ||
+    namp_dist_die "COPYING.GPL-3 in the archive is not the verbatim GPLv3 text."
 fi
 
 PKGNAME="namp-rack-${VERSION}${MARK}-windows-x86_64"

@@ -22,13 +22,11 @@
 # pixel for pixel against the Linux render, and a different FreeType would move
 # glyph rasterisation enough to make that comparison meaningless.
 #
-# The rack has two editor pages and no Windows packaging script yet, so nothing
-# renders it under Wine today. The pin still binds it, and harder rather than less:
-# both products draw with one shared graphics stack out of core/ and link ONE
-# sysroot, so the rack's Windows glyphs are whatever this FreeType makes them, and
-# the only gate that would notice a change is the other product's. Until the rack
-# has a Wine render of its own, rations' four pages are the only thing standing
-# between this pin and a silent difference.
+# The rack renders its own two pages under Wine as well, since it gained a Windows
+# packaging script: head and setup, against the same thresholds. So the pin is now
+# held by both products rather than by rations alone. That matters because they
+# draw with one shared graphics stack out of core/ and link ONE sysroot — a
+# FreeType change moves both, and now both would say so.
 #
 # Pinned against what this machine's Debian/Devuan actually ships:
 #
@@ -340,14 +338,25 @@ fi
 # them where the build can find them and nowhere else. CMakeLists.txt looks for
 # $SYSROOT/include/asiosdk and compiles the four host-side sources out of it.
 #
-# WHY IT LIVES IN THE SYSROOT AT ALL. Steinberg's agreement forbids
-# redistributing the SDK "or parts of it ... for example, integrated in any
-# framework application", so it must never be committed to the repository. This
-# prefix is untracked build output, so putting it here breaches nothing — and it
-# is the only route into the build, which is what makes that claim checkable.
-# .gitignore guards the SDK's filenames and the project's phase gate sweeps the
-# working tree for them, because a licence breach is not undone by a later
-# deletion.
+# WHY IT LIVES IN THE SYSROOT AT ALL. The SDK must never be committed to the
+# repository. That began as a licence condition — under the proprietary arm of
+# the SDK's dual licence, Steinberg's agreement forbids redistributing it "or
+# parts of it ... for example, integrated in any framework application". This
+# project now takes the GPLv3 arm instead, under which the source is not only
+# redistributable but must be redistributed with the binary as Corresponding
+# Source, so that prohibition no longer applies. The rule is kept anyway: this
+# tree does not carry dependencies it does not own, and a committed copy is the
+# one act that would close off a return to the proprietary arm. The sysroot is
+# untracked build output and the only route into the build, which is what makes
+# the claim checkable; .gitignore guards the filenames and the project's phase
+# gate sweeps for them.
+#
+# THE NINE FILES BELOW ARE ALSO THE CORRESPONDING SOURCE. GPLv3 obliges the
+# source of the work actually conveyed to be available to whoever received the
+# binary, and the work contains exactly what this step installs — no more.
+# scripts/corresponding-source.sh collects the same nine at release time, from
+# this same prefix. The two lists are kept identical on purpose: a Corresponding
+# Source that disagrees with what was compiled is a claim rather than a copy.
 #
 # WHERE IT COMES FROM, in order: an explicit $NAMP_ASIO_SDK_DIR, then an
 # already-unpacked tree beside the other reference checkouts, then a zip already
@@ -439,9 +448,12 @@ elif ! done_stamp asiosdk; then
     install -m644 "$ASIO_SRC"/host/pc/asiolist.h "$ASIO_SRC"/host/pc/asiolist.cpp \
                   "$ASIO_INC/host/pc/"
     # The licence travels with the copy, in both of its forms: the top-level dual
-    # licence and common/'s own. Neither is redistributed by this project, but the
-    # sysroot is a place a person looks, and a copy of someone's SDK with no
-    # licence beside it is how a licence gets forgotten.
+    # licence and common/'s own. Both ARE redistributed now — they go into the
+    # Corresponding Source tarball beside the sources they govern, which is what
+    # GPLv3 section 4 and the BSD-3 notice on the host/ files each require in
+    # their own way. Even without that, the sysroot is a place a person looks, and
+    # a copy of someone's SDK with no licence beside it is how a licence gets
+    # forgotten.
     install -m644 "$ASIO_SRC/LICENSE.txt" "$ASIO_INC/LICENSE.txt"
     install -m644 "$ASIO_SRC/common/LICENSE.txt" "$ASIO_INC/common/LICENSE.txt"
     mark asiosdk
@@ -461,7 +473,7 @@ echo "static libraries:"
 ls -1 "$SYSROOT/lib"/*.a 2>/dev/null | sed 's|^|  |'
 echo
 if [ -f "$SYSROOT/include/asiosdk/common/asio.h" ]; then
-    printf '  %-12s %s\n' "asiosdk" "include/asiosdk (host side only, not redistributed)"
+    printf '  %-12s %s\n' "asiosdk" "include/asiosdk (host side only; GPLv3 arm)"
 elif [ "$SKIP_ASIO" = "1" ]; then
     # Absent because it was waived, which is a complete sysroot for a WASAPI-only
     # build rather than a broken one. Still printed, and still says what it costs:

@@ -12,13 +12,28 @@ channel-switch engines and the editor under src/) is released under the MIT
 Licence; see LICENSE. The third-party components it links, vendors and
 redistributes are covered by the licences below.
 
+ONE BUILD IS NOT MIT, AND IT IS NAMED HERE RATHER THAN BURIED. The Windows build
+of the standalone with the ASIO backend compiled in is distributed under the GNU
+General Public License version 3, because it compiles in part of Steinberg's ASIO
+SDK and this project takes the GPLv3 arm of that SDK's dual licence rather than
+its proprietary one. The source stays MIT — MIT combines into a GPLv3 work, which
+is why no file was relicensed — and every other artefact this project produces is
+MIT: the Linux standalone, both VST3 plug-ins, the LV2 bundle, and a Windows build
+configured without ASIO. See LICENSE-windows-asio.txt, shipped in that archive,
+and the ASIO section below.
+
 A note on what hosting does and does not mean for licensing. This program loads
 LV2 and VST3 plug-ins that the user chose and that this project neither ships nor
 links. Some of them will be GPL-licensed; that is the user's own act of running
-two programs together, and it places no obligation on this source tree. What
-matters on this side is the rule this project actually enforces: no GPLv3 code and
-no JUCE header may enter this include graph, and every dependency named below is
-MIT, BSD, Apache-2.0, MPL-2.0, ISC, zlib or OFL.
+two programs together, and it places no obligation on this source tree. The
+converse is equally the user's act: running a proprietary plug-in in the GPLv3
+Windows build is loading a plug-in, not conveying a combined work.
+
+What this project enforces on its own include graph is that no dependency arrives
+under terms it cannot satisfy. No JUCE header may enter it at all. Every
+dependency named below is MIT, BSD, Apache-2.0, MPL-2.0, ISC, zlib or OFL — with
+the single exception of the ASIO SDK, taken under GPLv3, Windows-only, and
+conditioned in the section that names it.
 
 -------------------------------------------------------------------------------
 
@@ -244,12 +259,26 @@ scripts/build-win-deps.sh pins:
   cairo and the LGPL: cairo is linked statically into the Windows binary, which
   LGPL 2.1 section 6 permits provided the recipient can relink the work against a
   modified cairo. That condition is met by publication rather than by a written
-  offer: this project's complete corresponding source is published under the MIT
-  Licence, the exact cairo version and the exact configuration used to build it
-  are in scripts/build-win-deps.sh in this same repository, and the whole program
+  offer: this project's complete corresponding source is published, the exact
+  cairo version and the exact configuration used to build it are in
+  scripts/build-win-deps.sh in this same repository, and the whole program
   rebuilds from that source with one cmake invocation. Anyone may substitute their
-  own cairo and rebuild. If cairo's LGPL terms are ever inconvenient, its MPL 1.1
-  arm is available instead — no cairo source file is modified either way.
+  own cairo and rebuild. No cairo source file is modified.
+
+  WHICH OF CAIRO'S TWO ARMS IS ELECTED DEPENDS ON THE BUILD, and for the ASIO
+  build it is not a free choice. cairo offers LGPL 2.1-or-later OR MPL 1.1.
+
+    * The Windows ASIO build is GPLv3, so it ELECTS LGPL 2.1. MPL 1.1 is not
+      GPL-compatible and would make that binary undistributable; LGPL 2.1
+      section 3 expressly permits applying the ordinary GPL to a copy of the
+      library, and says that where a version later than 2 has appeared "you can
+      specify that version instead", which is what reaches GPLv3.
+    * Every other build — Linux, the plug-ins, a WASAPI-only Windows build — is
+      MIT, and either of cairo's arms serves it.
+
+  So the MPL arm is still available to this project; it is simply not available
+  to the one binary that carries ASIO. A future change that moved the ASIO build
+  onto MPL 1.1 would be a licence breach rather than a preference.
 
 -------------------------------------------------------------------------------
 
@@ -257,39 +286,114 @@ ASIO — the Windows audio backend
 
   Steinberg ASIO SDK 2.3.4, https://www.steinberg.net/developers/
 
-  Copyright (c) 2025 Steinberg Media Technologies GmbH. Used under the
-  PROPRIETARY Steinberg ASIO License, under a signed licensing agreement — not
-  under the SDK's alternative GPLv3 arm, which this project cannot take because
-  no GPLv3 code may enter its include graph.
+  Copyright (c) 2025 Steinberg Media Technologies GmbH.
+
+  TAKEN UNDER THE GPLv3 ARM OF THE SDK'S DUAL LICENCE. The SDK's own LICENSE.txt
+  offers it "under the terms of the Steinberg ASIO License, or alternatively
+  under the terms of the General Public License (GPL) Version 3", to be used
+  "according to either of these licenses as it is most appropriate for your
+  project on a case-by-case basis (commercial or not)". This project elects
+  GPLv3. Steinberg's own SDK README puts the condition plainly: switching to
+  GPLv3 is permitted "if your product is released under GPLv3 License terms
+  (including source code disclosure)".
+
+  THE CONSEQUENCE IS ON ONE BINARY, AND IT IS REAL. The Windows standalone built
+  with the ASIO backend is a combined work containing GPLv3 code, so it is
+  distributed under GPLv3 — not MIT. Nothing else this project produces is
+  affected: the Linux standalone, both VST3 plug-ins, the LV2 bundle and a
+  Windows build configured without ASIO contain no ASIO code and are MIT. The
+  project's own source files are MIT throughout and none was relicensed; MIT
+  permits its code to be combined into a GPLv3 work, and that is the direction
+  the compatibility runs.
+
+  CORRESPONDING SOURCE IS AN OBLIGATION, NOT A GESTURE. GPLv3 section 6 requires
+  the Complete Corresponding Source of that binary to be available to whoever
+  received it. scripts/corresponding-source.sh assembles it — this project at a
+  named commit, its four pinned dependencies at their exact SHAs, the five
+  statically linked libraries as their upstream archives, and the ASIO SDK files
+  compiled in — hashes every file, and is run as part of the Windows release. The
+  archive carries CORRESPONDING-SOURCE.txt, which is the "clear directions"
+  section 6(d) asks for.
+
+  WHAT IS AND IS NOT IN THE REPOSITORY. No ASIO source file or header is present
+  in this repository, and that has not changed: the build reaches the SDK through
+  an untracked dependency sysroot (scripts/build-win-deps.sh) and through nothing
+  else, .gitignore guards its filenames and the project's phase gate sweeps for
+  them. Under the proprietary arm that was a licence condition. Under GPLv3 it is
+  no longer forbidden to redistribute the SDK's source — GPLv3 grants that right,
+  and section 6 makes exercising it a duty for anyone shipping the binary — so
+  the rule is kept for two different reasons: it keeps the repository free of a
+  dependency it does not own, and it keeps the proprietary arm available should
+  this project ever need to return to it. The SDK travels in the Corresponding
+  Source tarball, which is build output, not in the tree.
+
+  ONLY NINE FILES ARE COMPILED IN, and they are the whole of the ASIO
+  redistribution: common/asio.h, common/asio.cpp, common/asiosys.h,
+  common/iasiodrv.h, host/asiodrivers.h, host/asiodrivers.cpp, host/ginclude.h,
+  host/pc/asiolist.h and host/pc/asiolist.cpp. The SDK's driver examples,
+  specification and sample host are not in the build and not in the
+  Corresponding Source, because Corresponding Source is the source of the work
+  being conveyed.
+
+  WINDOWS ONLY, AND OPTIONAL AT BUILD TIME. NAMPRACK_WIN_ASIO gates it; the Linux
+  build cannot reach it and no header outside the Windows audio backend includes
+  it. Building and testing require nothing from anybody, and no longer require an
+  agreement with Steinberg for publishing either — the GPLv3 arm replaces the
+  signature with the source-disclosure duty above.
+
+  THE TRADEMARK IS SEPARATE FROM THE COPYRIGHT LICENCE, and survives the election.
+  Steinberg's SDK README states that trademark use "is optional under GPLv3
+  License, but, if used, must comply with Steinberg's official trademark rules,
+  just like under the proprietary license", and that non-compliance with the logo
+  guidelines "does not affect your GPLv3 rights (but may result in trademark
+  violations)". This project uses the name only to denote compatibility, in plain
+  type, never in a product or firm name, and reproduces Steinberg's notice
+  exactly:
 
   ASIO is a trademark of Steinberg Media Technologies GmbH, registered in Europe
   and other countries
 
-  That sentence is the notice the agreement requires, reproduced exactly. It also
-  appears in the product itself, on the setup page, which is what the agreement
-  asks of a product distributed as a download.
+  That sentence also appears in the product itself, on the setup page, and the
+  packaging script asserts both copies rather than trusting them.
 
-  WHAT IS AND IS NOT REDISTRIBUTED. The compiled host side of the SDK is linked
-  into the Windows standalone, which is what the licence exists to permit. The SDK
-  ITSELF is not redistributed in any form: no ASIO source file or header is
-  present in this repository, and none is shipped. The build fetches it into an
-  untracked dependency sysroot (scripts/build-win-deps.sh) and reaches it from
-  nowhere else. This is a condition of the agreement rather than a preference —
-  it forbids distributing the SDK or parts of it "for the use as software
-  developer kit in any way, for example, integrated in any framework
-  application" — and both .gitignore and the project's phase gate enforce it
-  mechanically, because a breach here is not undone by a later deletion.
+  PER-FILE, THE SDK IS NOT UNIFORM, and the difference matters to what must be
+  reproduced here. Its common/ files carry the dual proprietary/GPLv3 licence
+  quoted above. Its host/ files — five of the nine compiled in — carry a
+  BSD-3-Clause notice of their own instead, and BSD-3 requires that notice to be
+  reproduced in a BINARY redistribution as well as a source one. So it is, in
+  full, as it appears at the top of host/asiodrivers.h, host/asiodrivers.cpp,
+  host/ginclude.h, host/pc/asiolist.h and host/pc/asiolist.cpp:
 
-  WINDOWS ONLY, AND OPTIONAL AT BUILD TIME. NAMPRACK_WIN_ASIO gates it; the Linux
-  build cannot reach it and no header outside the Windows audio backend includes
-  it. Building and testing this project requires no agreement with Steinberg;
-  only PUBLISHING a Windows binary that contains the ASIO backend does.
+      LICENSE
+      (c) 2025, Steinberg Media Technologies GmbH, All Rights Reserved
 
-  Per-file, the SDK is not uniform: its host/ and driver/ trees carry a
-  BSD-3-Clause header, while its common/ tree carries the dual proprietary/GPLv3
-  licence. The BSD half cannot stand alone — its headers include the common/ ones
-  and every host entry point is declared there — so the agreement governs either
-  way.
+      Redistribution and use in source and binary forms, with or without
+      modification, are permitted provided that the following conditions are met:
+
+        * Redistributions of source code must retain the above copyright notice,
+          this list of conditions and the following disclaimer.
+        * Redistributions in binary form must reproduce the above copyright
+          notice, this list of conditions and the following disclaimer in the
+          documentation and/or other materials provided with the distribution.
+        * Neither the name of the Steinberg Media Technologies nor the names of
+          its contributors may be used to endorse or promote products derived
+          from this software without specific prior written permission.
+
+      THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+      AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+      IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+      ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+      LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+      CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+      SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+      INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+      CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+      ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+      POSSIBILITY OF SUCH DAMAGE.
+
+  That notice was missing from this file until the GPLv3 election was written up,
+  and its absence was a defect under EITHER arm: BSD-3's binary clause is not
+  conditioned on which arm the common/ files are taken under.
 
 -------------------------------------------------------------------------------
 

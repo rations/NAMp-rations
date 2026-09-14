@@ -25,9 +25,11 @@
 # prefix, so the two link the same graphics stack rather than two builds of it.
 # Point NAMP_WIN_SYSROOT at that prefix, or let it default to the location that
 # script installs to. The ASIO SDK, which the rack's Windows audio backend
-# hosts, reaches the build through the same sysroot and through nothing else —
-# a licence condition rather than a layout preference: Steinberg's agreement
-# forbids redistributing the SDK, and the sysroot is untracked build output.
+# hosts, reaches the build through the same sysroot and through nothing else.
+# That keeps a dependency this tree does not own out of it, and keeps the SDK's
+# proprietary licence arm available; the project takes its GPLv3 arm, which makes
+# the Windows ASIO binary GPLv3 while every other artefact stays MIT. See
+# products/rack/NOTICE and products/rack/LICENSE-windows-asio.txt.
 #
 # THREAD MODEL. The POSIX-threads MinGW variant is required, not preferred:
 # ModelBank is a std::thread with a std::mutex and a std::condition_variable,

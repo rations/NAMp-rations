@@ -1,0 +1,132 @@
+NAMp Rack for Windows — how this build is licensed
+==================================================
+
+READ THIS FIRST IF YOU ONLY READ ONE FILE. The Windows build of NAMp Rack is
+distributed under the GNU General Public License version 3. The project's own
+source code is MIT, and stays MIT. Those two statements are both true, and the
+rest of this file explains how.
+
+
+1. What is covered
+------------------
+
+This file applies to ONE artefact: namp-rack.exe as built for Windows with the
+ASIO backend compiled in — the binary in this archive.
+
+It does not apply to any other build of this project. The Linux build of NAMp
+Rack contains no ASIO code and is MIT. Both VST3 plug-ins and the LV2 bundle
+contain no ASIO code and are MIT. A Windows build configured without ASIO
+(NAMP_SKIP_ASIO=1, which produces a WASAPI-only binary) contains no ASIO code
+and is MIT. The licence follows the code that is actually in the binary, not
+the repository it was built from.
+
+
+2. Why this binary is GPLv3
+---------------------------
+
+Windows audio interfaces expose their low-latency driver through ASIO, so this
+program hosts it, and doing that means compiling part of Steinberg's ASIO SDK
+into the binary.
+
+The ASIO SDK is dual-licensed. Its LICENSE.txt offers it "under the terms of
+the Steinberg ASIO License, or alternatively under the terms of the General
+Public License (GPL) Version 3", to be used "according to either of these
+licenses as it is most appropriate for your project on a case-by-case basis
+(commercial or not)".
+
+This project takes the GPLv3 arm. That is a deliberate choice rather than an
+oversight: it keeps the project's obligations in a licence anyone can read in
+full, instead of in a private contract, and it costs this project nothing that
+it was not already doing — the complete source has always been published.
+
+Taking the GPLv3 arm obliges the resulting binary to be distributed under
+GPLv3, with its Corresponding Source available. Section 5 says where.
+
+
+3. What that means for you
+--------------------------
+
+You have the four freedoms GPLv3 grants: to run this program for any purpose,
+to study and change it, to redistribute copies, and to distribute your modified
+versions. The full terms are in COPYING.GPL-3 in this archive, and they are the
+terms that govern — nothing in this file adds to them or takes anything away.
+
+Two things worth spelling out because people ask:
+
+  * Running proprietary plug-ins in this rack is fine. Loading a plug-in is
+    your act, not a distribution by anybody, and GPLv3 says nothing about what
+    you run on your own machine. Every VST3 you own works here exactly as it
+    would in any other host.
+
+  * Redistributing this program bundled together with a proprietary plug-in is
+    a different question, and one you would need to answer for yourself. It is
+    not something this project does.
+
+
+4. What is still MIT
+--------------------
+
+Every source file this project wrote is MIT-licensed and is published as such.
+See LICENSE in this archive for the text.
+
+That is not a contradiction. MIT permits its code to be combined into a work
+distributed under GPLv3 — the compatibility runs that way round — so the same
+MIT source files produce an MIT Linux binary and a GPLv3 Windows-with-ASIO
+binary. No file was relicensed. If you want this project's code under MIT, take
+it from the source; it is MIT there and always has been.
+
+
+5. Corresponding Source
+-----------------------
+
+GPLv3 section 6 requires the Corresponding Source for this binary to be
+available to you. It is, and it is complete: the project's own source, the
+pinned versions of every library statically linked into this binary, and the
+ASIO SDK files that are compiled in.
+
+  Directions are in CORRESPONDING-SOURCE.txt in this archive.
+
+That file names the exact commit, the exact version and the SHA-256 of every
+component, and the script in the repository that reassembles the whole set into
+one tarball. Nothing in the build is unpinned, so the source that produced this
+exact binary can be reconstructed rather than approximated.
+
+
+6. The libraries linked into this binary
+----------------------------------------
+
+Windows has no system copy of the graphics stack, so this binary links it
+statically and therefore redistributes it. Full attribution is in NOTICE. Two
+entries interact with the GPLv3 election and are called out here:
+
+  cairo 1.18.4 is offered under LGPL 2.1-or-later OR MPL 1.1. THIS BUILD ELECTS
+  LGPL 2.1. The election is required, not a preference: MPL 1.1 is not
+  GPL-compatible, and LGPL 2.1 section 3 expressly permits applying the terms
+  of the GNU General Public License to a copy of the library, naming a later
+  version where one exists. The MPL arm remains available for builds of this
+  project that are not GPLv3 — which is every build except this one.
+
+  FreeType 2.13.3 is offered under the FreeType License (FTL) OR GPLv2. THIS
+  BUILD ELECTS THE FTL, and FreeType's own LICENSE.TXT records why that works
+  here: the FTL "is compatible to the GNU General Public License version 3, but
+  not version 2". The FTL's required credit is reproduced in NOTICE.
+
+Everything else linked in is MIT, BSD-3-Clause, MPL-2.0, zlib or libpng/zlib,
+all of which are GPL-compatible.
+
+
+7. ASIO
+-------
+
+  ASIO is a trademark of Steinberg Media Technologies GmbH, registered in
+  Europe and other countries
+
+Steinberg's own guidance is that trademark use is optional under the GPLv3 arm
+but that anyone who does use the name must follow the published usage
+guidelines. This project uses the name only to state compatibility, in plain
+type, and never in a product name.
+
+Of the ASIO SDK files compiled into this binary, those under the SDK's host/
+directory carry a BSD-3-Clause notice of their own rather than the dual
+licence. Binary redistribution under that notice requires it to be reproduced,
+so it is, in full, in NOTICE.
