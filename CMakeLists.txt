@@ -59,6 +59,38 @@ set(NAMP_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # to the product being built.
 set(NAMP_CORE_DIR "${NAMP_REPO_ROOT}/core")
 
+# The shared amp's include path, appended wherever a product's own src/ is already on it. Both
+# products had their own copy of this list until stage 6 and the two were byte-identical, which is
+# the shape a thing takes just before it drifts.
+#
+# It belongs at the dispatcher because it is a fact about the repository's shape and not about
+# either product: every entry is built from NAMP_CORE_DIR, which is set three lines up, and the
+# value does not depend on which product is being configured. It is not in cmake/nampcore.cmake
+# because that file defines functions and nothing else.
+#
+# The subdirectory entries are not decoration. A quoted #include is resolved against the including
+# FILE's own directory first, so core/gfx/canvas.cpp reaching a sibling "resourcestore.h" stopped
+# being a sibling lookup the moment the two files landed in different trees. Each entry restores
+# exactly one such pair and no more: the set was derived by resolving every quoted include in both
+# products before and after the move and requiring each one to land on the same file as before.
+#
+# Neither product has a ${NAMP_PRODUCT_DIR}/src/* entry any more -- that was the scaffolding stage
+# 3 put up, keeping a sibling lookup working while a byte-identical .cpp sat in core/ and its .h
+# did not, and it came down in stage 4 as src/gfx and src/platform emptied of shared files.
+#
+# The two copies of this comment disagreed about that last point, and merging them is what exposed
+# it: the rack's copy said "products/rations still carries one, because it alone has a macplugview"
+# and rations' copy, thirty lines from the truth of the matter, said it carries none. Rations is
+# right, and its reasoning is the part worth keeping: macplugview.mm reaches its own header as a
+# sibling, and core's plugview.h reaches it as "platform/macplugview.h" through the product's own
+# src/ entry, so the one file that neither product shares needs no entry of its own.
+set(NAMP_CORE_INCLUDES
+    ${NAMP_CORE_DIR}
+    ${NAMP_CORE_DIR}/platform
+    ${NAMP_CORE_DIR}/tools
+    ${NAMP_CORE_DIR}/standalone
+    ${NAMP_CORE_DIR}/deps/tonestack)
+
 set(NAMP_PRODUCT_DIR "${NAMP_REPO_ROOT}/products/${NAMP_PRODUCT}")
 if(NOT EXISTS "${NAMP_PRODUCT_DIR}/CMakeLists.txt")
     file(GLOB _namp_products RELATIVE "${NAMP_REPO_ROOT}/products" "${NAMP_REPO_ROOT}/products/*")

@@ -12,8 +12,10 @@
 #
 # Included by the root dispatcher, so every function here is defined before either product's
 # CMakeLists runs. Functions are evaluated in the CALLER's scope, which is why they may name
-# variables a product sets for itself -- NAM_CORE_DIR, AUDIO_DSP_TOOLS_DIR, EIGEN_DIR and
-# NAMP_CORE_INCLUDES all come from the dependency probes in the product file that calls in here.
+# variables they never set: NAM_CORE_DIR, AUDIO_DSP_TOOLS_DIR and EIGEN_DIR come from the
+# dependency probes in the product file that calls in here, and NAMP_CORE_DIR, NAMP_PRODUCT_DIR
+# and NAMP_CORE_INCLUDES from the dispatcher, which is the one place that knows the repository's
+# shape.
 #
 # Platform is spelled WIN32 and APPLE rather than through either product's own three-way split:
 # rations sets RATIONS_WINDOWS / RATIONS_MACOS / RATIONS_LINUX and the rack sets nothing at all, so
@@ -23,8 +25,8 @@
 # namp_source(<out> <relative path>)
 #
 # The include path's rule, made usable by a source list: resolve a repository-relative path against
-# this product first and the shared core second -- the same order, for the same reason, as
-# NAMP_CORE_INCLUDES in each product's own file.
+# this product first and the shared core second -- the same order, for the same reason, as the
+# product's own src/ ahead of NAMP_CORE_INCLUDES.
 #
 # It exists because a source list can hold a path built from a loop variable, and such a path cannot
 # be repointed file by file. products/rack builds its offline proofs in two foreach loops, and each

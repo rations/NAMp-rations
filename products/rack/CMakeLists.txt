@@ -44,31 +44,10 @@ if(NOT NAMP_PRODUCT_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         "product.")
 endif()
 
-# The shared amp's include path, appended wherever this product's own src/ is already on it.
-#
-# ORDER IS THE MECHANISM: the product's src/ stays FIRST and core/ follows, so a header that exists
-# in both resolves to this product's copy. That is what lets core/gfx/widgets.h say #include
-# "canvas.h" and get the canvas.h belonging to whichever product is being built, with no #ifdef and
-# nothing in core/ knowing which product it is in.
-#
-# The subdirectory entries are not decoration. A quoted #include is resolved against the including
-# FILE's own directory first, so core/gfx/canvas.cpp reaching a sibling "resourcestore.h" stopped
-# being a sibling lookup the moment the two files landed in different trees. Each entry below is
-# the directory that restores exactly one such pair, and no more: the set was derived by resolving
-# every quoted include in both products before and after the move and requiring each one to land on
-# the same file it landed on before.
-#
-# There is no ${NAMP_PRODUCT_DIR}/src/* entry here any more, and that is the scaffolding stage 3 put
-# up coming down on schedule. It existed to keep a sibling lookup working while a byte-identical
-# .cpp sat in core/ and its .h did not; both src/gfx and src/platform emptied out as those pairs
-# unified, and the entries went with the directories. products/rations still carries one, because
-# it alone has a macplugview.
-set(NAMP_CORE_INCLUDES
-    ${NAMP_CORE_DIR}
-    ${NAMP_CORE_DIR}/platform
-    ${NAMP_CORE_DIR}/tools
-    ${NAMP_CORE_DIR}/standalone
-    ${NAMP_CORE_DIR}/deps/tonestack)
+# NAMP_CORE_INCLUDES -- core/'s entries, appended below wherever this product's own src/ is
+# already on the include path -- is set by the repository-root dispatcher. Both products had
+# an identical copy of it until stage 6; the reasoning for each entry, and for the order, is
+# at that one site now.
 
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)

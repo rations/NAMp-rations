@@ -8,10 +8,13 @@
 # TWO products on Linux, ONE on Windows and macOS. The VST3 bundle is the plug-in and is all those
 # two ship; Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can
 # be played without a DAW. standalone/ is X11, Linux::IRunLoop and JACK throughout, so a macOS or
-# Windows version of it would be a different program rather than the same one rebuilt. What is still absent, and is the real distinction from the parent NAMp, is the
-# RACK: nothing here hosts anyone else's plug-ins, scans for them or links LV2, because the
-# pedalboard is built into the plug-in rather than hosting other people's. The plug-in itself links
-# neither JACK nor the SDK's hosting layer — only the standalone and the offline tools do.
+# Windows version of it would be a different program rather than the same one rebuilt.
+#
+# Nothing HERE hosts anyone else's plug-ins, scans for them or links LV2: the pedalboard is built
+# into the plug-in rather than hosting other people's pedals. That used to be the distinction from
+# the parent NAMp and is now the distinction from products/rack, which is the same amp with the
+# pedalboard removed and a plug-in host around it. The plug-in itself links neither JACK nor the
+# SDK's hosting layer -- only the standalone and the offline tools do.
 #
 # Built through the repository-root dispatcher, which is the only way in: `cmake -S . -B build`.
 # The four dependency variables below can still be pointed at external source trees, but the
@@ -57,32 +60,10 @@ if(NOT NAMP_PRODUCT_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         "product.")
 endif()
 
-# The shared amp's include path, appended wherever this product's own src/ is already on it.
-#
-# ORDER IS THE MECHANISM: the product's src/ stays FIRST and core/ follows, so a header that exists
-# in both resolves to this product's copy. That is what lets core/gfx/widgets.h say #include
-# "canvas.h" and get the canvas.h belonging to whichever product is being built, with no #ifdef and
-# nothing in core/ knowing which product it is in.
-#
-# The subdirectory entries are not decoration. A quoted #include is resolved against the including
-# FILE's own directory first, so core/gfx/canvas.cpp reaching a sibling "resourcestore.h" stopped
-# being a sibling lookup the moment the two files landed in different trees. Each entry below is
-# the directory that restores exactly one such pair, and no more: the set was derived by resolving
-# every quoted include in both products before and after the move and requiring each one to land on
-# the same file it landed on before.
-#
-# There is no ${NAMP_PRODUCT_DIR}/src/* entry here any more, and that is the scaffolding stage 3
-# put up coming down on schedule. It existed to keep a sibling lookup working while a byte-identical .cpp
-# sat in core/ and its .h did not; both src/gfx and src/platform emptied of shared files as those
-# pairs unified. What is left in src/platform is macplugview, which this product alone has, and it
-# needs no entry of its own: macplugview.mm reaches its own header as a sibling, and core's
-# plugview.h reaches it as "platform/macplugview.h" through ${NAMP_PRODUCT_DIR}/src above.
-set(NAMP_CORE_INCLUDES
-    ${NAMP_CORE_DIR}
-    ${NAMP_CORE_DIR}/platform
-    ${NAMP_CORE_DIR}/tools
-    ${NAMP_CORE_DIR}/standalone
-    ${NAMP_CORE_DIR}/deps/tonestack)
+# NAMP_CORE_INCLUDES -- core/'s entries, appended below wherever this product's own src/ is
+# already on the include path -- is set by the repository-root dispatcher. Both products had
+# an identical copy of it until stage 6; the reasoning for each entry, and for the order, is
+# at that one site now.
 
 
 # Objective-C++, and it belongs HERE rather than in the platform split below,
