@@ -1,0 +1,196 @@
+// MidiLearn — the table that maps a footswitch button to something this plug-in does.
+//
+// A four-button footswitch is the reason the channel switch exists at all, and it has to work
+// with the editor closed, so the table lives in the processor and is evaluated on the audio
+// thread. This header is the shared vocabulary: the processor matches against it, the controller
+// caches a copy for the editor to draw, and both ends of the state blob agree on its layout.
+//
+// WHAT A PEDAL CAN SEND, AND HOW MUCH OF IT VST3 HANDS BACK. Verified against the SDK rather
+// than assumed, because the three message types do NOT arrive by the same route and they do not
+// carry the same information:
+//
+//   * Control Change reaches a VST3 plug-in only as a PARAMETER CHANGE, routed by
+//     IMidiMapping::getMidiControllerAssignment (pluginterfaces/vst/ivsteditcontroller.h). That
+//     call returns one ParamID per controller number, so the MIDI channel a CC arrived on is not
+//     recoverable: sixteen channels collapse onto one parameter. Recovering it would mean
+//     declaring 16 x 128 parameters, which is not a thing to inflict on a host's parameter list
+//     for a feature that switches an amp channel. So a learned CC matches on ANY channel, and
+//     the editor says so.
+//   * Program Change does not come through IMidiMapping at all. Controller numbers stop at
+//     kCountCtrlNumber (130) and kCtrlProgramChange is 130 - the same number - because 130 and
+//     up are the namespace for kLegacyMIDICCOutEvent, which is an OUTPUT event
+//     (pluginterfaces/vst/ivstmidicontrollers.h:104-112). The SDK's own host-side converter
+//     routes Program Change to a parameter carrying ParameterInfo::kIsProgramChange, found
+//     through IUnitInfo::getUnitByBus for that MIDI channel
+//     (public.sdk/source/vst/basewrapper/basewrapper.cpp:794-820, 1203-1223). That is the route
+//     taken here, and it has the same consequence as CC: the parameter is per unit, not per
+//     channel, so a learned Program Change also matches any channel.
+//   * Note On arrives directly, as Event::kNoteOnEvent in ProcessData::inputEvents
+//     (pluginterfaces/vst/ivstevents.h:161), and NoteOnEvent DOES carry its channel. So a
+//     learned note is the one binding of the three that can be pinned to one MIDI channel, and
+//     it is stored that way rather than being flattened to match the other two.
+//
+// The table is GENERIC OVER ParamID and value rather than hard-wired to the four channels, and it
+// STAYS generic even though every row it currently holds is a channel row. The parent plug-in's
+// pedalboard is what that generality was originally for — five footswitch rows were five rows of
+// data and no new mechanism — and the pedalboard is gone from this project, its pedals now
+// separate plug-ins in the rack. The generality is kept because the same shape is what would let
+// a footswitch reach a HOSTED plug-in's bypass later: that is a ParamID and a value on some other
+// object, which is exactly what a row already is. Rebuilding the mechanism at that point would be
+// rebuilding this file. The gate toggle is deliberately absent — it is not on the MIDI path at
+// all and stays on for as long as the user has it on.
+//
+// WHAT A ROW PERFORMS. A channel row SETS: the four of them are four positions of one switch, and
+// "go to OD2" is the whole of what a player means by stamping on that button. MidiAction::Toggle
+// is retained beside it and is currently unused by any row — it is what a row pointing at
+// something with two states needs, and it is one line to keep and a mechanism to re-derive.
+//
+// WHAT COUNTS AS A PRESS depends on the controller, and there are three kinds. This mattered more
+// than it looks, because the rule here was originally written for one of them and quietly broke
+// the other:
+//
+//   * PROGRAMMED - each slot sends one fixed number on every press and nothing on release
+//     (CC 4 value 127, say, or Program Change 4). This is what a programmable MIDI footswitch
+//     normally is, and the identical message arrives every time.
+//   * MOMENTARY - 127 when the foot goes down, 0 when it comes up. A spring-return switch.
+//   * ALTERNATING - 127, then 0, then 127, one message per press, the value tracking a latch
+//     inside the controller.
+//
+// A press is therefore any value at or above 64 - the MIDI switch threshold - and a value below it
+// is a release and does nothing. The rule used to require a RISING edge, at or above 64 having
+// previously been below, which serves a momentary switch exactly and makes a PROGRAMMED one work
+// once and then go dead: its second press is not an edge. That was invisible on a channel row,
+// because selecting Clean twice is selecting Clean, and it would have been fatal on a toggle row.
+// Measured against the built bundle rather than reasoned about: three presses of one value gave
+// on, nothing, nothing.
+//
+// What the edge test was really protecting is done by the BLOCK instead, in the processor: the
+// thing that must not fire repeatedly is a host writing the same value into the parameter every
+// block, and that is exactly a repeat in the immediately following block. A foot cannot arrive
+// twice inside one 2.67 ms period, so no real press is suppressed and no clock is consulted.
+//
+// ALTERNATING is the one kind not fully served: its releases are indistinguishable from a
+// momentary switch's, so it takes two stamps per change. Serving it instead would mean following
+// the value, which would make a momentary switch useless - on only while a foot was held down -
+// so it is a mode to avoid programming rather than a case to guess at.
+
+#pragma once
+
+#include "engineconfig.h"
+#include "rationsids.h"
+
+#include "pluginterfaces/vst/vsttypes.h"
+
+#include <cstdint>
+#include <string>
+
+namespace Rations
+{
+
+// What kind of MIDI message a row is listening for. Values are persisted in the state blob, so
+// they are fixed once written: append, never renumber.
+// Unlearned, not None: <X11/Xlib.h> is in this editor's include graph and defines None as a
+// macro, so a member by that name does not survive the preprocessor on the platform this is
+// built on.
+enum class MidiMsg : std::uint32_t {
+    Unlearned = 0, // the row is not learned
+    ControlChange = 1,
+    ProgramChange = 2,
+    NoteOn = 3,
+};
+
+// Channel 0 .. 15, or this. CC and Program Change are always kAnyChannel for the reasons in the
+// file header; a note may be either.
+inline constexpr int kMidiAnyChannel = -1;
+
+// One learned binding. Small and trivially copyable on purpose: it is packed into a single
+// atomic word so the audio thread can read a row without a lock and without ever seeing half of
+// an edit.
+struct MidiBinding {
+    MidiMsg msg = MidiMsg::Unlearned;
+    int channel = kMidiAnyChannel; // 0 .. 15, or kMidiAnyChannel
+    int data1 = 0;                 // controller number, program number, or note number
+
+    bool learned() const
+    {
+        return msg != MidiMsg::Unlearned;
+    }
+    bool operator==(const MidiBinding &o) const
+    {
+        return msg == o.msg && channel == o.channel && data1 == o.data1;
+    }
+};
+
+// Pack a binding into one 32-bit word, and back. Two bits of type, five of channel (0 = any,
+// 1 .. 16 = channel + 1) and seven of data, so the whole thing is 14 bits and an atomic<uint32>
+// is lock-free on every platform this builds for. unpack() clamps rather than trusting its
+// input, because the same words come back out of an untrusted state blob.
+std::uint32_t packBinding(const MidiBinding &b);
+MidiBinding unpackBinding(std::uint32_t word);
+
+// What a row does with its parameter. See the file header for why a channel row sets, and why
+// toggles, and for what a latching footswitch costs.
+enum class MidiAction {
+    Set = 0,    // store the row's value
+    Toggle = 1, // flip between 0 and 1 - only legal on a parameter whose step count is 1
+};
+
+// What a row performs when its binding matches: a parameter, an action, and the value the action
+// uses. Fixed at compile time, so the audio thread never has to publish a target, only a binding.
+struct MidiLearnTarget {
+    const char *label;             // what the settings page calls this row
+    Steinberg::Vst::ParamID param; // what it performs
+    MidiAction action;             // ... and how
+    double value;                  // what Set stores, normalized. Toggle does not read it.
+};
+
+// Four rows, one per channel. The parent plug-in had nine — these four, then five pedal
+// footswitches — and the five went with the pedalboard.
+//
+// kChannelId is a list parameter, so a channel row's value is that channel's step - see
+// normFromChannel in rationsids.h, which this must agree with. Written out rather than computed so
+// the table reads as a table; the static_assert below is what keeps it honest.
+//
+// kMidiLearnChannelRows and kMidiLearnRowCount are the same number today and are still two names,
+// because they mean different things: one is "how many of these rows are channels" and the other
+// is "how long is this table". A row pointing at something else would move them apart, and every
+// loop that walks the table already says which of the two it means.
+inline constexpr int kMidiLearnChannelRows = kChannelCount;
+inline constexpr int kMidiLearnRowCount = kChannelCount;
+inline constexpr MidiLearnTarget kMidiLearnRows[kMidiLearnRowCount] = {
+    {"Clean", kChannelId, MidiAction::Set, 0.0},
+    {"Crunch", kChannelId, MidiAction::Set, 1.0 / 3.0},
+    {"OD1", kChannelId, MidiAction::Set, 2.0 / 3.0},
+    {"OD2", kChannelId, MidiAction::Set, 1.0},
+};
+
+// A channel row does not toggle, and its value has to be a step kChannelId can actually take.
+constexpr bool midiChannelRowsAreChannels()
+{
+    for (int c = 0; c < kMidiLearnChannelRows; ++c)
+        if (kMidiLearnRows[c].param != kChannelId || kMidiLearnRows[c].action != MidiAction::Set ||
+            kMidiLearnRows[c].value != normFromChannel(static_cast<Channel>(c)))
+            return false;
+    return true;
+}
+static_assert(midiChannelRowsAreChannels(), "a channel row must set kChannelId to its own step");
+
+// How many rows a state blob written before the pedalboard holds. FROZEN: it is a fact about
+// versions 2 to 5 of that format, not about this build's table, so it stays 4 whatever
+// kMidiLearnRowCount becomes. From version 6 the block carries its own count and this is not
+// consulted - see kStateVersion. It equals kMidiLearnRowCount again now that the pedal rows are
+// gone, which is a coincidence of arithmetic and not a reason to merge them: one is history and
+// the other is this build.
+inline constexpr int kMidiLearnRowsV2 = 4;
+static_assert(kMidiLearnRowsV2 <= kMidiLearnRowCount,
+              "an old blob's rows must all still have somewhere to land");
+
+// Does an incoming message match this binding? `channel` is the channel the message arrived on,
+// or kMidiAnyChannel when the route did not carry one (CC and Program Change - see the header).
+bool bindingMatches(const MidiBinding &b, MidiMsg msg, int channel, int data1);
+
+// One line for the settings page: "CC 64", "PC 3", "Note C3 ch 2", or "not learned". Never
+// allocates beyond the returned string, and never runs on the audio thread.
+std::string describeBinding(const MidiBinding &b);
+
+} // namespace Rations
