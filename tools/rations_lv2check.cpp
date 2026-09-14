@@ -27,11 +27,13 @@
 
 #include "lv2/lv2message.h"
 #include "lv2/rationslv2.h"
+#include "version.h"
 
 #include <lilv/lilv.h>
 
 #include <lv2/atom/atom.h>
 #include <lv2/core/lv2.h>
+#include <lv2/midi/midi.h>
 #include <lv2/state/state.h>
 #include <lv2/ui/ui.h>
 #include <lv2/urid/urid.h>
@@ -114,6 +116,86 @@ bool nodeIsA(LilvWorld *world, const LilvNode *subject, const char *predicate, c
     lilv_node_free(o);
     lilv_node_free(p);
     return found;
+}
+
+//------------------------------------------------------------------------
+// WHAT A HOST PUTS ON THE SCREEN, read back out of the bundle and compared with the VST3's own
+// macros in src/version.h. This is the half a user reads, and the two formats are one product
+// there — so every value here is checked against the SAME definition the VST3 factory is built
+// from rather than against a copy of it.
+//
+// It is a gate rather than a printout because the failure is silent and cosmetic-looking, and was
+// neither. The bundle named no maintainer, so a host's "Name (vendor)" plug-in list had nothing
+// to put in the brackets beside an LV2 entry while the VST3 entry in the same list read
+// correctly. And it declared no version at all: lv2core.ttl's own documentation says releases
+// "MUST be explicitly versioned" and that minor version zero — which is what a host reads when
+// there is none — marks a development build that hosts "SHOULD NOT expose to users by default".
+void checkIdentity(LilvWorld *world, const LilvPlugin *plugin)
+{
+    LilvNode *name = lilv_plugin_get_name(plugin);
+    checkf(name && std::strcmp(lilv_node_as_string(name), stringPluginName) == 0,
+           "the bundle calls the plug-in \"%s\"; the VST3 calls it \"%s\"",
+           name ? lilv_node_as_string(name) : "(nothing)", stringPluginName);
+    lilv_node_free(name);
+
+    // The vendor. lilv resolves doap:maintainer -> foaf:name, which is what a host displays.
+    LilvNode *author = lilv_plugin_get_author_name(plugin);
+    checkf(author != nullptr,
+           "the bundle names no author: a host that lists plug-ins as \"Name (vendor)\" has "
+           "nothing to show beside this one, while the VST3 shows \"%s\"",
+           stringCompanyName);
+    checkf(!author || std::strcmp(lilv_node_as_string(author), stringCompanyName) == 0,
+           "the bundle's author is \"%s\"; the VST3's vendor is \"%s\"",
+           author ? lilv_node_as_string(author) : "", stringCompanyName);
+    lilv_node_free(author);
+
+    LilvNode *email = lilv_plugin_get_author_email(plugin);
+    checkf(email && std::strcmp(lilv_node_as_string(email), stringCompanyEmail) == 0,
+           "the bundle's author email is \"%s\"; the VST3's is \"%s\"",
+           email ? lilv_node_as_string(email) : "(nothing)", stringCompanyEmail);
+    lilv_node_free(email);
+
+    LilvNode *homepage = lilv_plugin_get_author_homepage(plugin);
+    checkf(homepage && std::strcmp(lilv_node_as_string(homepage), stringCompanyWeb) == 0,
+           "the bundle's author homepage is \"%s\"; the VST3's is \"%s\"",
+           homepage ? lilv_node_as_string(homepage) : "(nothing)", stringCompanyWeb);
+    lilv_node_free(homepage);
+
+    // The version, as two integers with a stability claim attached to each.
+    const auto readInt = [&](const char *predicate, int &out) {
+        LilvNode *p = lilv_new_uri(world, predicate);
+        LilvNodes *values = lilv_plugin_get_value(plugin, p);
+        const bool found = values && lilv_nodes_size(values) > 0;
+        if (found)
+            out = lilv_node_as_int(lilv_nodes_get_first(values));
+        lilv_nodes_free(values);
+        lilv_node_free(p);
+        return found;
+    };
+    int minor = -1;
+    int micro = -1;
+    const bool hasMinor = readInt(LV2_CORE__minorVersion, minor);
+    const bool hasMicro = readInt(LV2_CORE__microVersion, micro);
+    check(hasMinor && hasMicro,
+          "the bundle declares no lv2:minorVersion / lv2:microVersion. A release MUST be "
+          "versioned, and a host reads the absence as 0.0 - a development build it is told not "
+          "to show by default");
+    checkf(!hasMinor || minor == kLv2MinorVersion, "lv2:minorVersion is %d; the code says %d",
+           minor, kLv2MinorVersion);
+    checkf(!hasMicro || micro == kLv2MicroVersion, "lv2:microVersion is %d; the code says %d",
+           micro, kLv2MicroVersion);
+    checkf(!hasMinor || minor != 0,
+           "lv2:minorVersion 0 marks a pre-release plug-in that hosts are told not to show by "
+           "default");
+    checkf(!hasMinor || !hasMicro || (minor % 2 == 0 && micro % 2 == 0),
+           "lv2:minorVersion %d / lv2:microVersion %d: an odd number in either marks a "
+           "development build",
+           minor, micro);
+
+    // The category the host files it under, which is the VST3's subcategory in LV2's vocabulary.
+    checkf(nodeIsA(world, lilv_plugin_get_uri(plugin), LILV_NS_RDF "type", kLv2PluginClassUri),
+           "the bundle does not declare %s, so a host files it somewhere other than the VST3's %s",
+           kLv2PluginClass, stringSubCategory);
 }
 
 //------------------------------------------------------------------------
@@ -335,6 +417,178 @@ bool sendMessage(Sequences &seq, LV2_Atom_Forge &forge, const MessageUris &uris,
     return true;
 }
 
+// One MIDI message into the input sequence, the way a host delivers a footswitch. Under VST3 a CC
+// arrives as a parameter change and a Program Change as a program parameter; under LV2 both arrive
+// here as real MIDI, and turning them back into what the processor expects is the DSP wrapper's
+// job. Nothing else in this tree exercises that conversion.
+bool sendMidi(Sequences &seq, LV2_Atom_Forge &forge, LV2_URID midiEvent, const uint8_t *bytes,
+              uint32_t size)
+{
+    seq.clearInput();
+    LV2_Atom_Sequence *sequence = seq.input();
+    uint8_t *tail = reinterpret_cast<uint8_t *>(sequence) + lv2_atom_total_size(&sequence->atom);
+    const size_t room = seq.in.size() - static_cast<size_t>(tail - seq.in.data());
+    lv2_atom_forge_set_buffer(&forge, tail, static_cast<uint32_t>(room));
+
+    LV2_Atom_Forge_Frame frame;
+    lv2_atom_forge_sequence_head(&forge, &frame, 0);
+    if (!lv2_atom_forge_frame_time(&forge, 0))
+        return false;
+    if (!lv2_atom_forge_atom(&forge, size, midiEvent))
+        return false;
+    if (!lv2_atom_forge_write(&forge, bytes, size))
+        return false;
+    lv2_atom_forge_pop(&forge, &frame);
+
+    const auto *forged = reinterpret_cast<const LV2_Atom_Sequence *>(tail);
+    sequence->atom.size = static_cast<uint32_t>(sizeof(LV2_Atom_Sequence_Body) + forged->atom.size -
+                                                sizeof(LV2_Atom_Sequence_Body));
+    return true;
+}
+
+//------------------------------------------------------------------------
+// The footswitch, end to end, and it needs no captures: a learn is armed with a message, taught
+// with a MIDI CC, and stomped with the same CC, and what comes back is the echo that tells the
+// editor its own panel has moved.
+//
+// That echo is the piece LV2 does not give away. A VST3 host reports a parameter the plug-in
+// changed by itself back into IEditController::setParamNormalized, and the panel follows; here a
+// control INPUT port belongs to the host, the plug-in may not write one, and without a message of
+// its own the bat switch sits still while the sound changes — which is exactly the fault the JACK
+// standalone was found to have with a real footswitch.
+void checkMidiLearn(const LilvPlugin *plugin)
+{
+    UridMap map;
+    LV2_URID_Map mapFeature = {&map, UridMap::mapUri};
+    LV2_Feature mapItem = {LV2_URID__map, &mapFeature};
+    const LV2_Feature *features[] = {&mapItem, nullptr};
+
+    MessageUris uris;
+    uris.map(&mapFeature);
+    LV2_Atom_Forge forge;
+    lv2_atom_forge_init(&forge, &mapFeature);
+    const LV2_URID midiEvent = UridMap::mapUri(&map, LV2_MIDI__MidiEvent);
+
+    LilvInstance *instance = lilv_plugin_instantiate(plugin, 48000.0, features);
+    check(instance != nullptr, "the plug-in did not instantiate for the footswitch test");
+    if (!instance)
+        return;
+
+    constexpr uint32_t kBlock = 128;
+    std::vector<float> audioIn(kBlock, 0.0f);
+    std::vector<float> outL(kBlock, 0.0f);
+    std::vector<float> outR(kBlock, 0.0f);
+    Sequences seq;
+    seq.sequenceType = UridMap::mapUri(&map, LV2_ATOM__Sequence);
+    seq.clearInput();
+    seq.resetOutput();
+
+    lilv_instance_connect_port(instance, kPortAudioIn, audioIn.data());
+    lilv_instance_connect_port(instance, kPortAudioOutL, outL.data());
+    lilv_instance_connect_port(instance, kPortAudioOutR, outR.data());
+    lilv_instance_connect_port(instance, kPortAtomIn, seq.input());
+    lilv_instance_connect_port(instance, kPortAtomOut, seq.output());
+    for (int i = 0; i < kControlInCount; ++i) {
+        gPortValues[kPortControlFirst + i] = static_cast<float>(controlSpec(i).def);
+        lilv_instance_connect_port(instance, kPortControlFirst + i,
+                                   &gPortValues[kPortControlFirst + i]);
+    }
+    for (uint32_t i = kPortFeedbackFirst; i < kPortCount; ++i)
+        lilv_instance_connect_port(instance, i, &gPortValues[i]);
+    lilv_instance_activate(instance);
+
+    using namespace std::chrono_literals;
+    // Everything the plug-in has said since the last time this was called.
+    const auto drain = [&](Message **wanted, const char *wantedId) {
+        LV2_ATOM_SEQUENCE_FOREACH(seq.output(), ev)
+        {
+            const LV2_Atom *atom = &ev->body;
+            if (!lv2_atom_forge_is_object_type(&forge, atom->type))
+                continue;
+            Message *reply = parseMessage(reinterpret_cast<const LV2_Atom_Object *>(atom), uris);
+            if (!reply)
+                continue;
+            if (wanted && !*wanted && reply->id() == wantedId) {
+                *wanted = reply;
+                continue; // kept; the caller releases it
+            }
+            reply->release();
+        }
+    };
+    const auto run = [&](int blocks) {
+        for (int block = 0; block < blocks; ++block) {
+            seq.resetOutput();
+            lilv_instance_run(instance, kBlock);
+            seq.clearInput();
+            drain(nullptr, nullptr);
+        }
+    };
+
+    // Arm the Crunch row. The message thread is what performs this, so it is given time rather
+    // than assumed to have happened by the next block.
+    constexpr int kRow = 1; // rows 0..3 are the channels, in channel order
+    Message arm;
+    arm.setMessageID(kMsgMidiLearn);
+    arm.attributes().setInt(kMidiRowAttr, kRow);
+    check(sendMessage(seq, forge, uris, arm), "could not forge the learn message");
+    seq.resetOutput();
+    lilv_instance_run(instance, kBlock);
+    seq.clearInput();
+    std::this_thread::sleep_for(60ms);
+    run(4);
+
+    // Teach it: one press of CC 20. A teaching press must NOT also perform, which is the thing
+    // rations_midicheck asserts about the VST3 build and which the conversion here could break on
+    // its own.
+    const uint8_t press[3] = {0xB0, 20, 127};
+    check(sendMidi(seq, forge, midiEvent, press, sizeof(press)), "could not forge the teaching CC");
+    seq.resetOutput();
+    lilv_instance_run(instance, kBlock);
+    seq.clearInput();
+    run(4);
+    checkf(gPortValues[kPortFeedbackFirst + 4] == 0.0f,
+           "the press that taught the row also performed it: the active channel moved to %.3f",
+           static_cast<double>(gPortValues[kPortFeedbackFirst + 4]));
+    std::this_thread::sleep_for(60ms);
+    run(4);
+
+    // Stomp it. Nothing is loaded, so the rack holds the switch and the SOUNDING channel cannot
+    // move — but the parameter does, and the echo that says so is what this test is for.
+    Message *echo = nullptr;
+    check(sendMidi(seq, forge, midiEvent, press, sizeof(press)), "could not forge the stomp");
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!echo && std::chrono::steady_clock::now() < deadline) {
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+        drain(&echo, kMsgLv2ParamEcho);
+        std::this_thread::sleep_for(2ms);
+    }
+
+    checkf(echo != nullptr,
+           "a footswitch stomp produced no %s: the editor's bat switch would sit still while the "
+           "sound changed, and the host's automation lane would never learn",
+           kMsgLv2ParamEcho);
+    if (echo) {
+        int64_t id = 0;
+        double value = -1.0;
+        check(echo->getAttributes()->getInt(kLv2EchoIdAttr, id) == kResultOk,
+              "the parameter echo carries no id");
+        check(echo->getAttributes()->getFloat(kLv2EchoValueAttr, value) == kResultOk,
+              "the parameter echo carries no value");
+        checkf(static_cast<Vst::ParamID>(id) == kChannelId,
+               "the echo names parameter %lld; the Crunch row performs the channel switch",
+               static_cast<long long>(id));
+        checkf(std::fabs(value - normFromChannel(static_cast<Channel>(kRow))) < 1e-9,
+               "the echo carries %.6f; Crunch is %.6f", value,
+               normFromChannel(static_cast<Channel>(kRow)));
+        echo->release();
+    }
+
+    lilv_instance_deactivate(instance);
+    lilv_instance_free(instance);
+}
+
 //------------------------------------------------------------------------
 // Load a real bank into channel Clean, wait for it to build, and prove the LV2 build makes sound.
 //
@@ -386,16 +640,24 @@ void checkCaptures(const LilvPlugin *plugin, const std::string &captureDir)
         lilv_instance_connect_port(instance, i, &gPortValues[i]);
     lilv_instance_activate(instance);
 
-    const std::string bank = captureDir + "/Clean";
-    Message load;
-    load.setMessageID(kMsgLoadCapture[0]);
-    load.attributes().setBinary(kMsgPathAttr, bank.data(), static_cast<uint32_t>(bank.size()));
-    load.attributes().setInt(kMsgIsDirAttr, 1);
-    check(sendMessage(seq, forge, uris, load), "could not forge the capture load message");
-
-    seq.resetOutput();
-    lilv_instance_run(instance, kBlock);
-    seq.clearInput();
+    // ALL FOUR banks, each as a DIRECTORY. One channel would say nothing about the other three,
+    // and a directory is the case that carries the product: a bank a dial sweeps rather than a
+    // single capture. The wrapper mirrors the isDir flag into its own state as the message goes
+    // past, and the capability report says what each bank turned out to be, so loading four
+    // folders and reading four counts back is also the check that the message tunnel keys its
+    // attributes by channel rather than by position.
+    for (int c = 0; c < kChannelCount; ++c) {
+        const std::string bank = captureDir + "/" + kChannelDefaultName[c];
+        Message load;
+        load.setMessageID(kMsgLoadCapture[c]);
+        load.attributes().setBinary(kMsgPathAttr, bank.data(), static_cast<uint32_t>(bank.size()));
+        load.attributes().setInt(kMsgIsDirAttr, 1);
+        checkf(sendMessage(seq, forge, uris, load), "could not forge the load for %s",
+               kChannelDefaultName[c]);
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+    }
 
     // Wait for the bank, by ASKING repeatedly rather than by watching the progress port.
     //
@@ -410,6 +672,15 @@ void checkCaptures(const LilvPlugin *plugin, const std::string &captureDir)
     bool built = false;
     int capsReplies = 0;
     int reportedEntries = 0;
+    int entries[kChannelCount] = {};
+    int reportedIsDir[kChannelCount] = {};
+    // What each bank's captures STATE about their own levels. These are what the editor greys the
+    // output modes and the input-calibration pair on, so they have to follow the captures a
+    // channel loaded and nothing else - see the reload at the end of this function.
+    int hasLoudness[kChannelCount] = {};
+    int hasInLevel[kChannelCount] = {};
+    int hasOutLevel[kChannelCount] = {};
+    int slimmable[kChannelCount] = {};
     auto nextPoll = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() < deadline && !built) {
         if (std::chrono::steady_clock::now() >= nextPoll) {
@@ -434,14 +705,28 @@ void checkCaptures(const LilvPlugin *plugin, const std::string &captureDir)
                 continue;
             if (reply->id() == kMsgModelCaps) {
                 ++capsReplies;
-                const std::string attr = std::string(kCapsEntryCountAttr) + kChannelDefaultName[0];
-                int64_t entries = 0;
-                if (reply->getAttributes()->getInt(attr.c_str(), entries) == kResultOk)
-                    reportedEntries = static_cast<int>(entries);
+                for (int c = 0; c < kChannelCount; ++c) {
+                    const auto read = [&](const char *prefix) {
+                        const std::string attr = std::string(prefix) + kChannelDefaultName[c];
+                        int64_t value = 0;
+                        return reply->getAttributes()->getInt(attr.c_str(), value) == kResultOk
+                                   ? static_cast<int>(value)
+                                   : 0;
+                    };
+                    entries[c] = read(kCapsEntryCountAttr);
+                    reportedIsDir[c] = read(kCapsIsDirAttr);
+                    hasLoudness[c] = read(kCapsHasLoudnessAttr);
+                    hasInLevel[c] = read(kCapsHasInLevelAttr);
+                    hasOutLevel[c] = read(kCapsHasOutLevelAttr);
+                    slimmable[c] = read(kCapsSlimmableAttr);
+                }
+                reportedEntries = entries[0];
             }
             reply->release();
         }
-        built = reportedEntries > 0;
+        built = true;
+        for (int c = 0; c < kChannelCount; ++c)
+            built = built && entries[c] > 0;
         std::this_thread::sleep_for(5ms);
     }
 
@@ -451,8 +736,16 @@ void checkCaptures(const LilvPlugin *plugin, const std::string &captureDir)
            static_cast<double>(gPortValues[kPortFeedbackFirst + 2]), reportedEntries, capsReplies);
     checkf(capsReplies > 0, "the plug-in sent no capability report, so an editor would draw an "
                             "empty bank; the notify port is not carrying messages");
-    checkf(reportedEntries > 0, "the capability report names %d captures in Clean",
-           reportedEntries);
+    for (int c = 0; c < kChannelCount; ++c) {
+        checkf(entries[c] > 0, "the capability report names %d captures in %s", entries[c],
+               kChannelDefaultName[c]);
+        // A bank loaded as a FOLDER has to come back as one. If this flag is lost anywhere
+        // between the editor and the processor the channel plays a single capture and its dial
+        // sweeps nothing, which is the shape the whole product depends on.
+        checkf(reportedIsDir[c] == 1, "%s was loaded as a directory and reports isDir %d",
+               kChannelDefaultName[c], reportedIsDir[c]);
+    }
+    (void)reportedEntries;
 
     // And now the point of all of it: sound. A quiet sine in, and the output must be finite and
     // not silent. The amp is at its default settings with one bank loaded.
@@ -477,6 +770,271 @@ void checkCaptures(const LilvPlugin *plugin, const std::string &captureDir)
     // progress did.
     check(gPortValues[kPortFeedbackFirst + 0] > 0.0f, "the input meter never moved");
     check(gPortValues[kPortFeedbackFirst + 1] > 0.0f, "the output meter never moved");
+
+    // --- the channel switch, through the port a host writes -----------------------------------
+    //
+    // Four banks are the product; being able to change between them with a foot is the feature.
+    // The check is the sounding channel and not the requested one, because a switch is HELD until
+    // the incoming channel is exact — so what is asserted is that the audio actually arrived
+    // there, which is the only claim worth making.
+    //
+    // It is given a generous deadline rather than a block count, and that is a fact about this
+    // harness rather than about the plug-in: offline the blocks run far faster than real time, so
+    // the prime worker is never warm and every switch falls back to the full on-thread catch-up
+    // that the worker exists to avoid. In a live host the same switch is milliseconds.
+    const int channelPort = static_cast<int>(kPortControlFirst) + 3;
+    check(controlPortParam(3) == kChannelId,
+          "the fourth control port is no longer the channel switch; this check names it by "
+          "position");
+    const auto soundingChannel = [&]() {
+        return static_cast<int>(std::lround(
+            static_cast<double>(gPortValues[kPortFeedbackFirst + 4]) * (kChannelCount - 1)));
+    };
+    double channelRms[kChannelCount] = {};
+    for (int c = 0; c < kChannelCount; ++c) {
+        gPortValues[channelPort] = static_cast<float>(c);
+        const auto switchDeadline = std::chrono::steady_clock::now() + 60s;
+        while (soundingChannel() != c && std::chrono::steady_clock::now() < switchDeadline) {
+            for (uint32_t i = 0; i < kBlock; ++i) {
+                audioIn[i] = static_cast<float>(0.25 * std::sin(phase));
+                phase += 2.0 * 3.14159265358979 * 220.0 / 48000.0;
+            }
+            seq.resetOutput();
+            lilv_instance_run(instance, kBlock);
+        }
+        checkf(soundingChannel() == c,
+               "writing %d to the channel control port left %s sounding: the switch never "
+               "arrived",
+               c, kChannelDefaultName[soundingChannel()]);
+
+        double sum = 0.0;
+        int counted = 0;
+        for (int block = 0; block < 64; ++block) {
+            for (uint32_t i = 0; i < kBlock; ++i) {
+                audioIn[i] = static_cast<float>(0.25 * std::sin(phase));
+                phase += 2.0 * 3.14159265358979 * 220.0 / 48000.0;
+            }
+            seq.resetOutput();
+            lilv_instance_run(instance, kBlock);
+            if (block < 48)
+                continue;
+            for (uint32_t i = 0; i < kBlock; ++i) {
+                sum += static_cast<double>(outL[i]) * outL[i];
+                ++counted;
+            }
+        }
+        channelRms[c] = counted > 0 ? std::sqrt(sum / counted) : 0.0;
+    }
+    // Four different amps through four different banks do not measure the same. Identical figures
+    // would mean the switch moved the readout and not the audio.
+    for (int c = 1; c < kChannelCount; ++c)
+        checkf(std::fabs(channelRms[c] - channelRms[0]) > 1e-6,
+               "%s and %s produced the same output (%.6f): the channel switch moved the readout "
+               "but not the sound",
+               kChannelDefaultName[0], kChannelDefaultName[c], channelRms[c]);
+
+    // --- the dial sweeps the BANK, which is what a folder of captures is for -------------------
+    //
+    // The active-capture readout is the index the sounding channel is sitting on, normalized over
+    // its own bank. Moving that channel's gain port has to move it; a channel whose dial does
+    // nothing is a bank that plays one capture, whatever the capability report says it holds.
+    const int sounding = soundingChannel();
+    int gainPort = -1;
+    for (int i = 0; i < kControlInCount; ++i)
+        if (controlPortParam(i) == kChannelGainId[sounding])
+            gainPort = static_cast<int>(kPortControlFirst) + i;
+    checkf(gainPort >= 0, "no control port carries %s's gain dial", kChannelDefaultName[sounding]);
+    if (gainPort >= 0 && entries[sounding] > 1) {
+        const auto settle = [&](int blocks) {
+            for (int block = 0; block < blocks; ++block) {
+                for (uint32_t i = 0; i < kBlock; ++i) {
+                    audioIn[i] = static_cast<float>(0.25 * std::sin(phase));
+                    phase += 2.0 * 3.14159265358979 * 220.0 / 48000.0;
+                }
+                seq.resetOutput();
+                lilv_instance_run(instance, kBlock);
+            }
+        };
+        gPortValues[gainPort] = 0.0f;
+        settle(64);
+        const float indexLow = gPortValues[kPortFeedbackFirst + 3];
+        gPortValues[gainPort] = 1.0f;
+        // Long enough for the auto-detent to collapse onto the top capture, which is what makes
+        // the readout a whole index rather than a position between two.
+        settle(400);
+        const float indexHigh = gPortValues[kPortFeedbackFirst + 3];
+        checkf(indexHigh > indexLow + 0.5f,
+               "sweeping %s's gain dial from 0 to 1 moved the active capture from %.3f to %.3f "
+               "over a bank of %d: the dial is not sweeping the bank",
+               kChannelDefaultName[sounding], indexLow, indexHigh, entries[sounding]);
+        gPortValues[gainPort] = 0.0f;
+    }
+
+    // --- the FOOTSWITCH, with a bank under it and the switch required to STAY -----------------
+    //
+    // checkMidiLearn above stomps a row and reads the echo back, and that is not enough: it runs
+    // with nothing loaded, so the rack holds every switch and the sounding channel cannot move,
+    // and it looks at one block. The build that shipped passed it while a real footswitch did not
+    // change channel at all.
+    //
+    // What it missed is that a control INPUT port belongs to the host. When the learn table moves
+    // one of the plug-in's own parameters, the port still holds the pre-stomp value, and a wrapper
+    // that treats that as a change publishes it straight back — so the stomp is undone in the
+    // following block. Asserting the switch ARRIVED would not catch it either, because with an
+    // editor attached the editor's own write eventually lands and the channel gets there in the
+    // end, late and after a reversed switch. So the assertion is that it arrives AND is still
+    // there a long way later, with nothing writing the port in between.
+    {
+        const LV2_URID midiEvent = UridMap::mapUri(&map, LV2_MIDI__MidiEvent);
+        const auto spin = [&](int blocks) {
+            for (int block = 0; block < blocks; ++block) {
+                for (uint32_t i = 0; i < kBlock; ++i) {
+                    audioIn[i] = static_cast<float>(0.25 * std::sin(phase));
+                    phase += 2.0 * 3.14159265358979 * 220.0 / 48000.0;
+                }
+                seq.resetOutput();
+                lilv_instance_run(instance, kBlock);
+                seq.clearInput();
+            }
+        };
+        // Whichever channel is NOT sounding, so that an arrival is a real change.
+        const int from = soundingChannel();
+        const int to = (from + 1) % kChannelCount;
+        const uint8_t press[3] = {0xB0, 20, 127};
+
+        Message arm;
+        arm.setMessageID(kMsgMidiLearn);
+        arm.attributes().setInt(kMidiRowAttr, to); // rows 0..3 are the channels, in channel order
+        check(sendMessage(seq, forge, uris, arm), "could not forge the learn message");
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+        std::this_thread::sleep_for(60ms);
+        spin(4);
+
+        check(sendMidi(seq, forge, midiEvent, press, sizeof(press)), "could not forge the teach");
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+        spin(8);
+        checkf(soundingChannel() == from,
+               "the press that taught the row also performed it: %s is sounding rather than %s",
+               kChannelDefaultName[soundingChannel()], kChannelDefaultName[from]);
+        std::this_thread::sleep_for(60ms);
+        spin(4);
+
+        check(sendMidi(seq, forge, midiEvent, press, sizeof(press)), "could not forge the stomp");
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+        // The same generous deadline the port-driven switch above is given, and for the same
+        // reason: offline the prime worker is never warm, so every switch takes the full
+        // on-thread catch-up.
+        const auto stompDeadline = std::chrono::steady_clock::now() + 60s;
+        while (soundingChannel() != to && std::chrono::steady_clock::now() < stompDeadline)
+            spin(1);
+        checkf(soundingChannel() == to,
+               "a footswitch stomp on a learned CC left %s sounding rather than %s: the channel "
+               "port still holds the pre-stomp value and the wrapper is publishing it back",
+               kChannelDefaultName[soundingChannel()], kChannelDefaultName[to]);
+
+        // And it has to STAY. Nothing writes the channel port here, which is a player with the
+        // editor closed — the case MIDI learn exists for.
+        spin(600);
+        checkf(soundingChannel() == to,
+               "the stomp reached %s and the plug-in then went back to %s on its own: a "
+               "footswitch that works for one block",
+               kChannelDefaultName[to], kChannelDefaultName[soundingChannel()]);
+    }
+
+    // --- a capability belongs to the CAPTURES, never to the channel ---------------------------
+    //
+    // The editor greys the output modes and the input-calibration pair on what the loaded captures
+    // state about their own levels, so a user who loads a bank carrying input_level_dbu into any
+    // of the four channels has to get a live calibration control there. The four channels ship
+    // with default NAMES only — Clean, Crunch, OD1, OD2 are what an empty instance calls them
+    // until someone loads their own captures — and nothing may key off which one it is.
+    //
+    // Proved by moving a bank rather than by reading the code: whatever the LAST channel reported,
+    // the FIRST channel must report exactly the same once it is given that channel's folder. If
+    // any of it were keyed to the channel, these two rows would disagree.
+    constexpr int kFrom = kChannelCount - 1;
+    constexpr int kTo = 0;
+    if (entries[kFrom] > 0) {
+        const std::string moved = captureDir + "/" + kChannelDefaultName[kFrom];
+        Message load;
+        load.setMessageID(kMsgLoadCapture[kTo]);
+        load.attributes().setBinary(kMsgPathAttr, moved.data(),
+                                    static_cast<uint32_t>(moved.size()));
+        load.attributes().setInt(kMsgIsDirAttr, 1);
+        check(sendMessage(seq, forge, uris, load), "could not forge the moved-bank load");
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+
+        const int wantEntries = entries[kFrom];
+        const int wantLoudness = hasLoudness[kFrom];
+        const int wantInLevel = hasInLevel[kFrom];
+        const int wantOutLevel = hasOutLevel[kFrom];
+        const int wantSlimmable = slimmable[kFrom];
+        entries[kTo] = 0;
+        const auto movedDeadline = std::chrono::steady_clock::now() + 60s;
+        auto movedPoll = std::chrono::steady_clock::now();
+        while (entries[kTo] != wantEntries && std::chrono::steady_clock::now() < movedDeadline) {
+            if (std::chrono::steady_clock::now() >= movedPoll) {
+                Message poll;
+                poll.setMessageID(kMsgRequestCaps);
+                sendMessage(seq, forge, uris, poll);
+                movedPoll = std::chrono::steady_clock::now() + 100ms;
+            }
+            seq.resetOutput();
+            lilv_instance_run(instance, kBlock);
+            seq.clearInput();
+            LV2_ATOM_SEQUENCE_FOREACH(seq.output(), ev)
+            {
+                const LV2_Atom *atom = &ev->body;
+                if (!lv2_atom_forge_is_object_type(&forge, atom->type))
+                    continue;
+                Message *reply =
+                    parseMessage(reinterpret_cast<const LV2_Atom_Object *>(atom), uris);
+                if (!reply)
+                    continue;
+                if (reply->id() == kMsgModelCaps) {
+                    const auto read = [&](const char *prefix) {
+                        const std::string attr = std::string(prefix) + kChannelDefaultName[kTo];
+                        int64_t value = 0;
+                        return reply->getAttributes()->getInt(attr.c_str(), value) == kResultOk
+                                   ? static_cast<int>(value)
+                                   : 0;
+                    };
+                    entries[kTo] = read(kCapsEntryCountAttr);
+                    hasLoudness[kTo] = read(kCapsHasLoudnessAttr);
+                    hasInLevel[kTo] = read(kCapsHasInLevelAttr);
+                    hasOutLevel[kTo] = read(kCapsHasOutLevelAttr);
+                    slimmable[kTo] = read(kCapsSlimmableAttr);
+                }
+                reply->release();
+            }
+            std::this_thread::sleep_for(5ms);
+        }
+
+        checkf(entries[kTo] == wantEntries,
+               "%s's bank loaded into %s reports %d captures rather than %d",
+               kChannelDefaultName[kFrom], kChannelDefaultName[kTo], entries[kTo], wantEntries);
+        checkf(hasInLevel[kTo] == wantInLevel,
+               "the same captures report hasInLevel %d in %s and %d in %s: the input-calibration "
+               "control would be live on one channel and grey on another for one bank",
+               wantInLevel, kChannelDefaultName[kFrom], hasInLevel[kTo], kChannelDefaultName[kTo]);
+        checkf(hasOutLevel[kTo] == wantOutLevel,
+               "the same captures report hasOutLevel %d in %s and %d in %s", wantOutLevel,
+               kChannelDefaultName[kFrom], hasOutLevel[kTo], kChannelDefaultName[kTo]);
+        checkf(hasLoudness[kTo] == wantLoudness,
+               "the same captures report hasLoudness %d in %s and %d in %s", wantLoudness,
+               kChannelDefaultName[kFrom], hasLoudness[kTo], kChannelDefaultName[kTo]);
+        checkf(slimmable[kTo] == wantSlimmable,
+               "the same captures report slimmable %d in %s and %d in %s", wantSlimmable,
+               kChannelDefaultName[kFrom], slimmable[kTo], kChannelDefaultName[kTo]);
+    }
 
     lilv_instance_deactivate(instance);
     lilv_instance_free(instance);
@@ -541,6 +1099,70 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
         silent = silent && audioOutL[i] == 0.0f && audioOutR[i] == 0.0f;
     check(silent, "an unloaded plug-in produced something other than silence");
 
+    // --- do the control ports do ANYTHING? ---------------------------------------------------
+    //
+    // This is the cheapest check in the file and for a while it was the missing one. Every other
+    // thing here can pass while all 48 control inputs are inert: the plug-in loads, the TTL
+    // describes them, lilv reads them back, a bank builds, audio comes out and both meters move,
+    // because the processor's own defaults already match the ports and nothing here had ever
+    // MOVED one. That is exactly what shipped — the wrapper remembered each port's last value and
+    // used a NaN to mean "nothing seen yet", in a translation unit built with -ffast-math, where
+    // `x == NaN` comes out TRUE and so every port was skipped on the first block and for the life
+    // of the instance. Four banks that could not be switched between, a dial that could not sweep
+    // its bank, and no control on the panel that did anything.
+    //
+    // Bypass is the one that needs no captures. With nothing loaded the amp is at its
+    // ramped-silence gate, so bypass OUT is silence and bypass IN is the dry input — a difference
+    // no default can produce, reached only by the host writing a port.
+    const int bypassPort = static_cast<int>(kPortControlFirst); // kBypassId is the first control
+    check(controlPortParam(0) == kBypassId, "the first control port is no longer Bypass; this "
+                                            "check names it by position");
+    const auto runSine = [&](int blocks, double &rms) {
+        double sum = 0.0;
+        int counted = 0;
+        double phase = 0.0;
+        for (int block = 0; block < blocks; ++block) {
+            for (uint32_t i = 0; i < kBlock; ++i) {
+                audioIn[i] = static_cast<float>(0.25 * std::sin(phase));
+                phase += 2.0 * 3.14159265358979 * 220.0 / 48000.0;
+            }
+            seqOut->atom.size = static_cast<uint32_t>(atomOut.size() - sizeof(LV2_Atom));
+            lilv_instance_run(instance, kBlock);
+            // The last few blocks only: the bypass crossfade is a ramp, so the first ones after a
+            // change are neither state.
+            if (block < blocks - 8)
+                continue;
+            for (uint32_t i = 0; i < kBlock; ++i) {
+                sum += static_cast<double>(audioOutL[i]) * audioOutL[i];
+                ++counted;
+            }
+        }
+        rms = counted > 0 ? std::sqrt(sum / counted) : 0.0;
+    };
+
+    double rmsBypassOut = 0.0;
+    double rmsBypassIn = 0.0;
+    gPortValues[bypassPort] = 0.0f;
+    runSine(64, rmsBypassOut);
+    gPortValues[bypassPort] = 1.0f;
+    runSine(64, rmsBypassIn);
+    gPortValues[bypassPort] = 0.0f;
+
+    checkf(rmsBypassIn > 0.1,
+           "writing 1.0 to the bypass control port did not pass the dry signal through "
+           "(output rms %.6f against an input rms of about 0.177): the host's control ports are "
+           "not reaching the plug-in at all",
+           rmsBypassIn);
+    checkf(rmsBypassIn > rmsBypassOut * 100.0 + 1e-6,
+           "the bypass control port made no difference (out %.6f, in %.6f)", rmsBypassOut,
+           rmsBypassIn);
+    // And back again, so what is being measured is the port and not a one-way latch.
+    double rmsAgain = 0.0;
+    runSine(64, rmsAgain);
+    checkf(rmsAgain < rmsBypassIn * 0.5,
+           "bypass could be switched on and not off again (on %.6f, off again %.6f)", rmsBypassIn,
+           rmsAgain);
+
     // The state round trip. A fresh instance with nothing loaded still has a full blob — the
     // shared controls, the trims, the pedalboard, the output section — so this exercises the same
     // reader a project does.
@@ -573,11 +1195,134 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
 // only automated proof that the editor's shared object loads, finds its art in the bundle and
 // takes an X window. Skipped, loudly, when there is no display.
 #if !defined(RATIONS_LV2CHECK_NO_X11)
-void writeNothing(LV2UI_Controller, uint32_t, uint32_t, uint32_t, const void *)
+// Everything the UI writes, kept so the test can say what it asked for. A real host routes these
+// to the plug-in; this one routes them AND records them, because the UI's own messages are
+// otherwise invisible from outside the shared object.
+struct UiWrite {
+    uint32_t port = 0;
+    uint32_t protocol = 0;
+    std::vector<uint8_t> bytes;
+};
+std::vector<UiWrite> gUiWrites;
+
+void recordWrite(LV2UI_Controller, uint32_t port, uint32_t size, uint32_t protocol,
+                 const void *buffer)
 {
+    UiWrite write;
+    write.port = port;
+    write.protocol = protocol;
+    const auto *bytes = static_cast<const uint8_t *>(buffer);
+    if (bytes && size > 0)
+        write.bytes.assign(bytes, bytes + size);
+    gUiWrites.push_back(std::move(write));
 }
 
-void checkUiBinary(const std::string &bundleDir)
+// The editor's own request, handed to a real instance, and the reply read back off the notify
+// port. Both halves of the tunnel in one pass, using the bytes the EDITOR produced rather than
+// any this file forged — so an encoder and a decoder that agree with each other and with nothing
+// else cannot pass it.
+void checkStateReply(const LilvPlugin *plugin, const std::vector<uint8_t> &request)
+{
+    UridMap map;
+    LV2_URID_Map mapFeature = {&map, UridMap::mapUri};
+    LV2_Feature mapItem = {LV2_URID__map, &mapFeature};
+    const LV2_Feature *features[] = {&mapItem, nullptr};
+
+    MessageUris uris;
+    uris.map(&mapFeature);
+    LV2_Atom_Forge forge;
+    lv2_atom_forge_init(&forge, &mapFeature);
+
+    LilvInstance *instance = lilv_plugin_instantiate(plugin, 48000.0, features);
+    check(instance != nullptr, "the plug-in did not instantiate for the editor's state request");
+    if (!instance)
+        return;
+
+    constexpr uint32_t kBlock = 128;
+    std::vector<float> audioIn(kBlock, 0.0f);
+    std::vector<float> outL(kBlock, 0.0f);
+    std::vector<float> outR(kBlock, 0.0f);
+    Sequences seq;
+    seq.sequenceType = UridMap::mapUri(&map, LV2_ATOM__Sequence);
+    seq.clearInput();
+    seq.resetOutput();
+
+    lilv_instance_connect_port(instance, kPortAudioIn, audioIn.data());
+    lilv_instance_connect_port(instance, kPortAudioOutL, outL.data());
+    lilv_instance_connect_port(instance, kPortAudioOutR, outR.data());
+    lilv_instance_connect_port(instance, kPortAtomIn, seq.input());
+    lilv_instance_connect_port(instance, kPortAtomOut, seq.output());
+    for (int i = 0; i < kControlInCount; ++i) {
+        gPortValues[kPortControlFirst + i] = static_cast<float>(controlSpec(i).def);
+        lilv_instance_connect_port(instance, kPortControlFirst + i,
+                                   &gPortValues[kPortControlFirst + i]);
+    }
+    for (uint32_t i = kPortFeedbackFirst; i < kPortCount; ++i)
+        lilv_instance_connect_port(instance, i, &gPortValues[i]);
+    lilv_instance_activate(instance);
+
+    // Drop the editor's atom into the input sequence exactly as a host would.
+    seq.clearInput();
+    LV2_Atom_Sequence *sequence = seq.input();
+    uint8_t *tail = reinterpret_cast<uint8_t *>(sequence) + lv2_atom_total_size(&sequence->atom);
+    const size_t room = seq.in.size() - static_cast<size_t>(tail - seq.in.data());
+    bool staged = request.size() + sizeof(LV2_Atom_Event) <= room;
+    if (staged) {
+        lv2_atom_forge_set_buffer(&forge, tail, static_cast<uint32_t>(room));
+        LV2_Atom_Forge_Frame frame;
+        lv2_atom_forge_sequence_head(&forge, &frame, 0);
+        staged = lv2_atom_forge_frame_time(&forge, 0) != 0 &&
+                 lv2_atom_forge_write(&forge, request.data(),
+                                      static_cast<uint32_t>(request.size())) != 0;
+        lv2_atom_forge_pop(&forge, &frame);
+        const auto *forged = reinterpret_cast<const LV2_Atom_Sequence *>(tail);
+        sequence->atom.size = static_cast<uint32_t>(
+            sizeof(LV2_Atom_Sequence_Body) + forged->atom.size - sizeof(LV2_Atom_Sequence_Body));
+    }
+    check(staged, "the editor's state request did not fit in an input sequence");
+
+    using namespace std::chrono_literals;
+    bool answered = false;
+    uint32_t blobSize = 0;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!answered && std::chrono::steady_clock::now() < deadline) {
+        seq.resetOutput();
+        lilv_instance_run(instance, kBlock);
+        seq.clearInput();
+        LV2_ATOM_SEQUENCE_FOREACH(seq.output(), ev)
+        {
+            const LV2_Atom *atom = &ev->body;
+            if (!lv2_atom_forge_is_object_type(&forge, atom->type))
+                continue;
+            Message *reply = parseMessage(reinterpret_cast<const LV2_Atom_Object *>(atom), uris);
+            if (!reply)
+                continue;
+            if (reply->id() == kMsgLv2State) {
+                const void *data = nullptr;
+                uint32_t size = 0;
+                if (reply->getAttributes()->getBinary(kLv2StateAttr, data, size) == kResultOk &&
+                    data && size > 0) {
+                    answered = true;
+                    blobSize = size;
+                }
+            }
+            reply->release();
+        }
+        std::this_thread::sleep_for(2ms);
+    }
+
+    checkf(answered,
+           "the plug-in never answered the editor's %s with a %s carrying a state blob: the "
+           "editor's capture rows and channel names would stay empty however much is loaded",
+           kMsgLv2RequestState, kMsgLv2State);
+    checkf(!answered || blobSize > 8, "the state blob the editor was sent is %u bytes", blobSize);
+
+    lilv_instance_deactivate(instance);
+    lilv_instance_free(instance);
+}
+
+//------------------------------------------------------------------------
+void checkUiBinary(const std::string &bundleDir, const LilvPlugin *plugin)
 {
     const char *display = std::getenv("DISPLAY");
     if (!display || !*display) {
@@ -627,9 +1372,10 @@ void checkUiBinary(const std::string &bundleDir)
     LV2_Feature parentItem = {LV2_UI__parent, reinterpret_cast<void *>(parent)};
     const LV2_Feature *features[] = {&mapItem, &parentItem, nullptr};
 
+    gUiWrites.clear();
     LV2UI_Widget widget = nullptr;
     LV2UI_Handle ui = descriptor->instantiate(descriptor, kPluginUri, bundleDir.c_str(),
-                                              writeNothing, nullptr, &widget, features);
+                                              recordWrite, nullptr, &widget, features);
     check(ui != nullptr, "the UI did not instantiate");
     check(widget != nullptr, "the UI handed back no widget");
     if (ui) {
@@ -644,6 +1390,64 @@ void checkUiBinary(const std::string &bundleDir)
             for (int i = 0; i < 30 && alive; ++i)
                 alive = idle->idle(ui) == 0;
             check(alive, "the UI reported itself closed while idling");
+        }
+
+        // --- does the editor's own traffic go anywhere? ---------------------------------------
+        //
+        // The panel draws the capture paths and the channel names, and neither is a parameter:
+        // under VST3 they arrive through setComponentState, which LV2 has no equivalent of, so the
+        // editor asks for them the moment it opens. That request is the first thing this UI ever
+        // writes, and it is the only outward sign from here that the editor's connection to the
+        // processor is joined at all — a UI that wrote nothing would open, paint and never learn
+        // what is loaded.
+        const LV2_URID eventTransfer = UridMap::mapUri(&map, LV2_ATOM__eventTransfer);
+        MessageUris uris;
+        uris.map(&mapFeature);
+        LV2_Atom_Forge forge;
+        lv2_atom_forge_init(&forge, &mapFeature);
+
+        std::vector<uint8_t> request;
+        bool sawRequest = false;
+        for (const UiWrite &write : gUiWrites) {
+            if (write.port != kPortAtomIn || write.protocol != eventTransfer)
+                continue;
+            if (write.bytes.size() < sizeof(LV2_Atom))
+                continue;
+            const auto *atom = reinterpret_cast<const LV2_Atom *>(write.bytes.data());
+            if (!lv2_atom_forge_is_object_type(&forge, atom->type))
+                continue;
+            Message *message = parseMessage(reinterpret_cast<const LV2_Atom_Object *>(atom), uris);
+            if (!message)
+                continue;
+            if (message->id() == kMsgLv2RequestState) {
+                sawRequest = true;
+                request = write.bytes;
+            }
+            message->release();
+        }
+        checkf(sawRequest,
+               "the editor wrote no %s to the plug-in's control port (%zu writes in all): it "
+               "would open knowing nothing about what is loaded",
+               kMsgLv2RequestState, gUiWrites.size());
+
+        // And the answer has to come back. Hand the editor's own request to a real instance and
+        // look for the state on the notify port: that is both directions of the tunnel, through
+        // the shipped binaries, with nothing in between that this test wrote.
+        if (sawRequest && plugin)
+            checkStateReply(plugin, request);
+
+        // Finally, feed the editor what a host feeds it — a feedback port and a control port —
+        // and keep idling. Nothing here can see the panel; what it can say is that the editor
+        // survives the traffic rather than faulting on the first meter reading.
+        if (descriptor->port_event) {
+            const float meter = 0.5f;
+            descriptor->port_event(ui, kPortFeedbackFirst, sizeof(float), 0, &meter);
+            const float channel = 2.0f;
+            descriptor->port_event(ui, kPortControlFirst + 3, sizeof(float), 0, &channel);
+            bool alive = true;
+            for (int i = 0; i < 10 && alive; ++i)
+                alive = idle && idle->idle ? idle->idle(ui) == 0 : true;
+            check(alive, "the editor stopped idling after a port event");
         }
         descriptor->cleanup(ui);
     }
@@ -728,11 +1532,15 @@ int main(int argc, char **argv)
         bundleDir.pop_back();
 
     printf("\nports and UI\n");
+    checkIdentity(world, plugin);
     checkPorts(world, plugin);
     checkUi(world, plugin);
 
     printf("\nloading and running\n");
     checkInstantiate(world, plugin);
+
+    printf("\nthe footswitch\n");
+    checkMidiLearn(plugin);
 
     printf("\ncaptures\n");
     if (captureDir.empty())
@@ -744,7 +1552,7 @@ int main(int argc, char **argv)
 
     printf("\nthe editor\n");
 #if !defined(RATIONS_LV2CHECK_NO_X11)
-    checkUiBinary(bundleDir);
+    checkUiBinary(bundleDir, plugin);
 #else
     printf("  skip  built without X11\n");
 #endif

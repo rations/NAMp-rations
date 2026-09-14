@@ -138,6 +138,50 @@ private:
 };
 
 //------------------------------------------------------------------------
+// A fixed-capacity ring of {parameter, value} pairs, run() -> messageLoop(). The same single
+// producer, single consumer discipline as AtomRing above and for the same reason: the producer is
+// the audio thread, which may neither allocate nor take the mutex queueReply holds.
+//
+// Sixteen slots is four blocks' worth of the most any one block can produce, since the learn table
+// performs at most one thing per row and there are nine rows. A full ring drops the oldest news
+// rather than blocking, which costs a repaint and never a sample.
+class EchoRing
+{
+public:
+    static constexpr std::uint32_t kSlots = 16;
+
+    void push(Vst::ParamID id, double value)
+    {
+        const std::uint32_t w = mWrite.load(std::memory_order_relaxed);
+        if (w - mRead.load(std::memory_order_acquire) >= kSlots)
+            return;
+        mSlots[w % kSlots] = {id, value};
+        mWrite.store(w + 1, std::memory_order_release);
+    }
+
+    bool pop(Vst::ParamID &id, double &value)
+    {
+        const std::uint32_t r = mRead.load(std::memory_order_relaxed);
+        if (mWrite.load(std::memory_order_acquire) == r)
+            return false;
+        const Slot &slot = mSlots[r % kSlots];
+        id = slot.id;
+        value = slot.value;
+        mRead.store(r + 1, std::memory_order_release);
+        return true;
+    }
+
+private:
+    struct Slot {
+        Vst::ParamID id = 0;
+        double value = 0.0;
+    };
+    Slot mSlots[kSlots] = {};
+    std::atomic<std::uint32_t> mWrite{0};
+    std::atomic<std::uint32_t> mRead{0};
+};
+
+//------------------------------------------------------------------------
 class RationsLv2;
 
 // The processor's peer. RationsProcessor::sendMessage lands here, on the message thread, and the
@@ -257,9 +301,20 @@ private:
     float *mLatency = nullptr;
 
     // Last value seen on each control port, so a point is pushed only when the host actually moved
-    // something. NaN so the first block always publishes, which is what gets the plug-in to the
-    // host's restored values before the first sample is processed.
-    double mLastControl[kControlInCount];
+    // something, and a flag saying whether anything has been seen there yet — which is what gets
+    // the plug-in to the host's restored values before the first sample is processed.
+    //
+    // A SEPARATE BOOL, and never a NaN in mLastControl standing for "nothing yet". This
+    // translation unit is built with -ffast-math, which implies -ffinite-math-only, under which
+    // the compiler may assume no operand is a NaN and drops the unordered check from a floating
+    // compare — so `plain == NaN` comes out TRUE. Written the other way this loop skipped every
+    // port on the first block, left the sentinel in place, and skipped it again for the life of
+    // the instance: all 48 control inputs permanently dead, in a plug-in that loaded, played and
+    // metered perfectly. Measured, not reasoned about. The same flag had already compiled a
+    // divergence guard out of pedals/boost.h, which is why the rule is now written down:
+    // a NaN means nothing to code built this way, so nothing may be built on one.
+    double mLastControl[kControlInCount] = {};
+    bool mControlSeen[kControlInCount] = {};
 
     // --- VST3 process plumbing, all built in instantiate() ----------------
     Vst::ProcessData mData;
@@ -275,6 +330,7 @@ private:
     // --- the message thread -----------------------------------------------
     AtomRing mToMessage; // run() -> messageLoop()
     AtomRing mToRun;     // messageLoop() (and restore()) -> run()
+    EchoRing mEchoRing;  // run() -> messageLoop(), for what the MIDI table moved
     // The reply ring has two producers — the message thread and whichever thread the host calls
     // restore() on — so its push side is serialized here. run() is the single consumer and never
     // touches this.
@@ -441,8 +497,10 @@ bool RationsLv2::instantiate(double rate, const char *bundlePath,
     pushPoint(kMidiProgramChangeId, 0.0);
     mInputChanges.clearQueue();
 
-    for (int i = 0; i < kControlInCount; ++i)
-        mLastControl[i] = std::nan("");
+    for (int i = 0; i < kControlInCount; ++i) {
+        mLastControl[i] = 0.0;
+        mControlSeen[i] = false;
+    }
 
     mReplyScratch.resize(AtomRing::kSlotBytes);
     lv2_atom_forge_init(&mReplyForge, mMap);
@@ -677,9 +735,10 @@ void RationsLv2::run(std::uint32_t nframes)
         if (!mControl[i])
             continue;
         const double plain = static_cast<double>(*mControl[i]);
-        if (plain == mLastControl[i])
+        if (mControlSeen[i] && plain == mLastControl[i])
             continue;
         mLastControl[i] = plain;
+        mControlSeen[i] = true;
         pushPoint(controlPortParam(i), controlNorm(controlSpec(i), plain));
     }
 
@@ -729,17 +788,34 @@ void RationsLv2::run(std::uint32_t nframes)
         }
         if (placed)
             continue;
-        // An echo. The host owns a control input port's value, so the plug-in cannot write it;
-        // what it can do is stop overriding it, which is what clearing the remembered value does —
-        // the next block sees the host's own value differ and republishes it. The editor learns
-        // about the change through its own copy of the parameter, which it set when the learn
-        // table fired.
-        for (int i = 0; i < kControlInCount; ++i) {
-            if (controlPortParam(i) == id) {
-                mLastControl[i] = std::nan("");
-                break;
-            }
-        }
+        // An echo: the MIDI learn table has stomped one of the plug-in's own parameters.
+        //
+        // LEAVE mLastControl ALONE, and that is the whole of what this branch must not do. The
+        // memory is "the last value seen ON THE PORT", and the port has not moved — the foot did,
+        // inside the plug-in, and a control INPUT port belongs to the host. So the loop at the top
+        // of the next block must find the port equal to what it remembers and publish nothing.
+        //
+        // Writing the ECHOED value there instead is what shipped, and it inverts the intent it was
+        // written for: the echo necessarily DIFFERS from the port the host still holds, so the very
+        // next block saw a difference and republished the pre-stomp value — the channel snapped
+        // back 2.7 ms after every stomp. With the editor open it snapped back and forth until the
+        // editor's own write landed, which is a switch reversed mid-flight (ChannelRack handles
+        // that, but it leaves the target cold), and so a footswitch that answered in a few hundred
+        // milliseconds instead of thirteen, with the on-thread catch-up that implies audible as
+        // crackle. With the editor CLOSED — which is the case MIDI learn exists for — the channel
+        // never moved at all. Measured both ways against the built bundle before and after.
+        //
+        // Then tell the editor, which is the only party that can write a control input port. It
+        // repaints and writes the port, and the host's automation lane catches up through the
+        // same write — the loop a VST3 host closes for us, rebuilt out of the two halves we have.
+        // That write moves the port to where the parameter already is, so it publishes one
+        // redundant point and changes nothing.
+        //
+        // Onto the message thread, which is what forges it: building a Message here would
+        // allocate, and queueReply takes a mutex. The ring is fixed-capacity and a full one drops
+        // the echo rather than waiting — the panel is then one stomp stale, which is the mildest
+        // thing that can go wrong on this path.
+        mEchoRing.push(id, value);
     }
 
     writeAtomOutput();
@@ -835,6 +911,17 @@ void RationsLv2::messageLoop()
     // nothing the rest of the time.
     using namespace std::chrono_literals;
     while (mMessageRunning.load(std::memory_order_acquire)) {
+        // What the learn table stomped, on its way to the editor. Forged here rather than in
+        // run() because a Message allocates and queueReply takes a lock.
+        Vst::ParamID echoId = 0;
+        double echoValue = 0.0;
+        while (mEchoRing.pop(echoId, echoValue)) {
+            Message echo;
+            echo.setMessageID(kMsgLv2ParamEcho);
+            echo.attributes().setInt(kLv2EchoIdAttr, static_cast<int64>(echoId));
+            echo.attributes().setFloat(kLv2EchoValueAttr, echoValue);
+            queueReply(&echo);
+        }
         for (;;) {
             std::uint32_t size = 0;
             const std::uint8_t *bytes = mToMessage.peek(size);

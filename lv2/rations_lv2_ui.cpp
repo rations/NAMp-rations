@@ -592,6 +592,22 @@ void RationsUi::portEvent(std::uint32_t port, std::uint32_t size, std::uint32_t 
             MemoryStream stream(const_cast<void *>(data), static_cast<TSize>(blobSize));
             mController->setComponentState(&stream);
         }
+    } else if (message->id() == kMsgLv2ParamEcho) {
+        // Something the plug-in did to itself — the MIDI learn table stomping a channel or a
+        // pedal switch. Under VST3 the host closes this loop; here the editor is the only party
+        // that can, because a control INPUT port belongs to the host and only a UI may write one.
+        //
+        // Both halves are needed and they are not the same half. setParamNormalized repaints the
+        // panel; writeParameter moves the port, which is what stops the DSP wrapper's own copy
+        // and the host's automation lane disagreeing with the audio from the next stomp onwards.
+        int64 id = 0;
+        double value = 0.0;
+        if (message->getAttributes()->getInt(kLv2EchoIdAttr, id) == kResultOk &&
+            message->getAttributes()->getFloat(kLv2EchoValueAttr, value) == kResultOk) {
+            const auto param = static_cast<Vst::ParamID>(id);
+            mController->setParamNormalized(param, value);
+            writeParameter(param, value);
+        }
     } else {
         mController->notify(message);
     }

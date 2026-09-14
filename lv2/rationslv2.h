@@ -28,6 +28,7 @@
 #pragma once
 
 #include "rationsids.h"
+#include "version.h"
 
 #include <cstdint>
 
@@ -40,6 +41,45 @@ namespace lv2
 // lvtuner uses and which keeps one repository URL answering for both.
 inline constexpr const char *kPluginUri = "https://github.com/rations/NAMp-rations";
 inline constexpr const char *kUiUri = "https://github.com/rations/NAMp-rations#ui";
+
+// --- what a host puts on the screen -----------------------------------------------------------
+//
+// The name, the vendor, the version and the category are the VST3's, taken from src/version.h
+// rather than restated: this is the half of the bundle a user reads, and the two formats are one
+// product there. Hand-written literals were what made them diverge — the VST3 factory names a
+// vendor and the bundle named nobody, so a host's "Name (vendor)" list had nothing to put in the
+// brackets for the LV2 entry and printed something of its own beside a VST3 entry that reads
+// correctly in the same list.
+//
+// THE VERSION IS NOT COSMETIC. lv2core.ttl's own documentation is explicit: "Releases of plugins
+// and extensions MUST be explicitly versioned", and "an odd minor or micro version, OR MINOR
+// VERSION ZERO, indicates that the resource is a development version... Where feasible, hosts
+// SHOULD NOT expose such plugins to users by default." A bundle that declares neither is read as
+// 0.0, which is precisely that case — so the plug-in was asking to be hidden.
+//
+// LV2 has no major version, only these two, so the mapping from a three-part project version is a
+// decision rather than an arithmetic. It is made once here and CHECKED: the asserts below refuse
+// to build rather than let a version be carried across that would claim something untrue.
+inline constexpr int kLv2MinorVersion = SUB_VERSION_INT;
+inline constexpr int kLv2MicroVersion = RELEASE_NUMBER_INT;
+static_assert(MAJOR_VERSION_INT == 0,
+              "LV2 has no major version. Decide how the project's MAJOR maps onto "
+              "lv2:minorVersion before releasing 1.0, and keep lv2:minorVersion monotonically "
+              "increasing across releases - a host loads only the highest it can see.");
+static_assert(kLv2MinorVersion != 0,
+              "lv2:minorVersion 0 declares a pre-release plug-in that hosts are told not to show "
+              "by default. Give this release an even, non-zero minor version.");
+static_assert(kLv2MinorVersion % 2 == 0 && kLv2MicroVersion % 2 == 0,
+              "LV2 reads an odd lv2:minorVersion or lv2:microVersion as a development build. "
+              "Choose the even numbers this release should carry.");
+
+// The VST3 files the plug-in under stringSubCategory. LV2's taxonomy is a class rather than a
+// string, and this is that category's name in it (verified against lv2core.ttl, where
+// lv2:DistortionPlugin is "A plugin that adds distortion to its input"). The pair is written
+// together so that changing one without the other is visible; rations_lv2check reads the class
+// back out of the installed bundle and compares it with this.
+inline constexpr const char *kLv2PluginClass = "lv2:DistortionPlugin";
+inline constexpr const char *kLv2PluginClassUri = "http://lv2plug.in/ns/lv2core#DistortionPlugin";
 
 // --- the wrapper's own atom vocabulary --------------------------------------------------------
 //
@@ -80,6 +120,22 @@ inline constexpr const char *kAtomMessageBodyUri =
 inline constexpr const char *kMsgLv2RequestState = "RationsLv2RequestState";
 inline constexpr const char *kMsgLv2State = "RationsLv2State";
 inline constexpr const char *kLv2StateAttr = "blob";
+
+// A parameter the PLUG-IN moved by itself, on its way to the editor. There is exactly one thing
+// that does that — the MIDI learn table, which stomps a channel or a pedal switch on the audio
+// thread — and under VST3 the route is already there: the processor reports it through
+// outputParameterChanges, the host turns that back into IEditController::setParamNormalized, and
+// the panel follows. LV2 has no such route, because a control INPUT port belongs to the host and
+// a plug-in may not write one; the standalone had to grow the same loop by hand for the same
+// reason, and leaving it out there was a footswitch that changed the sound while the bat switch
+// sat still.
+//
+// So the DSP half sends the echo to the UI, and the UI does two things with it: it tells its own
+// controller, which repaints the panel, and it writes the control port — which is the only hand
+// that CAN write it, and what makes the host's own automation lane agree with the audio.
+inline constexpr const char *kMsgLv2ParamEcho = "RationsLv2ParamEcho";
+inline constexpr const char *kLv2EchoIdAttr = "id";
+inline constexpr const char *kLv2EchoValueAttr = "value";
 
 // --- ports ------------------------------------------------------------------------------------
 

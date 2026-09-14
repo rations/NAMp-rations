@@ -28,6 +28,7 @@
 
 #include "rationscontroller.h"
 #include "rationsids.h"
+#include "version.h"
 
 #include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstunits.h"
@@ -374,13 +375,60 @@ bool writePluginTtl(const std::string &path, const std::vector<PortInfo> &ports)
     fprintf(f, " .\n\n");
 
     // --- the plug-in -----------------------------------------------------
-    fprintf(f, "<%s>\n\ta lv2:Plugin ,\n\t\tlv2:SimulatorPlugin ;\n", kPluginUri);
+    //
+    // EVERY LINE OF THIS BLOCK IS THE VST3'S OWN, out of src/version.h and the factory that reads
+    // it, because this is the half a host puts on the screen and the two formats have to be the
+    // same product there. It was hand-written once, as three string literals that happened to
+    // match, and what that cost was the vendor: the VST3 factory names one and the bundle named
+    // nobody, so a host with a "Name (vendor)" plug-in list had nothing to put in the brackets and
+    // printed something of its own invention beside an entry that reads correctly in the same
+    // list for the VST3. rations_lv2check reads all of it back out of the INSTALLED bundle and
+    // compares it with these same macros, so the two cannot drift again.
+    // doap:Project alongside the two LV2 classes, and it is what makes the maintainer below legal
+    // where a host will actually read it. doap:maintainer carries `rdfs:domain doap:Project`, so
+    // stating it about this URI ALREADY asserts the URI is a project — that is what an rdfs:domain
+    // means. Declaring the type explicitly only writes down the entailment, which is why it
+    // satisfies sord_validate rather than silencing it, and it is true here in the plainest sense:
+    // the plug-in's URI is the project's own page. Hosts find plug-ins by asking for lv2:Plugin,
+    // and an extra type is no more remarkable than lv2:DistortionPlugin beside it.
+    fprintf(f, "<%s>\n\ta lv2:Plugin ,\n\t\t%s ,\n\t\tdoap:Project ;\n", kPluginUri,
+            kLv2PluginClass);
     fprintf(f,
-            "\tdoap:name \"NAMp Rations\" ;\n"
+            "\tdoap:name \"%s\" ;\n"
             "\tdoap:license <http://opensource.org/licenses/MIT> ;\n"
-            "\tlv2:project [\n\t\tdoap:name \"NAMp Rations\" ;\n"
-            "\t\tdoap:homepage <%s>\n\t] ;\n",
-            kPluginUri);
+            "\tlv2:minorVersion %d ;\n"
+            "\tlv2:microVersion %d ;\n"
+            // The maintainer is stated TWICE, on the plug-in and on the project, and the
+            // duplication is the point rather than an oversight.
+            //
+            // On the PROJECT is where the schema puts it: doap.ttl gives doap:maintainer
+            // `rdfs:domain doap:Project`, so a maintainer hanging off an lv2:Plugin is a domain
+            // violation. lilv reads it either way — it looks on the plug-in first and falls back
+            // to the project (lilv/src/plugin.c, lilv_plugin_get_author).
+            //
+            // On the PLUG-IN is where a host reads it, and that was measured rather than assumed.
+            // A host with its own RDF reader has no reason to follow lv2:project, and the one this
+            // is tested in does not: the three vocabulary URIs in its binary are doap#maintainer,
+            // doap#name and foaf/0.1/name, with nothing about lv2core#project anywhere. So with
+            // the maintainer on the project alone the plug-in list showed no vendor at all, beside
+            // a VST3 entry for the same product that reads "NAMp Rations (rations)". Every widely
+            // shipped bundle on this machine states it on the plug-in for the same reason.
+            //
+            // Stating both satisfies the schema and the hosts at once, and costs four lines.
+            "\tdoap:maintainer [\n\t\ta foaf:Person ;\n"
+            "\t\tfoaf:name \"%s\" ;\n"
+            "\t\tfoaf:mbox <%s> ;\n"
+            "\t\tfoaf:homepage <%s>\n\t] ;\n"
+            "\tlv2:project [\n\t\ta doap:Project ;\n"
+            "\t\tdoap:name \"%s\" ;\n"
+            "\t\tdoap:homepage <%s> ;\n"
+            "\t\tdoap:maintainer [\n\t\t\ta foaf:Person ;\n"
+            "\t\t\tfoaf:name \"%s\" ;\n"
+            "\t\t\tfoaf:mbox <%s> ;\n"
+            "\t\t\tfoaf:homepage <%s>\n\t\t]\n\t] ;\n",
+            stringPluginName, kLv2MinorVersion, kLv2MicroVersion, stringCompanyName,
+            stringCompanyEmail, stringCompanyWeb, stringPluginName, stringCompanyWeb,
+            stringCompanyName, stringCompanyEmail, stringCompanyWeb);
     fprintf(f, "\tlv2:requiredFeature urid:map ;\n"
                "\tlv2:optionalFeature lv2:hardRTCapable ,\n"
                "\t\tbufsz:boundedBlockLength ,\n"
@@ -389,17 +437,21 @@ bool writePluginTtl(const std::string &path, const std::vector<PortInfo> &ports)
     fprintf(f, "\tui:ui <%s> ;\n", kUiUri);
     fprintf(f, "\tlv2:port\n");
 
+    // The audio port NAMES are the VST3's bus names (addAudioInput "Input", addAudioOutput
+    // "Output" as a stereo bus), so a patchbay labels the two formats alike. LV2 has no buses, so
+    // the stereo output becomes two ports and the side is appended. The SYMBOLS are the stable
+    // identity and do not follow the names anywhere.
     fprintf(f,
             "\t[\n\t\ta lv2:AudioPort ,\n\t\t\tlv2:InputPort ;\n\t\tlv2:index %u ;\n"
-            "\t\tlv2:symbol \"in\" ;\n\t\tlv2:name \"In\"\n\t] , ",
+            "\t\tlv2:symbol \"in\" ;\n\t\tlv2:name \"Input\"\n\t] , ",
             static_cast<std::uint32_t>(kPortAudioIn));
     fprintf(f,
             "[\n\t\ta lv2:AudioPort ,\n\t\t\tlv2:OutputPort ;\n\t\tlv2:index %u ;\n"
-            "\t\tlv2:symbol \"out_l\" ;\n\t\tlv2:name \"Out Left\"\n\t] , ",
+            "\t\tlv2:symbol \"out_l\" ;\n\t\tlv2:name \"Output Left\"\n\t] , ",
             static_cast<std::uint32_t>(kPortAudioOutL));
     fprintf(f,
             "[\n\t\ta lv2:AudioPort ,\n\t\t\tlv2:OutputPort ;\n\t\tlv2:index %u ;\n"
-            "\t\tlv2:symbol \"out_r\" ;\n\t\tlv2:name \"Out Right\"\n\t] , ",
+            "\t\tlv2:symbol \"out_r\" ;\n\t\tlv2:name \"Output Right\"\n\t] , ",
             static_cast<std::uint32_t>(kPortAudioOutR));
 
     // The control port carries MIDI (the footswitch, which is the reason the channel switch
