@@ -481,11 +481,6 @@ namp_add_gfx(NampGfx
         ${NAMP_CORE_DIR}/filebrowser.h
         ${NAMP_CORE_DIR}/filebrowser.cpp)
 
-# The name this product's own targets have always used. An ALIAS is a second name for one target,
-# not a second target: it costs nothing, it cannot be linked twice, and it keeps this rename out of
-# the ~10 link lines below so that if anything moved in this commit it moved because of the rename
-# and not because a call site was missed. Both aliases go in the next stage, with the call sites.
-add_library(NampRackGfx ALIAS NampGfx)
 
 # ---------------------------------------------------------------------------
 # The NAM DSP core as a static library, linked --whole-archive by everything that runs a model,
@@ -498,8 +493,6 @@ add_library(NampRackGfx ALIAS NampGfx)
 # has no pedals to vendor any for.
 # ---------------------------------------------------------------------------
 namp_add_dsp(NampDsp NampDspHeaders)
-add_library(NampRackDsp ALIAS NampDsp)
-add_library(NampRackDspHeaders ALIAS NampDspHeaders)
 
 # ---------------------------------------------------------------------------
 # The amp, as a VST3 bundle.
@@ -604,7 +597,7 @@ endforeach()
 # ---------------------------------------------------------------------------
 add_library(NampRackPlugin STATIC ${NAMP_PLUGIN_SOURCES})
 target_include_directories(NampRackPlugin PUBLIC ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
-target_link_libraries(NampRackPlugin PUBLIC sdk NampRackGfx ${NAMP_PLATFORM_GUI_LIBS})
+target_link_libraries(NampRackPlugin PUBLIC sdk NampGfx ${NAMP_PLATFORM_GUI_LIBS})
 target_compile_features(NampRackPlugin PUBLIC cxx_std_17)
 target_compile_options(NampRackPlugin PRIVATE -ffast-math -Wall)
 set_target_properties(NampRackPlugin PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -618,7 +611,7 @@ if(NAMPRACK_BUILD_VST3_BUNDLE)
     target_compile_options(NampRackAmp PRIVATE -ffast-math -Wall)
     target_include_directories(NampRackAmp PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
     namp_link_whole_dsp(NampRackAmp)
-    target_link_libraries(NampRackAmp PRIVATE sdk NampRackGfx ${NAMP_PLATFORM_GUI_LIBS})
+    target_link_libraries(NampRackAmp PRIVATE sdk NampGfx ${NAMP_PLATFORM_GUI_LIBS})
 
     # The bundle carries its art in Contents/Resources rather than embedded, so it can be replaced
     # without a rebuild and so respath.cpp resolves it the same way here and in the offline render
@@ -659,9 +652,9 @@ add_custom_command(
     VERBATIM
 )
 add_library(NampRackResources STATIC "${NAMPRACK_EMBED_CPP}")
-# NampRackGfx for the include path and for installEmbeddedResources(), which the generated file
+# NampGfx for the include path and for installEmbeddedResources(), which the generated file
 # calls.
-target_link_libraries(NampRackResources PUBLIC NampRackGfx)
+target_link_libraries(NampRackResources PUBLIC NampGfx)
 target_compile_features(NampRackResources PRIVATE cxx_std_17)
 set_target_properties(NampRackResources PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
@@ -776,7 +769,7 @@ namp_assert_no_fast_math(NampRackHost
 which point a hosted plug-in emitting NaN reaches the speakers and nothing in the tree says so.")
 
 # ---------------------------------------------------------------------------
-# NampRackRack — the rack strip's model and its drawing. Links NampRackGfx (cairo/freetype) and
+# NampRackRack — the rack strip's model and its drawing. Links NampGfx (cairo/freetype) and
 # NampRackHost (the chain it displays) and NOTHING ELSE: no X11, no JACK, no windowing. That is
 # what lets rackrender drive the whole interface offline with no plug-in installed, and it is the
 # same separation the amp's own editor already has between what draws and what embeds.
@@ -791,7 +784,7 @@ add_library(NampRackRack STATIC
     ${NAMP_PRODUCT_DIR}/src/rack/rackview.cpp
 )
 target_include_directories(NampRackRack PUBLIC ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
-target_link_libraries(NampRackRack PUBLIC NampRackGfx NampRackHost)
+target_link_libraries(NampRackRack PUBLIC NampGfx NampRackHost)
 target_compile_features(NampRackRack PUBLIC cxx_std_17)
 set_target_properties(NampRackRack PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(NampRackRack PRIVATE -Wall)
@@ -812,7 +805,7 @@ target_compile_options(NampRackRack PRIVATE -Wall)
 # -ffast-math is ON for every *Dsp target, both bundles, NampRackPlugin and both LV2 modules, and
 # OFF here; a build change that adds it broadly is caught on three of the four targets that must
 # not have it, and "caught on most of them" is not a property anyone can rely on. Note that
-# NampRackGfx is also unguarded and is also built without the flag -- it draws what it is given and
+# NampGfx is also unguarded and is also built without the flag -- it draws what it is given and
 # reads no hosted value, so it is left out deliberately rather than overlooked.
 namp_assert_no_fast_math(NampRackRack
     "It reads parameter values out of hosted plug-ins and turns them into geometry, and it is \
@@ -997,7 +990,7 @@ if(NAMPRACK_BUILD_TOOLS)
     # otherwise be compiled out of the very code being measured.
     #
     # This costs nothing that matters. The tool is measuring WHETHER an allocation happens, not how
-    # fast the audio path is, and the DSP it drives is in NampRackDsp and is still built at -O3.
+    # fast the audio path is, and the DSP it drives is in NampDsp and is still built at -O3.
     target_compile_options(rations_rtcheck PRIVATE -Wall -O0 -UNDEBUG)
     endif()
 
@@ -1025,7 +1018,7 @@ rather than merely the code under it.")
     add_executable(panelrender
         ${NAMP_PRODUCT_DIR}/tools/panelrender.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp)
-    target_link_libraries(panelrender PRIVATE NampRackGfx)
+    target_link_libraries(panelrender PRIVATE NampGfx)
     target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
     target_compile_options(panelrender PRIVATE -Wall)
 

@@ -311,7 +311,7 @@ if(WIN32)
     # NOMINMAX under __cplusplus, and minwindef.h guards the min/max macros with
     # #ifndef __cplusplus anyway), so nothing here changes today. It would bite
     # under MSVC, it is exactly what NeuralAmpModelerCore's and AudioDSPTools'
-    # own CMakeLists set, and this project compiles those sources into RationsDsp
+    # own CMakeLists set, and this project compiles those sources into NampDsp
     # and so never picks their flags up. WIN32_LEAN_AND_MEAN additionally keeps
     # winsock, RPC and OLE out of every pedal-including TU, which they have no
     # use for.
@@ -418,11 +418,6 @@ endif()
 # prebuilt library.
 namp_add_gfx(NampGfx CAIRO PkgConfig::CAIRO)
 
-# The name this product's own targets have always used. An ALIAS is a second name for one target,
-# not a second target: it costs nothing, it cannot be linked twice, and it keeps this rename out of
-# the ~10 link lines below so that if anything moved in this commit it moved because of the rename
-# and not because a call site was missed. Both aliases go in the next stage, with the call sites.
-add_library(RationsGfx ALIAS NampGfx)
 
 # ---------------------------------------------------------------------------
 # The NAM DSP core as a static library, linked --whole-archive by the plug-in, plus the INTERFACE
@@ -436,8 +431,6 @@ add_library(RationsGfx ALIAS NampGfx)
 # Both trees are header-only, so there is nothing to add to the source list.
 # ---------------------------------------------------------------------------
 namp_add_dsp(NampDsp NampDspHeaders INCLUDE_DIRS ${NAMP_PRODUCT_DIR}/deps)
-add_library(RationsDsp ALIAS NampDsp)
-add_library(RationsDspHeaders ALIAS NampDspHeaders)
 
 # ---------------------------------------------------------------------------
 # Art, fonts and captures, named once.
@@ -715,7 +708,7 @@ target_include_directories(Rations PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_I
 target_link_libraries(Rations
     PRIVATE
         sdk
-        RationsGfx
+        NampGfx
         ${NAMP_PLATFORM_GUI_LIBS}
 )
 namp_link_whole_dsp(Rations)
@@ -749,7 +742,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # panelrender — offline render of each editor page to a PNG, plus an audit of
-# every art asset and both fonts. Links RationsGfx only: no X11, no host, no
+# every art asset and both fonts. Links NampGfx only: no X11, no host, no
 # VST3 objects, so the graphics stack and the layout can be checked long before
 # the editor exists, and a missing asset fails the build gate instead of
 # silently degrading to a flat rectangle at run time.
@@ -1067,7 +1060,7 @@ add_executable(rations_rtcheck
     ${NAMP_PRODUCT_DIR}/src/pedals/pedalchain.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
     # from throwing out of the worker thread. Linked in rather than taken from
-    # RationsGfx because this target deliberately links no graphics at all — it
+    # NampGfx because this target deliberately links no graphics at all — it
     # is measuring allocations on the audio path.
     ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
@@ -1104,7 +1097,7 @@ target_compile_options(rations_pedalcheck PRIVATE -Wall -Wextra -O2)
 # it with the same function the panel does rather than with a mock string.
 add_executable(panelrender ${NAMP_PRODUCT_DIR}/tools/panelrender.cpp
                            ${NAMP_CORE_DIR}/midilearn.cpp)
-target_link_libraries(panelrender PRIVATE RationsGfx)
+target_link_libraries(panelrender PRIVATE NampGfx)
 target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
 target_compile_options(panelrender PRIVATE -Wall)
 
@@ -1152,7 +1145,7 @@ if(NAMP_LINUX AND RATIONS_LV2_FOUND)
     target_include_directories(rations_ttlgen
         PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_ttlgen
-        PRIVATE sdk RationsGfx ${NAMP_PLATFORM_GUI_LIBS})
+        PRIVATE sdk NampGfx ${NAMP_PLATFORM_GUI_LIBS})
     namp_link_whole_dsp(rations_ttlgen)
     target_compile_features(rations_ttlgen PRIVATE cxx_std_17)
     target_compile_options(rations_ttlgen PRIVATE -Wall)
@@ -1211,7 +1204,7 @@ if(NAMP_LINUX AND RATIONS_LV2_FOUND)
     target_include_directories(rations_lv2_ui
         PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_lv2_ui
-        PRIVATE sdk RationsGfx ${NAMP_PLATFORM_GUI_LIBS})
+        PRIVATE sdk NampGfx ${NAMP_PLATFORM_GUI_LIBS})
     target_compile_features(rations_lv2_ui PRIVATE cxx_std_17)
     target_compile_options(rations_lv2_ui PRIVATE -ffast-math -Wall)
 
