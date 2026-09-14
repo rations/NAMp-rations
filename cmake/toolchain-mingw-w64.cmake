@@ -106,9 +106,23 @@ set(ENV{PKG_CONFIG_SYSROOT_DIR} "")
 # --no-undefined mirrors what the SDK's SMTG_PlatformToolset.cmake asks for on
 # MinGW; it is repeated here because that file sets it with a non-FORCE
 # CACHE set(), which cannot overwrite a value already seeded from _INIT.
-set(CMAKE_EXE_LINKER_FLAGS_INIT    "-static")
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static -Wl,--no-undefined")
-set(CMAKE_MODULE_LINKER_FLAGS_INIT "-static -Wl,--no-undefined")
+# --no-insert-timestamp makes the Windows build REPRODUCIBLE, and without it the
+# Windows half of this project has no usable "the binaries did not move" gate at
+# all. Measured before adding it: two builds of one tree with one toolchain, two
+# minutes apart, differ -- and differ in exactly three bytes out of 6.3 million,
+# at 137, 138 and 217, which are the PE header's TimeDateStamp and the checksum
+# covering it. objdump -p reads that field back as the wall-clock minute each
+# link happened. Nothing else moves.
+#
+# So the whole difference was a clock, and the Linux side's central verification
+# method -- build it again, compare every byte, and attribute anything that moved
+# -- simply did not exist over here. binutils inserts that stamp by default; this
+# flag tells it not to, and the field becomes zero. It is also the reason the
+# .vst3 carried a SECOND pair of moving bytes nine megabytes in: the same stamp
+# again in the debug directory.
+set(CMAKE_EXE_LINKER_FLAGS_INIT    "-static -Wl,--no-insert-timestamp")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static -Wl,--no-undefined -Wl,--no-insert-timestamp")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-static -Wl,--no-undefined -Wl,--no-insert-timestamp")
 
 # Run cross-built test/tool executables under Wine. This is what lets the
 # offline render and the SDK's validator/moduleinfotool be driven from the
