@@ -39,18 +39,17 @@ set(NAMPRACK_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # every quoted include in both products before and after the move and requiring each one to land on
 # the same file it landed on before.
 #
-# The ${NAMPRACK_ROOT}/src/platform entry is scaffolding with a known end. It exists only because
-# x11plugview.h still differs between the products, and products/rations additionally keeps a
-# macplugview it alone has; when x11plugview.h unifies the entry can come out for the rack. src/gfx
-# has already gone that way -- canvas.h and resourcestore.h were the last two files in it, and its
-# entry came out with them.
+# There is no ${NAMPRACK_ROOT}/src/* entry here any more, and that is the scaffolding stage 3 put
+# up coming down on schedule. It existed to keep a sibling lookup working while a byte-identical
+# .cpp sat in core/ and its .h did not; both src/gfx and src/platform emptied out as those pairs
+# unified, and the entries went with the directories. products/rations still carries one, because
+# it alone has a macplugview.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
     ${NAMP_CORE_DIR}/tools
     ${NAMP_CORE_DIR}/standalone
-    ${NAMP_CORE_DIR}/deps/tonestack
-    ${NAMPRACK_ROOT}/src/platform)
+    ${NAMP_CORE_DIR}/deps/tonestack)
 
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -469,7 +468,7 @@ else()
     pkg_check_modules(CAIROX11 REQUIRED IMPORTED_TARGET cairo-xlib x11)
     set(NAMPRACK_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
     set(NAMPRACK_PLATFORM_VIEW_SOURCES
-        ${NAMPRACK_ROOT}/src/platform/x11plugview.h
+        ${NAMP_CORE_DIR}/platform/x11plugview.h
         ${NAMP_CORE_DIR}/platform/x11plugview.cpp)
 endif()
 

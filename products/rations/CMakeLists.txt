@@ -674,7 +674,7 @@ elseif(RATIONS_MACOS)
     )
 else()
     set(RATIONS_PLATFORM_VIEW_SOURCES
-        src/platform/x11plugview.h
+        ${NAMP_CORE_DIR}/platform/x11plugview.h
         ${NAMP_CORE_DIR}/platform/x11plugview.cpp
     )
 endif()
