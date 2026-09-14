@@ -307,3 +307,42 @@ function(namp_link_whole_dsp target)
             PRIVATE -Wl,--whole-archive ${archive} -Wl,--no-whole-archive)
     endif()
 endfunction()
+
+# ---------------------------------------------------------------------------
+# namp_add_gfx(<target> CAIRO <imported target> [SOURCES <extra>...])
+#
+# The graphics stack: the canvas, the font stack, the image and SVG loaders, the resource store and
+# the resource-path resolver. Every consumer that draws anything links this, and it links nothing
+# of the amp, nothing of X11 and nothing of the plug-in -- which is what lets panelrender draw
+# every page with no host and no window server.
+#
+# CAIRO is the imported target from the product's own pkg_check_modules(). It is a parameter rather
+# than a fixed name because the two products spell the result differently and because the Windows
+# arm of one of them hangs CAIRO_WIN32_STATIC_BUILD on that target: cairo.h declares every entry
+# point __declspec(dllimport) without it, even for a static build its own .pc file does not
+# advertise, and the symptom is "undefined reference to __imp_cairo_*" at every call. Naming the
+# target here would take that with it.
+#
+# SOURCES is the membership difference that stops core/ being one prebuilt library. The rack
+# compiles filebrowser.{h,cpp} in here because its rack strip opens the same browser to choose a
+# plug-in folder; rations compiles it into the plug-in and the LV2 modules instead. Passing it as
+# sources says which product does what at the site that decides, rather than behind an option.
+#
+# POSITION_INDEPENDENT_CODE because both products' real consumers are shared objects -- a VST3
+# bundle and, on Linux, two LV2 modules -- and the archive is linked into all of them.
+# ---------------------------------------------------------------------------
+function(namp_add_gfx target)
+    cmake_parse_arguments(arg "" "CAIRO" "SOURCES" ${ARGN})
+    if(NOT arg_CAIRO)
+        message(FATAL_ERROR "namp_add_gfx(${target}): CAIRO <imported target> is required.")
+    endif()
+
+    namp_core_sources(_gfx_sources GFX)
+    add_library(${target} STATIC ${_gfx_sources} ${arg_SOURCES})
+    target_include_directories(${target} PUBLIC ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
+    target_link_libraries(${target} PUBLIC ${arg_CAIRO} ${CMAKE_DL_LIBS})
+    target_compile_features(${target} PUBLIC cxx_std_17)
+    set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # -Wall for our own code; the vendored NanoSVG headers are compiled as they are.
+    target_compile_options(${target} PRIVATE -Wall)
+endfunction()

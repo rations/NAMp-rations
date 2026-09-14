@@ -472,26 +472,16 @@ else()
         ${NAMP_CORE_DIR}/platform/x11plugview.cpp)
 endif()
 
-add_library(NampRackGfx STATIC
-    ${NAMP_CORE_DIR}/gfx/canvas.cpp
-    ${NAMP_CORE_DIR}/gfx/fontstack.cpp
-    ${NAMP_CORE_DIR}/gfx/image.cpp
-    ${NAMP_CORE_DIR}/gfx/svg.cpp
-    ${NAMP_CORE_DIR}/gfx/resourcestore.h
-    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
-    ${NAMP_CORE_DIR}/platform/respath.cpp
-    # The in-plug-in file browser lives here rather than with the plug-in because it is drawn with
-    # Canvas and nothing else, and the rack needs the same one to choose a plug-in search folder.
-    # Two browsers would drift, and the one the user already knows is the one the rack should open.
-    ${NAMP_CORE_DIR}/filebrowser.h
-    ${NAMP_CORE_DIR}/filebrowser.cpp
-)
-target_include_directories(NampRackGfx PUBLIC ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
-target_link_libraries(NampRackGfx PUBLIC PkgConfig::CAIROFT ${CMAKE_DL_LIBS})
-target_compile_features(NampRackGfx PUBLIC cxx_std_17)
-set_target_properties(NampRackGfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
-# -Wall for our own code; the vendored NanoSVG headers are compiled as-is.
-target_compile_options(NampRackGfx PRIVATE -Wall)
+# The graphics stack, built by the shared recipe in cmake/nampcore.cmake, plus the one file this
+# product puts in it that rations does not. The in-plug-in file browser lives here rather than with
+# the plug-in because it is drawn with Canvas and nothing else, and the rack needs the same one to
+# choose a plug-in search folder. Two browsers would drift, and the one the user already knows is
+# the one the rack should open.
+namp_add_gfx(NampRackGfx
+    CAIRO PkgConfig::CAIROFT
+    SOURCES
+        ${NAMP_CORE_DIR}/filebrowser.h
+        ${NAMP_CORE_DIR}/filebrowser.cpp)
 
 # ---------------------------------------------------------------------------
 # The NAM DSP core as a static library, linked --whole-archive by everything that runs a model,

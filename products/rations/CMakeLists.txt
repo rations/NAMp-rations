@@ -420,21 +420,11 @@ else()
     set(RATIONS_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
 endif()
 
-add_library(RationsGfx STATIC
-    ${NAMP_CORE_DIR}/gfx/canvas.cpp
-    ${NAMP_CORE_DIR}/gfx/fontstack.cpp
-    ${NAMP_CORE_DIR}/gfx/image.cpp
-    ${NAMP_CORE_DIR}/gfx/svg.cpp
-    ${NAMP_CORE_DIR}/gfx/resourcestore.h
-    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
-    ${NAMP_CORE_DIR}/platform/respath.cpp
-)
-target_include_directories(RationsGfx PUBLIC ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES})
-target_link_libraries(RationsGfx PUBLIC PkgConfig::CAIRO ${CMAKE_DL_LIBS})
-target_compile_features(RationsGfx PUBLIC cxx_std_17)
-set_target_properties(RationsGfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
-# -Wall for our own code; the vendored NanoSVG headers are compiled as-is.
-target_compile_options(RationsGfx PRIVATE -Wall)
+# The graphics stack, built by the shared recipe in cmake/nampcore.cmake. No extra sources: the
+# file browser is compiled into the plug-in and the LV2 modules here rather than into this library,
+# which is where the rack puts it, and that difference is why core/ is a source tree and not one
+# prebuilt library.
+namp_add_gfx(RationsGfx CAIRO PkgConfig::CAIRO)
 
 # ---------------------------------------------------------------------------
 # The NAM DSP core as a static library, linked --whole-archive by the plug-in, plus the INTERFACE
