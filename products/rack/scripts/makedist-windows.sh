@@ -94,6 +94,10 @@ EXE="$BUILD/namp-rack.exe"
 cp "$EXE" "$PKGDIR/"
 PKGEXE="$PKGDIR/namp-rack.exe"
 "$STRIP" --strip-unneeded "$PKGEXE"
+# ... and put back the reproducibility strip just took away. See namp_dist_pe_derandomise in
+# scripts/dist-common.sh: binutils rewrites the COFF TimeDateStamp with the wall clock as it
+# strips, so the SHIPPED binary moved every time even though the build-tree one did not.
+namp_dist_pe_derandomise "$PKGEXE"
 
 # --- gates ------------------------------------------------------------------
 # IMPORTS. Nothing but Windows' own DLLs.
@@ -151,19 +155,24 @@ if [ "$EXPORTS" != "$EXPECTED" ]; then
   exit 1
 fi
 
-# THE BINARY IS REPRODUCIBLE. Stage 7 found the Windows link carrying the wall-clock minute in the
-# PE header's TimeDateStamp, which made "the binaries did not move" uncheckable on this platform.
-# -Wl,--no-insert-timestamp fixes it, and it is seeded from the toolchain as a _INIT variable --
-# which the cache takes on the FIRST configure only. So a build directory created before that
-# change keeps its clock no matter how often it is re-configured, and the only cure is deleting it.
-# Assert the field rather than trusting the flag is still reaching this build.
-PE_STAMP="$("$OBJDUMP" -p "$PKGEXE" | sed -n 's/^Time\/Date stamp[[:space:]]*//p' | head -1)"
-if [ "$PE_STAMP" != "0" ]; then
-  echo "namp-rack.exe carries a PE TimeDateStamp of $PE_STAMP, so this build is not" >&2
-  echo "reproducible. -Wl,--no-insert-timestamp seeds the cache from the toolchain on" >&2
-  echo "the FIRST configure only: delete $BUILD and re-run." >&2
-  exit 1
-fi
+# THE BINARY IS REPRODUCIBLE, AND THIS ASSERTION HAD TO BE REWRITTEN TO MEAN IT.
+#
+# Stage 7 found the Windows link carrying the wall-clock minute in the PE header's TimeDateStamp,
+# which made "the binaries did not move" uncheckable on this platform. -Wl,--no-insert-timestamp
+# fixes that, seeded from the toolchain as a _INIT variable -- which the cache takes on the FIRST
+# configure only, so a build directory created before that change keeps its clock however often it
+# is re-configured, and the only cure is deleting it.
+#
+# WHAT THE FIRST VERSION OF THIS CHECK GOT WRONG, found by comparing two packaged binaries that
+# should have been identical and were not. `objdump -p` prints two fields one word apart in their
+# labels: "Time/Date" is the COFF header's stamp, and "Time/Date stamp" is the debug directory's.
+# The linker zeroes both. `strip` then rewrites the COFF one with the wall clock and leaves the
+# debug one alone -- so this check, which read the debug one, sat at 0 and passed while the shipped
+# file moved on every run. Two strips of one input four seconds apart differ in two bytes.
+#
+# So the stamp is now zeroed after stripping (above) and read out of the bytes rather than out of a
+# label, and the assertion covers the artefact that actually ships.
+namp_dist_pe_assert_no_timestamp "$PKGEXE" "namp-rack.exe"
 
 # --- the audio backends ------------------------------------------------------
 EXE_STRINGS="$STAGEDIR/namp-rack.strings"

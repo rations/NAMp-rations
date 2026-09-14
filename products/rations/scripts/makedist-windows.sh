@@ -46,6 +46,8 @@ TRIPLE="${RATIONS_WIN_TRIPLE:-x86_64-w64-mingw32}"
 OBJDUMP="$TRIPLE-objdump"
 STRIP="$TRIPLE-strip"
 
+. "$REPO/scripts/dist-common.sh"
+
 command -v "$TRIPLE-g++" >/dev/null || {
   echo "error: $TRIPLE-g++ not found. Install the MinGW-w64 cross toolchain:" >&2
   echo "  sudo apt install g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64" >&2
@@ -176,6 +178,16 @@ for _res in Contents/Resources/img/head.png \
 done
 
 "$STRIP" --strip-unneeded "$DLL"
+
+# THE STRIPPED BUNDLE WAS NEVER REPRODUCIBLE, and nothing here was watching. The toolchain passes
+# -Wl,--no-insert-timestamp and the linked binary does carry a COFF TimeDateStamp of 0 -- but
+# binutils writes a fresh wall-clock value into that field as it strips, so the copy that goes into
+# the ZIP moved on every run. Found on the sibling product, which had an assertion and was reading
+# the DEBUG directory's stamp rather than the COFF one; this script had no assertion at all, so it
+# had nothing to be wrong about. Both now zero the field after stripping and assert it, through one
+# pair of helpers in scripts/dist-common.sh.
+namp_dist_pe_derandomise "$DLL"
+namp_dist_pe_assert_no_timestamp "$DLL" "NAMp-rations.vst3"
 
 # IMPORTS. Nothing but Windows' own DLLs may appear here.
 #

@@ -223,6 +223,83 @@ namp_dist_mark() {
     fi
 }
 
+# --- Windows PE: the reproducibility the linker flag only half delivers ------
+#
+# THE LINKER ZEROES THE TIMESTAMP AND `strip` PUTS IT BACK. Measured, not deduced: the toolchain
+# passes -Wl,--no-insert-timestamp, and the binary in the build tree does carry a COFF
+# TimeDateStamp of 0. Then the packaging step runs `<triple>-strip --strip-unneeded` on its copy,
+# and binutils writes a FRESH WALL-CLOCK VALUE into that field as it rewrites the file. Two strips
+# of one input four seconds apart produced two files differing in exactly two bytes, and those two
+# bytes were the low half of the stamp.
+#
+# So the artefact that SHIPS was never byte-reproducible, only the one in the build tree was, and
+# "build it again and compare every byte" -- the method this whole project verifies itself with --
+# did not reach the thing it verifies. There is no strip flag for this; the field has to be put
+# back to zero afterwards.
+#
+# WHY THE CHECKSUM IS RECOMPUTED RATHER THAN LEFT. binutils computes the PE checksum over the file
+# it wrote, stamp included, so zeroing four bytes afterwards leaves it stale. The algorithm is the
+# documented one -- 16-bit ones-complement sum over the whole file with the checksum field itself
+# read as zero, plus the file length -- and this implementation was validated by recomputing the
+# checksum binutils had just written on two real binaries and getting the same value back, before
+# it was ever used to write one.
+namp_dist_pe_derandomise() {
+    local exe="$1"
+    python3 - "$exe" <<'PYEOF'
+import struct, sys
+
+path = sys.argv[1]
+with open(path, 'rb') as fh:
+    d = bytearray(fh.read())
+
+e_lfanew = struct.unpack_from('<I', d, 0x3c)[0]
+if d[e_lfanew:e_lfanew + 4] != b'PE\0\0':
+    sys.exit("not a PE file: %s" % path)
+
+stamp_off = e_lfanew + 4 + 4          # COFF header, TimeDateStamp
+cksum_off = e_lfanew + 24 + 64        # optional header, CheckSum
+struct.pack_into('<I', d, stamp_off, 0)
+struct.pack_into('<I', d, cksum_off, 0)
+
+total = 0
+pad = bytes(d) + (b'\0' if len(d) & 1 else b'')
+for i in range(0, len(pad), 2):
+    if i == cksum_off or i == cksum_off + 2:
+        continue
+    total += struct.unpack_from('<H', pad, i)[0]
+    total = (total & 0xffff) + (total >> 16)
+total = (total & 0xffff) + (total >> 16)
+struct.pack_into('<I', d, cksum_off, (total + len(d)) & 0xffffffff)
+
+with open(path, 'wb') as fh:
+    fh.write(d)
+PYEOF
+}
+
+# Read the COFF header's TimeDateStamp -- the one that moves. Note that `objdump -p` prints TWO
+# fields whose labels differ by one word: "Time/Date" is this one, and "Time/Date stamp" is the
+# DEBUG DIRECTORY's, which the linker flag really does zero and which therefore reads 0 on a
+# binary whose COFF stamp is live. A gate written against the wrong one passes on a
+# non-reproducible file, which is exactly what happened here. Read the bytes instead: no label to
+# get wrong, and no locale to render a date in.
+namp_dist_pe_timestamp() {
+    python3 - "$1" <<'PYEOF'
+import struct, sys
+with open(sys.argv[1], 'rb') as fh:
+    d = fh.read()
+e = struct.unpack_from('<I', d, 0x3c)[0]
+print(struct.unpack_from('<I', d, e + 8)[0])
+PYEOF
+}
+
+namp_dist_pe_assert_no_timestamp() {
+    local exe="$1" label="$2" stamp
+    stamp="$(namp_dist_pe_timestamp "$exe")"
+    [ "$stamp" = "0" ] || namp_dist_die "$label carries a COFF TimeDateStamp of $stamp, so this
+build is not reproducible. The linker zeroes that field and \`strip\` writes it back; the packaging
+step must call namp_dist_pe_derandomise after stripping."
+}
+
 # --- the tarball ------------------------------------------------------------
 namp_dist_tarball() {
     local stagedir="$1" pkgname="$2" outdir="$3" tarball
