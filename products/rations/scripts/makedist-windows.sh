@@ -304,6 +304,7 @@ else
   #-------------------------------------------------------------------------
   PANEL_MAX_PIXELS=256     # per page
   PANEL_MAX_DELTA=1        # per channel, any page
+  PANEL_PAGES="head cabinet pedalboard settings"   # this product's pages; the rack has two
 
   # This used to be skipped with a warning when ImageMagick was absent, which is
   # a gate that can quietly not run. panel-diff.sh decodes the PNGs with the
@@ -329,12 +330,14 @@ else
   wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
        "$(winepath -w "$PRODUCT/resources")" 1.0 >/dev/null
 
-  # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
-  # calls too -- one implementation, so the two platforms' figures are
-  # produced the same way and stay comparable. The thresholds stay HERE
-  # because they are this pair's measurement, not that script's.
+  # The comparison itself is the repository's scripts/panel-diff.sh, which the
+  # macOS workflow and the rack's own Windows packaging call too -- one
+  # implementation, so every platform's figures are produced the same way and
+  # stay comparable. The thresholds and the page list stay HERE because they are
+  # this pair's measurement and this product's pages, not that script's.
   PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
-    "$PRODUCT/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
+  PANEL_PAGES="$PANEL_PAGES" \
+    "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
 fi
 
 # --- licence, attribution and instructions ----------------------------------

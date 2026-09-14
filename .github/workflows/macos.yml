@@ -418,7 +418,7 @@ jobs:
   # push. Comparing against the LINUX render would need this repository to carry
   # 1.5 MB of committed PNGs that go stale on every art edit; that comparison is
   # run by hand instead -- download the panels-arm64 artifact and point
-  # products/rations/scripts/panel-diff.sh at it and at a local `build/panelrender` render.
+  # scripts/panel-diff.sh at it and at a local `build/panelrender` render.
   #
   # THE THRESHOLDS ARE MEASURED. They were a placeholder borrowed from the
   # Linux-versus-Windows diff until this pair had ever been run; it has now, at
@@ -471,7 +471,10 @@ jobs:
         env:
           PANEL_MAX_PIXELS: 256
           PANEL_MAX_DELTA: 1
+          # This product's four pages. The comparison script is shared with the rack, which
+          # has two, so the list is the caller's to state and is required rather than defaulted.
+          PANEL_PAGES: head cabinet pedalboard settings
         run: |
           ls -R panels
-          products/rations/scripts/panel-diff.sh \
+          scripts/panel-diff.sh \
             panels/panels-arm64 mac panels/panels-x86_64 mac arm64 x86_64
