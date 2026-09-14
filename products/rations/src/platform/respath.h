@@ -57,9 +57,10 @@ void setResourceDirOverride(const std::string &dir);
 // a 0xFF. Passing an std::error_code does not help, because the throw happens
 // while the path is being built, before any filesystem call sees it.
 //
-// Every path this plug-in acts on is untrusted (RULES.md section 3): a state
-// blob written into a project file, an impulse response picked in the cabinet
-// page's browser, an environment override. Without this, one bad byte in a
+// Every path this plug-in acts on is untrusted: a state blob written into a
+// project file, an impulse response picked in the cabinet page's browser, an
+// environment override. None of the three is ours, and a malformed one must
+// produce a clean failure rather than a crash inside the host. Without this, one bad byte in a
 // saved project would leave the host with an uncaught exception out of a worker
 // thread or out of its own message loop.
 //
@@ -70,8 +71,8 @@ void setResourceDirOverride(const std::string &dir);
 // path already degrades gracefully for.
 bool utf8ToPath(const std::string &s, std::filesystem::path &out);
 
-// The last component of a path: "MyAmp" from "/home/me/captures/MyAmp", and
-// "cab.wav" from "C:\Users\me\IRs\cab.wav".
+// The last component of a path: "MyAmp" from a captures directory ending in
+// that name, and "cab.wav" from "C:\Users\me\IRs\cab.wav".
 //
 // This is what the editor's loader rows show. They are one line wide and a
 // user's capture folder can sit arbitrarily deep, so the row shows the folder's

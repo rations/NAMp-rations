@@ -1344,7 +1344,7 @@ constexpr int kCaptureNameW = 170;
 // box. Roboto rather than Michroma: a path is a variable-length string that has
 // to stay legible when clipped, which is the one thing this panel keeps a
 // proportional face for.
-constexpr int kCaptureTextX = kCaptureNameX + kCaptureNameW + 12; // 168
+constexpr int kCaptureTextX = kCaptureNameX + kCaptureNameW + 12; // 222
 constexpr int kCaptureClearW = 24;
 constexpr int kCaptureClearInset = 6;
 constexpr int kCaptureTextW = kMidiRowW - kCaptureClearInset - kCaptureClearW - kCaptureTextX - 8;
@@ -1595,7 +1595,7 @@ constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
 constexpr int kCaptureBrowserX = 16;
 constexpr int kCaptureBrowserY = 40;
 constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 608
-constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 1086
+constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 1104
 // That height is a CEILING now, not the size: the settings page scrolls, so the
 // window showing it may be shorter than the page, and the card is sized to the
 // viewport instead (RationsEditorView::boundCaptureBrowser). This is the floor

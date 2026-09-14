@@ -1,7 +1,7 @@
 // State-stream string reads, shared between RationsProcessor::setState and
 // RationsController::setComponentState — the two places this plug-in decodes a project's
-// IBStream, which RULES.md treats as untrusted input: "A malformed state must produce a clean
-// kResultFalse, never a crash inside the host."
+// IBStream. That stream is untrusted input, and the rule it is decoded under is that a malformed
+// state must produce a clean kResultFalse and never a crash inside the host.
 //
 // FStreamer::readStr8() (vst3sdk/base/source/fstreamer.cpp) is not safe to use on that input,
 // in two ways neither call site can fix by using it more carefully:

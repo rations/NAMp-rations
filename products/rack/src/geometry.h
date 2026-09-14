@@ -1439,7 +1439,7 @@ constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
 constexpr int kCaptureBrowserX = 16;
 constexpr int kCaptureBrowserY = 40;
 constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 534
-constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 848
+constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 866
 // That height is a CEILING now, not the size: the settings page scrolls, so the
 // window showing it may be shorter than the page, and the card is sized to the
 // viewport instead (RationsEditorView::boundCaptureBrowser). This is the floor

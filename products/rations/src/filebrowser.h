@@ -90,7 +90,7 @@ public:
     void close();
 
     // Where the card is drawn, in logical units. There is no default: layout
-    // belongs to the owner's geometry header (RULES.md section 4), and here
+    // belongs to the owner's geometry header, never to the widget, and here
     // that is geometry.h's kBrowser* block, which sizes the card against the
     // cabinet page's own window rather than the head's. Set it before opening;
     // an unset rect draws nothing.

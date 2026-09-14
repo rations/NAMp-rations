@@ -4,10 +4,10 @@
 // project: an engine and its models are touched by the audio thread when it owns them and by the
 // prime worker when it does not, and the whole safety argument is a three-state atomic and the
 // claim it publishes. That argument is exactly the kind that reads as obviously correct and is
-// not, so RULES.md requires it to be proved by a sanitizer rather than by reading — and it earned
-// that requirement immediately: the first version of the ownership handshake looked right, passed
-// review, and could not complete a switch at all, because the audio thread handed the engine back
-// at the end of the very block that claimed it.
+// not, so it is proved by a sanitizer rather than by reading — a rule this project holds to for
+// every concurrent claim it makes, and one this check earned immediately: the first version of the
+// ownership handshake looked right, passed review, and could not complete a switch at all, because
+// the audio thread handed the engine back at the end of the very block that claimed it.
 //
 // What this does is hammer the handover from both sides at once:
 //

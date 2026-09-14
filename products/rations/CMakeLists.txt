@@ -1115,8 +1115,9 @@ target_compile_options(rations_switchcheck PRIVATE -Wall)
 # rations_racecheck - the ThreadSanitizer gate for the prime worker.
 #
 # Background priming is the first genuine concurrent access to the DSP objects
-# in this tree, and RULES.md requires the handover to be proved by a sanitizer
-# rather than by reading. Built normally it is a useful stress test; built with
+# in this tree, and the handover is proved by a sanitizer rather than by
+# reading, which is the rule this project holds to for every concurrent claim
+# it makes. Built normally it is a useful stress test; built with
 # -DRATIONS_ENABLE_TSAN=ON in its own build directory it is the gate.
 #
 # TSan instruments the whole program, so this cannot share a build directory
@@ -1160,9 +1161,9 @@ endif()
 # the real malloc through dlsym(RTLD_NEXT, ...) — see the DSP core's
 # tools/test/allocation_tracking.h — which is an ELF/glibc mechanism with no PE
 # equivalent, and that file is in a read-only upstream tree we do not patch. So
-# the no-allocation-on-the-RT-path gate that RULES.md requires is proved on
-# Linux and inherited by the other two: the audio path is the same source, and
-# the platform layer adds nothing to it.
+# the no-allocation-on-the-RT-path gate is proved on Linux and inherited by the
+# other two: the audio path is the same source, and the platform layer adds
+# nothing to it.
 #
 # macOS is excluded for the same reason Windows is, and had to be named rather
 # than left to fall through the old NOT RATIONS_WINDOWS: dlsym(RTLD_NEXT, ...)
