@@ -23,7 +23,12 @@ bundle to a fixed path under the build directory, so two products configured int
 two bundles to the same place.
 
 ```sh
-git submodule update --init --recursive
+# Not `--init --recursive`: the SDK's doc/, tutorials/ and vstgui4/ are not built here, and two of
+# the other submodules declare nested copies of trees this repository already has at its root.
+git submodule update --init NeuralAmpModelerCore AudioDSPTools eigen rations-pedals
+git submodule update --init vst3sdk
+git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
+
 cmake -S . -B build                              # NAMp Rations (the default)
 cmake --build build
 

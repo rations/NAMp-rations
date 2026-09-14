@@ -102,7 +102,7 @@ foreach(_dep NAM_CORE_DIR AUDIO_DSP_TOOLS_DIR EIGEN_DIR)
     if(NOT IS_DIRECTORY "${${_dep}}")
         message(FATAL_ERROR
             "${_dep} does not name a directory ('${${_dep}}') - run "
-            "'git submodule update --init --recursive' or set -D${_dep}=<path>")
+            "'git submodule update --init' or set -D${_dep}=<path>")
     endif()
 endforeach()
 foreach(_probe "${NAM_CORE_DIR}/NAM/model_config.h"
@@ -122,7 +122,7 @@ if(NOT TARGET sdk)
     if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)
         message(FATAL_ERROR
             "VST 3 SDK not found at '${VST3_SDK_DIR}' - run "
-            "'git submodule update --init --recursive' or set -DVST3_SDK_DIR=<path>")
+            "'git submodule update --init' or set -DVST3_SDK_DIR=<path>")
     endif()
 
     # Headless SDK: core libraries plus the validator (part of the hosting

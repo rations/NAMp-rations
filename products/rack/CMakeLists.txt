@@ -73,6 +73,7 @@ option(NAMPRACK_BUILD_TOOLS    "Build the offline proof and render tools" ON)
 # the release script does not package it. Turning this off costs that gate and leaves the offline
 # proofs as the amp's only check.
 option(NAMPRACK_BUILD_VST3_BUNDLE "Build the amp as a VST3 bundle for validator coverage" ON)
+option(NAMPRACK_BUILD_PEDALS "Build and ship the five Rations pedals (submodule)" ON)
 
 # ASIO is the Windows audio backend and ships by default, so this is ON rather than opt-in: it is
 # what the hardware vendors' drivers expose and what Windows guitar players actually run, and a
@@ -151,7 +152,7 @@ foreach(_dep NAM_CORE_DIR AUDIO_DSP_TOOLS_DIR EIGEN_DIR)
     if(NOT IS_DIRECTORY "${${_dep}}")
         message(FATAL_ERROR
             "${_dep} does not name a directory ('${${_dep}}') - run "
-            "'git submodule update --init --recursive' or set -D${_dep}=<path>")
+            "'git submodule update --init' or set -D${_dep}=<path>")
     endif()
 endforeach()
 
@@ -204,7 +205,7 @@ if(NOT TARGET sdk)
     if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)
         message(FATAL_ERROR
             "VST 3 SDK not found at '${VST3_SDK_DIR}' - run "
-            "'git submodule update --init --recursive' or set -DVST3_SDK_DIR=<path>")
+            "'git submodule update --init' or set -DVST3_SDK_DIR=<path>")
     endif()
 
     # Headless SDK: core libraries plus the validator (part of the hosting examples), no VSTGUI
@@ -1287,7 +1288,69 @@ if(WIN32)
 else()
     message(STATUS "[NAMp-Rack]   audio           JACK")
 endif()
+# ---------------------------------------------------------------------------
+# The pedals — five plug-ins built here and shipped beside the rack.
+#
+# DECISION R7, AND IT IS WHY THE RACK HAS NO PEDALBOARD. Rations has five pedals drawn onto a page
+# of its own editor; the rack deleted that page because it hosts other people's plug-ins instead.
+# What it ships instead is the same five as ORDINARY PLUG-INS, loaded through the same catalogue,
+# the same out-of-process scan and the same chain as anyone else's. That is the whole point: the
+# rack's own pedals get no privileged path into it, so the path everybody else's plug-in takes is
+# the path that is exercised every time the author runs the program.
+#
+# A SUBMODULE, NOT A COPY. rations-pedals is its own project with its own history, its own
+# .clang-format and its own gates, pinned here at one commit. Nothing in this tree edits it, and
+# nothing in it is duplicated here.
+#
+# ADDED AS A SUBDIRECTORY, so one `cmake --build` produces the rack and the five bundles together
+# and they cannot drift apart in a release. That works because the pedals' CMakeLists guards its
+# VST3 SDK block with `if(NOT TARGET sdk)` — it takes the SDK this build already added rather than
+# adding a second one — and because both trees neutralise the SDK's Windows folder-icon step by
+# redefining smtg_target_add_folder_icon to an empty function, so the second redefinition is a
+# no-op rather than a conflict.
+#
+# TOOLS AND STANDALONES OFF. Measured rather than assumed: `panelrender` is a target NAME that both
+# trees define, and two add_executable() calls for one name is a hard CMake error. It is the ONLY
+# collision between the two trees, established by renaming it and configuring again to see whether
+# anything else surfaced — nothing did. Switching the pedals' tools off is not skipping a check:
+# pedalcheck, loadall and panelrender are that project's gates and they run in that project's
+# build, which is where the pedals are proved before a commit of them is pinned here. The five JACK
+# standalones go for a plainer reason — this program is itself the host, so it would never package
+# them.
+# ---------------------------------------------------------------------------
+if(NAMPRACK_BUILD_PEDALS)
+    set(NAMPRACK_PEDALS_DIR "${NAMP_REPO_ROOT}/rations-pedals")
+    if(NOT EXISTS "${NAMPRACK_PEDALS_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "NAMPRACK_BUILD_PEDALS is ON but the rations-pedals submodule is not checked out at "
+            "${NAMPRACK_PEDALS_DIR}.\n"
+            "  Run:  git submodule update --init rations-pedals\n"
+            "  To build the rack without them, configure with -DNAMPRACK_BUILD_PEDALS=OFF. The "
+            "rack runs perfectly well without them -- they are five ordinary plug-ins, not a "
+            "dependency -- but a release that ships without them is not the product.")
+    endif()
+
+    # FORCE, because these are cache variables in the pedals' own scope and a stale ON from an
+    # earlier configure of that tree in this directory would bring `panelrender` back and fail the
+    # configure with a name collision that looks like it came from nowhere.
+    set(RPEDALS_BUILD_TOOLS       OFF CACHE BOOL "" FORCE)
+    set(RPEDALS_BUILD_STANDALONES OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${NAMPRACK_PEDALS_DIR}" rations-pedals)
+
+    # The bundle names the release scripts package. Declared here, beside the build that produces
+    # them, rather than restated in two dist scripts: a sixth pedal added upstream is then one edit
+    # away from shipping instead of three.
+    set(NAMPRACK_PEDAL_BUNDLES
+        RationsBoost RationsChorus RationsFlanger RationsDelay RationsReverb
+        CACHE INTERNAL "The pedal bundles packaged beside the rack")
+endif()
+
 message(STATUS "[NAMp-Rack]   validator bundle ${NAMPRACK_BUILD_VST3_BUNDLE} (never packaged)")
 message(STATUS "[NAMp-Rack]   tools           ${NAMPRACK_BUILD_TOOLS}")
+if(NAMPRACK_BUILD_PEDALS)
+    message(STATUS "[NAMp-Rack]   pedals          5 bundles, built here and shipped")
+else()
+    message(STATUS "[NAMp-Rack]   pedals          OFF (not shipped)")
+endif()
 message(STATUS "[NAMp-Rack] amp + rack + standalone + tools.")
 message(STATUS "")

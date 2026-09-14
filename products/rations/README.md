@@ -178,7 +178,7 @@ load it, and usually does not say why.
 Dependencies are pinned git submodules. cairo, FreeType and fontconfig come from the system.
 
 ```
-git submodule update --init --recursive NeuralAmpModelerCore AudioDSPTools eigen
+git submodule update --init NeuralAmpModelerCore AudioDSPTools eigen
 git submodule update --init vst3sdk
 git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

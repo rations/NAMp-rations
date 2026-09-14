@@ -92,16 +92,22 @@ The source set is published as:
 
     namp-rack-${VERSION}-corresponding-source.tar.gz
 
-from the same place you obtained this archive. If it is not beside this binary,
-that is a bug in the release and not a limit on your rights -- ask for it.
+on the releases page this binary came from:
+
+    https://github.com/rations/NAMp-rations/releases
+
+It is uploaded to the same release as this archive, so it is one page away from
+wherever you got this file. If it is not there, that is a bug in the release and
+not a limit on your rights -- ask for it.
 
 It contains, and its MANIFEST.txt records the SHA-256 of, every one of:
 
   * this project's own source, at commit
         ${COMMIT}
     including every script that drives the build;
-  * its four pinned dependencies, at the exact commits the build used --
-    the VST3 SDK, NeuralAmpModelerCore, AudioDSPTools and Eigen;
+  * its five pinned dependencies, at the exact commits the build used --
+    the VST3 SDK, NeuralAmpModelerCore, AudioDSPTools, Eigen, and the source of
+    the five pedals that ship beside this program;
   * the five libraries this binary links statically --
         ${ZLIB}, ${LIBPNG}, ${PIXMAN},
         ${FREETYPE}, ${CAIRO}
@@ -138,17 +144,19 @@ git -C "$REPO" archive --format=tar HEAD | tar -x -C "$ROOT/namp-rack"
 # Submodules are gitlinks: the superproject's archive records their commit and none of their
 # content, so each is archived from its own repository at the SHA the superproject pins. Recorded
 # by SHA rather than by tag, because the SHA is what the build used.
-echo "== the four pinned dependencies =="
-# NOT --recursive, and that is measured rather than cautious. AudioDSPTools declares a nested
-# eigen submodule which this build never initialises and never reads: both products compile
-# against the eigen at the REPOSITORY ROOT, and nothing in any CMakeLists names the nested path.
-# Asking recursively would fail on a tree that builds perfectly well. The four the build actually
-# consumes are the four at the root, and the count is asserted so a fifth cannot appear unnoticed
-# and be left out of a release.
+echo "== the five pinned dependencies =="
+# NOT --recursive, and that is measured rather than cautious. TWO nested submodules exist and
+# neither is used: AudioDSPTools declares its own eigen, and rations-pedals declares its own
+# vst3sdk. Both products compile against the eigen and the SDK at the REPOSITORY ROOT -- the
+# pedals' CMakeLists guards its SDK block with `if(NOT TARGET sdk)` precisely so the parent's is
+# taken -- and nothing in any CMakeLists names either nested path. Asking recursively would fail
+# on a tree that builds perfectly well, and would drag in a second 1.5 GB copy of the SDK if it
+# did not. The five the build actually consumes are the five at the root, and the count is
+# asserted so a sixth cannot appear unnoticed and be left out of a release.
 SUBS="$(git -C "$REPO" submodule status)"
-[ -n "$SUBS" ] || die "no submodules are checked out; run: git submodule update --init"
+[ -n "$SUBS" ] || die "no submodules are checked out; see README.md for the init sequence"
 _nsub="$(printf '%s\n' "$SUBS" | grep -c .)"
-[ "$_nsub" = "4" ] || die "expected 4 root submodules, found $_nsub. The Corresponding Source must
+[ "$_nsub" = "5" ] || die "expected 5 root submodules, found $_nsub. The Corresponding Source must
 carry every pinned dependency the build compiles; check what changed before releasing."
 while read -r _line; do
   [ -n "$_line" ] || continue
@@ -158,7 +166,7 @@ while read -r _line; do
   _sha="$(printf '%s' "$_line" | awk '{print $1}' | sed 's/^[-+U]//')"
   _path="$(printf '%s' "$_line" | awk '{print $2}')"
   [ -e "$REPO/$_path/.git" ] ||
-    die "submodule $_path is not checked out; run: git submodule update --init --recursive"
+    die "submodule $_path is not checked out; see README.md for the init sequence"
   mkdir -p "$ROOT/namp-rack/$_path"
   git -C "$REPO/$_path" archive --format=tar "$_sha" | tar -x -C "$ROOT/namp-rack/$_path" ||
     die "could not archive submodule $_path at $_sha"
@@ -202,7 +210,7 @@ Rebuilding NAMp Rack ${VERSION} for Windows from this source set
 This set is self-contained. Nothing here fetches anything from the network.
 
   namp-rack/   this project at commit ${COMMIT},
-               with its four pinned dependencies already in place
+               with its five pinned dependencies already in place
   win-deps/    the five libraries the Windows binary links statically,
                as their unmodified upstream release archives
   asiosdk/     the ASIO SDK files compiled into the Windows binary

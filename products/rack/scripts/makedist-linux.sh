@@ -11,6 +11,13 @@
 #                       process with it instead of the rack. That is why the archive holds one
 #                       executable and a launcher rather than a program and its plug-in.
 #
+# AND THE FIVE PEDALS. Boost, Chorus, Flanger, Delay and Reverb, built by this same build from a
+# pinned submodule and installed to ~/.vst3, where the rack's own scan finds them. They are
+# ORDINARY PLUG-INS and get no privileged route into the program -- which is the point of shipping
+# them this way rather than drawing them onto a page: the path they take in is the path everybody
+# else's plug-in takes, so it is exercised every time the program is run. Any other host on the
+# machine will find them too.
+#
 # WHAT IS NOT IN HERE. NAMp-Rack-Amp.vst3 is built by every configure, and it is NOT packaged:
 # it exists so the SDK validator has something to validate, which is by a wide margin the cheapest
 # gate on the amp. The amp as a plug-in for a DAW is NAMp Rations, which is its own release and
@@ -129,6 +136,86 @@ mkdir -p "$PKGDIR/desktop"
 cp "$PRODUCT/packaging/namp-rack.desktop" "$PKGDIR/desktop/"
 cp "$PRODUCT"/packaging/icons/namp-rack-*.png "$PKGDIR/desktop/"
 
+# --- the pedals -------------------------------------------------------------
+# DECISION R7. Five plug-ins built by this build from a pinned submodule and shipped beside the
+# rack, which loads them through the same catalogue, the same out-of-process scan and the same
+# chain as anybody else's. They get no privileged path in, which is the point: the path every
+# other plug-in takes is the one the author exercises every time the program is run.
+#
+# THE NAMES COME FROM THE BUILD, not from a list restated here, and specifically from the CACHE
+# rather than from the CMakeLists text. CMakeLists.txt declares NAMPRACK_PEDAL_BUNDLES beside the
+# add_subdirectory() that produces them; reading it back out of CMakeCache.txt means this list is
+# what the configure that produced these binaries actually decided, not what the source says it
+# would decide. A sixth pedal upstream is then one edit away from shipping rather than three, and
+# a list that quietly stopped matching -- which is how a release starts shipping four of five --
+# cannot happen here. (Parsing the CMakeLists with sed was tried first and got this wrong on its
+# first run: the set() is indented, and an anchored pattern matched nothing.)
+PEDAL_BUNDLES="$(sed -n 's/^NAMPRACK_PEDAL_BUNDLES:INTERNAL=//p' "$BUILD/CMakeCache.txt" |
+                 tr ';' ' ')"
+[ -n "$PEDAL_BUNDLES" ] ||
+  namp_dist_die "the build declared no NAMPRACK_PEDAL_BUNDLES, so it was configured with
+-DNAMPRACK_BUILD_PEDALS=OFF. This release ships the pedals: reconfigure with it ON, or delete this
+block deliberately -- silently shipping none is worse than failing here."
+
+VALIDATOR="$BUILD/bin/Release/validator"
+[ -x "$VALIDATOR" ] ||
+  namp_dist_die "no SDK validator at $VALIDATOR. It is built by this same configure; a build tree
+without it is one that was configured differently from the one this script expects."
+
+mkdir -p "$PKGDIR/pedals"
+PEDAL_COUNT=0
+for _pedal in $PEDAL_BUNDLES; do
+  _src="$BUILD/VST3/Release/${_pedal}.vst3"
+  [ -d "$_src" ] || namp_dist_die "${_pedal}.vst3 was not built at $_src.
+Configure with -DNAMPRACK_BUILD_PEDALS=ON, or check the rations-pedals submodule is checked out:
+  git submodule update --init rations-pedals"
+  cp -r "$_src" "$PKGDIR/pedals/"
+  _pkg="$PKGDIR/pedals/${_pedal}.vst3"
+  namp_dist_prune_bundle_arches "$_pkg" "$ARCH"
+  _so="$_pkg/Contents/${ARCH}-linux/${_pedal}.so"
+  [ -f "$_so" ] || namp_dist_die "${_pedal}.vst3 holds no ${ARCH}-linux binary."
+  strip --strip-unneeded "$_so"
+
+  # FIVE COPIES MUST STAY FIVE COPIES. All five are built from the SAME sources, and GCC gives a
+  # function-local static inside an inline function STB_GNU_UNIQUE binding, which glibc resolves
+  # through a table shared by the whole link-map namespace -- RTLD_LOCAL does not scope it. Loaded
+  # together into this rack, which is the ordinary case rather than an exotic one, they would be
+  # sharing one another's statics. Hidden visibility and --exclude-libs,ALL are what prevent it,
+  # and this is the assertion that they were actually applied to the binary that ships.
+  namp_dist_no_unique "$_so" "${_pedal}.so"
+
+  # THE ART IS IN THE BUNDLE. A pedal whose Resources did not come along draws flat rectangles,
+  # and says nothing on stderr while it does.
+  for _res in "Contents/Resources/img/pedal-$(printf '%s' "$_pedal" | sed 's/^Rations//' | tr 'A-Z' 'a-z').png" \
+              Contents/Resources/fonts/Michroma-Regular.ttf \
+              Contents/Resources/fonts/Roboto-Regular.ttf; do
+    [ -f "$_pkg/$_res" ] || namp_dist_die "${_pedal}.vst3 is missing $_res."
+  done
+
+  namp_dist_abi_baseline "${_pedal}.so" "$_so"
+
+  # THE SDK'S OWN VALIDATOR, ON THE STAGED AND STRIPPED BUNDLE rather than on the one in the build
+  # tree. That distinction has caught things in this repository before: what ships is a copy that
+  # has been pruned of other architectures and stripped, and it is the copy worth validating.
+  # Cheap -- it is already built beside the rack -- and it is the broadest single statement anyone
+  # can make about a VST3 without a DAW.
+  _val_out="$("$VALIDATOR" "$_pkg" 2>&1 || true)"
+  printf '%s' "$_val_out" | grep -qE '^Result: [0-9]+ tests passed, 0 tests failed' ||
+    namp_dist_die "the SDK validator did not pass against ${_pedal}.vst3:
+$(printf '%s' "$_val_out" | tail -20)"
+  printf '  %-18s %s\n' "${_pedal}.vst3" "$(printf '%s' "$_val_out" | grep -E '^Result:')"
+
+  PEDAL_COUNT=$((PEDAL_COUNT + 1))
+done
+[ "$PEDAL_COUNT" = "5" ] ||
+  namp_dist_die "packaged $PEDAL_COUNT pedals, expected 5. A release that ships four of five
+pedals looks complete and is not."
+
+# The pedals' own NOTICE travels with them, because this archive redistributes their binaries and
+# therefore the third-party components they vendor. Their LICENCE is this project's licence, but
+# their attribution is not this project's attribution.
+cp "$REPO/rations-pedals/NOTICE" "$PKGDIR/pedals/NOTICE"
+
 # --- licence, attribution, installer ----------------------------------------
 cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PKGDIR/"
 
@@ -141,15 +228,24 @@ cp "$PRODUCT/NOTICE" "$REPO/LICENSE" "$PKGDIR/"
 #   namp-rack            -> ~/.local/bin                              (the program)
 #   namp-rack.desktop    -> ~/.local/share/applications               (the menu entry)
 #   namp-rack-<size>.png -> ~/.local/share/icons/hicolor/<size>/apps  (its icon)
+#   pedals/*.vst3        -> ~/.vst3                                   (the five pedals)
 #
 # The program is self-contained: the amp, its art and its fonts are inside the binary, so there is
 # nothing else to install and nothing for it to find.
+#
+# The pedals go to ~/.vst3 because that is one of the directories the rack's own scan looks in, so
+# they appear in its plug-in list on the next rescan -- and so does every other VST3 you already
+# have there. They are ordinary plug-ins: any other host on this machine will find them too.
 EOF
-  namp_install_preamble desktop
+  namp_install_preamble plugin desktop
   cat <<'EOF'
 
 if [ "${1:-}" = "--uninstall" ]; then
   rm -f "$BIN_DIR/namp-rack"
+  for _p in "$HERE"/pedals/*.vst3; do
+    [ -d "$_p" ] || continue
+    rm -rf "$VST3_DIR/$(basename "$_p")"
+  done
 EOF
   namp_install_icons_remove namp-rack
   cat <<'EOF'
@@ -161,8 +257,17 @@ EOF
   exit 0
 fi
 
-mkdir -p "$BIN_DIR" "$APP_DIR"
+mkdir -p "$BIN_DIR" "$APP_DIR" "$VST3_DIR"
 install -m 755 "$HERE/namp-rack" "$BIN_DIR/namp-rack"
+
+# Replaced rather than merged: a .vst3 is a DIRECTORY, so copying over an older one would leave
+# whatever the old version had and the new one does not, and the result is a bundle that is
+# neither release.
+for _p in "$HERE"/pedals/*.vst3; do
+  [ -d "$_p" ] || continue
+  rm -rf "$VST3_DIR/$(basename "$_p")"
+  cp -r "$_p" "$VST3_DIR/"
+done
 EOF
   namp_install_icons_install namp-rack
   cat <<'EOF'
@@ -171,6 +276,7 @@ refresh
 echo "Installed:"
 echo "  program     $BIN_DIR/namp-rack"
 echo "  launcher    $APP_DIR/namp-rack.desktop"
+echo "  pedals      $VST3_DIR  (5 plug-ins; rescan in the rack to see them)"
 echo
 echo "Start a JACK server first, or run a PipeWire desktop, which provides one."
 EOF
@@ -190,6 +296,21 @@ This archive holds one program:
 It is self-contained. The amp, its art and its fonts are inside the binary, so
 there is nothing to install first and nothing for it to go looking for.
 
+...and five pedals, in pedals/:
+
+    RationsBoost      a Tube Screamer-style overdrive
+    RationsChorus     two modulated taps per channel
+    RationsFlanger    swept comb with feedback
+    RationsDelay      tempo-syncable, optional ping-pong
+    RationsReverb     a Freeverb-lineage room
+
+These are ordinary VST3 plug-ins. install.sh puts them in ~/.vst3, which is one
+of the places the rack looks, so they turn up in its plug-in list after a
+rescan - exactly like any other plug-in you have installed, through exactly the
+same route. Nothing about them is special to this program, and any other host on
+this machine will find them as well. You can delete them and the rack is
+unaffected.
+
 If you want the amp inside your DAW instead, as a plug-in, that is NAMp
 Rations - the same amp, with a five-pedal pedalboard built in, as both VST3 and
 LV2. It is a separate download.
@@ -202,6 +323,7 @@ Everything goes under your home directory and nothing needs root:
 
     ~/.local/bin/namp-rack                 the program
     ~/.local/share/applications/           a menu entry, with an icon
+    ~/.vst3/Rations*.vst3                  the five pedals
 
 To remove it again: ./install.sh --uninstall
 
@@ -309,7 +431,9 @@ There is no 32-bit build.
 
 Licence
 -------
-MIT. See LICENSE, and NOTICE for third-party attribution.
+MIT. See LICENSE, and NOTICE for third-party attribution. The pedals are MIT
+too and carry their own attribution in pedals/NOTICE, which covers the
+third-party pieces they use and this one does not.
 EOF
 
 PKGNAME="namp-rack-${VERSION}$(namp_dist_mark)-linux-${ARCH}"

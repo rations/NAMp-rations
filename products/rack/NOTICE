@@ -194,31 +194,31 @@ A note on AudioDSPTools' Lanczos resampler
 
 -------------------------------------------------------------------------------
 
-The pedals (rations-pedals) — NOT YET SHIPPED BY THIS PROJECT:
+The bundled pedals (rations-pedals, built here as a pinned submodule):
 
   Copyright (c) 2026 rations — MIT Licence.
 
-  Five plug-ins — Boost, Chorus, Flanger, Delay, Reverb — intended to ship
-  alongside the rack and to be loaded into it like any other plug-in. They are a
-  separate project with their own history and their own NOTICE, which governs the
-  third-party components they vendor (among them WDL under the zlib Licence,
-  whose verbengine.h is the Reverb's engine and is in turn derived from the
-  public-domain Freeverb by Jezar at Dreampoint).
+  Five plug-ins — Boost, Chorus, Flanger, Delay, Reverb — built by this project's
+  build from a submodule pinned at one commit, packaged by its release scripts on
+  both platforms, and installed where this program's own scan finds them. They
+  are loaded like any other plug-in: the same catalogue, the same out-of-process
+  scan, the same chain. They get no privileged route in, which is deliberate —
+  the path they take is the path everybody else's plug-in takes.
 
-  THIS ENTRY DESCRIBES AN INTENTION AND SAYS SO. An earlier version of it was
-  written in the present tense — "built here as a pinned submodule", "packaged by
-  its release script" — and none of that was true: there is no such submodule,
-  nothing in this build produces those bundles, and neither release script
-  packages them. A NOTICE file exists to be accurate about what is redistributed,
-  so an aspiration stated as fact is a defect in it rather than a harmless
-  anticipation. The entry is kept, marked, and will be rewritten in the present
-  tense on the commit that actually makes it true.
+  They are a separate project with their own history and their own NOTICE, which
+  travels with them in the archive and which governs the third-party components
+  they vendor (among them WDL under the zlib Licence, whose verbengine.h is the
+  Reverb's engine and is in turn derived from the public-domain Freeverb by Jezar
+  at Dreampoint).
 
-  When that happens this project will redistribute those binaries and therefore
-  the components they vendor, and the pedals' own NOTICE must then be read as
-  part of this one. Nothing in the pedals reaches this tree's include graph in
-  either case — they are separate binaries loaded at run time, never linked — so
-  they are not part of any Corresponding Source this project owes.
+  Because this project's release scripts package those binaries, it redistributes
+  those components: read pedals/NOTICE as part of this one.
+
+  NOTHING IN THE PEDALS REACHES THIS TREE'S INCLUDE GRAPH. They are separate
+  binaries loaded at run time, never linked, so they are not part of the Complete
+  Corresponding Source owed for the GPLv3 Windows build of this program. Being
+  MIT, they aggregate with it without difficulty in either direction. Their
+  source is in that tarball regardless, as a pinned submodule of this repository.
 
 -------------------------------------------------------------------------------
 

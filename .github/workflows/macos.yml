@@ -122,8 +122,7 @@ jobs:
       # sequence a local clone uses, and the same reason.
       - name: Submodules
         run: |
-          git submodule update --init --recursive \
-              NeuralAmpModelerCore AudioDSPTools eigen
+          git submodule update --init NeuralAmpModelerCore AudioDSPTools eigen
           git submodule update --init vst3sdk
           git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
 

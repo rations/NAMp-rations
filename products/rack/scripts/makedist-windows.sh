@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Cross-build NAMp Rack for 64-bit Windows and package it into dist/.
 #
-# ONE PROGRAM. namp-rack.exe is the whole archive: the amp, its art and its fonts are linked in,
-# and plug-in discovery re-execs this same binary in scan-child mode, so there is nothing beside it
-# to install. NAMp-Rack-Amp.vst3 is built by every configure and is NOT packaged -- it exists so the
-# SDK validator has something to validate.
+# ONE PROGRAM, AND FIVE PLUG-INS. namp-rack.exe is self-contained -- the amp, its art and its fonts
+# are linked in, and plug-in discovery re-execs this same binary in scan-child mode, so there is
+# nothing beside it that it needs. Beside it go the five Rations pedals (decision R7), built by this
+# same cross build from a pinned submodule: ordinary VST3 bundles that the rack finds through the
+# same catalogue and the same out-of-process scan as anybody else's, and that any other Windows host
+# will find too. NAMp-Rack-Amp.vst3 is built by every configure and is NOT packaged -- it exists so
+# the SDK validator has something to validate.
 #
 # VST3 HOSTING ONLY ON WINDOWS. lilv, suil and jalv's event buffer are Linux-shaped here, so
 # NAMPRACK_BUILD_LV2_HOST is OFF and the rack's CMakeLists refuses the combination loudly rather
@@ -263,6 +266,66 @@ if [ -n "$ASIO_STRAY" ]; then
   exit 1
 fi
 
+# --- the pedals --------------------------------------------------------------
+# DECISION R7, the Windows half. Five plug-ins built by this same cross build from a pinned
+# submodule and shipped beside the rack, which finds them through the same catalogue and the same
+# out-of-process scan as anybody else's. They get no privileged route in, which is the point.
+#
+# The list comes from CMakeCache.txt rather than from a list restated here, so it is what the
+# configure that produced these binaries actually decided.
+PEDAL_BUNDLES="$(sed -n 's/^NAMPRACK_PEDAL_BUNDLES:INTERNAL=//p' "$BUILD/CMakeCache.txt" |
+                 tr ';' ' ')"
+[ -n "$PEDAL_BUNDLES" ] ||
+  namp_dist_die "the build declared no NAMPRACK_PEDAL_BUNDLES, so it was configured with
+-DNAMPRACK_BUILD_PEDALS=OFF. This release ships the pedals: reconfigure with it ON."
+
+mkdir -p "$PKGDIR/pedals"
+PEDAL_COUNT=0
+for _pedal in $PEDAL_BUNDLES; do
+  _src="$BUILD/VST3/Release/${_pedal}.vst3"
+  [ -d "$_src" ] || namp_dist_die "${_pedal}.vst3 was not built at $_src."
+  cp -r "$_src" "$PKGDIR/pedals/"
+  _pkg="$PKGDIR/pedals/${_pedal}.vst3"
+
+  # A build directory configured for another platform at some point keeps the old architecture
+  # folder, and cp -r then carries a Linux .so into the Windows ZIP. Same prune, same reason, as
+  # the sibling product's bundle.
+  for _arch in "$_pkg/Contents"/*/; do
+    _arch="${_arch%/}"
+    case "$(basename "$_arch")" in
+      Resources | x86_64-win) ;;
+      *)
+        echo "warning: removing $(basename "$_arch")/ from ${_pedal}.vst3 - not a Windows" >&2
+        echo "  architecture folder. Delete $BUILD and re-run to stop seeing this." >&2
+        rm -rf "$_arch" ;;
+    esac
+  done
+
+  # SHAPE. module_win32.cpp's validateBundleStructure requires the inner DLL to be named exactly
+  # like the bundle folder. A correctly-built-looking bundle with the binary somewhere else simply
+  # does not load, and nothing before this point would say so.
+  _dll="$_pkg/Contents/x86_64-win/${_pedal}.vst3"
+  [ -f "$_dll" ] || namp_dist_die "no ${_pedal}.vst3 binary inside
+$_pkg/Contents/x86_64-win/ - the bundle layout is wrong and no host can load it."
+  "$STRIP" --strip-unneeded "$_dll"
+  namp_dist_pe_derandomise "$_dll"
+  namp_dist_pe_assert_no_timestamp "$_dll" "${_pedal}.vst3"
+
+  for _res in "Contents/Resources/img/pedal-$(printf '%s' "$_pedal" | sed 's/^Rations//' | tr 'A-Z' 'a-z').png" \
+              Contents/Resources/fonts/Michroma-Regular.ttf \
+              Contents/Resources/fonts/Roboto-Regular.ttf; do
+    [ -f "$_pkg/$_res" ] || namp_dist_die "${_pedal}.vst3 is missing $_res."
+  done
+  PEDAL_COUNT=$((PEDAL_COUNT + 1))
+done
+[ "$PEDAL_COUNT" = "5" ] ||
+  namp_dist_die "packaged $PEDAL_COUNT pedals, expected 5. A release that ships four of five
+pedals looks complete and is not."
+
+# Their attribution travels with their binaries: this archive redistributes them, and therefore
+# the third-party components they vendor, which are not the ones this project's own NOTICE covers.
+cp "$REPO/rations-pedals/NOTICE" "$PKGDIR/pedals/NOTICE"
+
 # --- verification under Wine -------------------------------------------------
 if [ "${NAMP_RACK_SKIP_WINE:-0}" = "1" ]; then
   echo
@@ -340,6 +403,35 @@ else
   PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
   PANEL_PAGES="$PANEL_PAGES" \
     "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
+
+  #-------------------------------------------------------------------------
+  # THE PEDALS, under Wine: moduleinfo.json, then the SDK validator on each.
+  #
+  # moduleinfo.json cannot be a build step here. CMake would run the freshly cross-built
+  # moduleinfotool.exe natively on the build host, where it cannot execute -- which is why the
+  # toolchain forces SMTG_CREATE_MODULE_INFO off when cross-compiling. It is OPTIONAL to a host
+  # (Module::getModuleInfoPath returns an empty optional when it is absent) but it is what lets a
+  # host list a plug-in's classes without loading its binary, so a release that omits it is a
+  # lesser release for one Wine call.
+  #
+  # The validator runs on the STAGED, STRIPPED, de-randomised copy rather than the one in the
+  # build tree, because that is the copy that ships.
+  echo "checking the pedals"
+  for _pedal in $PEDAL_BUNDLES; do
+    _pkg="$PKGDIR/pedals/${_pedal}.vst3"
+    _winb="$(winepath -w "$_pkg")"
+    wine "$BUILD/bin/moduleinfotool.exe" -create -version "$VERSION" \
+         -path "$_winb" \
+         -output "$(winepath -w "$_pkg/Contents/Resources/moduleinfo.json")" 2>/dev/null || true
+    [ -s "$_pkg/Contents/Resources/moduleinfo.json" ] ||
+      namp_dist_die "moduleinfotool produced no moduleinfo.json for ${_pedal}.vst3."
+
+    _val="$(wine "$BUILD/bin/validator.exe" "$_winb" 2>&1 || true)"
+    printf '%s' "$_val" | grep -qE '^Result: [0-9]+ tests passed, 0 tests failed' ||
+      namp_dist_die "the SDK validator did not pass against ${_pedal}.vst3:
+$(printf '%s' "$_val" | tail -20)"
+    printf '  %-20s %s\n' "${_pedal}.vst3" "$(printf '%s' "$_val" | grep -E '^Result:')"
+  done
 fi
 
 # --- the GPLv3 obligations ---------------------------------------------------
@@ -421,13 +513,28 @@ cat > "$PKGDIR/INSTALL.txt" <<EOF
 NAMp Rack ${VERSION} - a four-channel Neural Amp Modeler amp head, and a rack
 for your plug-ins, for 64-bit Windows
 
-This archive holds one file:
+This archive holds one program:
 
     namp-rack.exe
 
 That is the whole program. The amp, its art and its fonts are inside it, so
 there is nothing to install and nothing for it to go looking for. Put it
 wherever you like and run it.
+
+...and five pedals, in pedals\\:
+
+    RationsBoost      a Tube Screamer-style overdrive
+    RationsChorus     two modulated taps per channel
+    RationsFlanger    swept comb with feedback
+    RationsDelay      tempo-syncable, optional ping-pong
+    RationsReverb     a Freeverb-lineage room
+
+These are ordinary VST3 plug-ins. Copy the five .vst3 folders into your VST3
+folder - usually C:\\Program Files\\Common Files\\VST3 - and they turn up in the
+rack's plug-in list after a rescan, exactly like any other plug-in you have
+installed and through exactly the same route. Nothing about them is special to
+this program, and any other host on the machine will find them as well. Leaving
+them where they are works too: the rack also scans its own directory.
 
 Audio
 -----
@@ -484,6 +591,10 @@ ${LICENCE_PARA}
 NOTICE has the third-party attribution, which matters more for this build than
 for the Linux one: it statically links cairo, pixman, FreeType, libpng and zlib
 and therefore redistributes them.
+
+The five pedals are MIT, separately from all of the above - they are their own
+binaries, not part of namp-rack.exe - and carry their own attribution in
+pedals\\NOTICE.
 
 ASIO is a trademark of Steinberg Media Technologies GmbH, registered in Europe
 and other countries.
