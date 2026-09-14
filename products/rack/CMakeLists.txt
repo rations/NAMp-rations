@@ -494,97 +494,16 @@ set_target_properties(NampRackGfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(NampRackGfx PRIVATE -Wall)
 
 # ---------------------------------------------------------------------------
-# The DSP: the NAM core, AudioDSPTools and the tone stack.
+# The NAM DSP core as a static library, linked --whole-archive by everything that runs a model,
+# plus the INTERFACE library carrying what it takes to compile against its headers. Both are built
+# by the shared recipe in cmake/nampcore.cmake, which is where the reasons for each of its parts
+# are written down -- why there are two targets, why the mac arm of namp_link_whole_dsp() needs the
+# second one, and what NAM_ENABLE_A2_FAST is for.
+#
+# No INCLUDE_DIRS: rations passes its own deps/ for the pedalboard's vendored DSP, and this product
+# has no pedals to vendor any for.
 # ---------------------------------------------------------------------------
-add_library(NampRackDsp STATIC
-    ${NAM_CORE_DIR}/NAM/activations.cpp
-    ${NAM_CORE_DIR}/NAM/container.cpp
-    ${NAM_CORE_DIR}/NAM/conv1d.cpp
-    ${NAM_CORE_DIR}/NAM/convnet.cpp
-    ${NAM_CORE_DIR}/NAM/dsp.cpp
-    ${NAM_CORE_DIR}/NAM/get_dsp.cpp
-    ${NAM_CORE_DIR}/NAM/linear.cpp
-    ${NAM_CORE_DIR}/NAM/lstm.cpp
-    ${NAM_CORE_DIR}/NAM/ring_buffer.cpp
-    ${NAM_CORE_DIR}/NAM/util.cpp
-    ${NAM_CORE_DIR}/NAM/wavenet/model.cpp
-    ${NAM_CORE_DIR}/NAM/wavenet/a2_fast.cpp
-    ${NAM_CORE_DIR}/NAM/wavenet/slimmable.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/dsp.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/ImpulseResponse.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/NoiseGate.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/RecursiveLinearFilter.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/wav.cpp
-    ${NAMP_CORE_DIR}/deps/tonestack/ToneStack.cpp
-)
-
-# What it takes to COMPILE against those headers, held on an INTERFACE library separate from the
-# archive. Keeping the two apart is what lets a consumer that links the archive with
-# --whole-archive still receive the include paths, the definitions and the language level: the
-# whole-archive spelling puts a FILE on the link line rather than naming a target, and every usage
-# requirement attached to the target would otherwise be silently dropped. The first symptom is a
-# missing NAM/dsp.h, which merely fails to build. The second is worse and would fail nothing:
-# without NAM_ENABLE_A2_FAST the A2 fast path is compiled out, and that path is the whole basis of
-# the click-free gain crossfade and the instant channel switch.
-add_library(NampRackDspHeaders INTERFACE)
-target_compile_definitions(NampRackDspHeaders INTERFACE NAM_ENABLE_A2_FAST)
-target_include_directories(NampRackDspHeaders INTERFACE
-    ${NAM_CORE_DIR}
-    ${NAM_CORE_DIR}/NAM
-    ${NAM_CORE_DIR}/Dependencies/nlohmann
-    ${AUDIO_DSP_TOOLS_DIR}/dsp
-    # And its parent, so a header outside that directory can say "dsp/dsp.h" and mean
-    # AudioDSPTools' rather than NAM's. Both trees have a dsp.h and NAM's include dir is listed
-    # first, so a bare "dsp.h" reaches the wrong one — with an error about DSP_SAMPLE that says
-    # nothing about which of two identically-named headers arrived.
-    ${AUDIO_DSP_TOOLS_DIR}
-    ${EIGEN_DIR}
-    ${NAMPRACK_ROOT}/deps/tonestack
-)
-
-# C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20 library feature. The
-# plug-in and the host stay at the SDK's C++17 baseline.
-target_compile_features(NampRackDspHeaders INTERFACE cxx_std_20)
-
-# AudioDSPTools' ResamplingContainer.h declares, at class scope,
-#
-#     using LanczosResampler = LanczosResampler<T, NCHANS, A>;
-#
-# which redeclares a name already used in that scope to mean something else. [basic.scope.class]p2
-# forbade that, and GCC enforces it as a permerror — an error only -fpermissive downgrades. GCC 14
-# implemented P1787R6, which deleted the rule, so the same header compiles clean there and the
-# diagnostic is a pre-14 artefact rather than a defect in the code.
-#
-# INTERFACE because it belongs to the header, not to this library: the AudioDSPTools include path
-# above is published here, so every consumer that includes the resampler meets the same permerror
-# and each would otherwise have to rediscover the flag. Whoever publishes a header publishes what
-# compiling it takes.
-#
-# Version-gated rather than unconditional, so the loosened checking disappears on a compiler that
-# does not need it instead of quietly outliving its reason. The upstream tree is pinned, so
-# patching the line there would be undone by the next update.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
-    target_compile_options(NampRackDspHeaders INTERFACE -fpermissive)
-endif()
-
-target_link_libraries(NampRackDsp PUBLIC NampRackDspHeaders)
-if(WIN32)
-    # -fPIC has no meaning for PE and MinGW warns that it is being ignored; code in a Windows DLL
-    # is relocated by the loader, not by position-independent codegen.
-    target_compile_options(NampRackDsp PRIVATE -ffast-math -Wno-unused-parameter)
-else()
-    target_compile_options(NampRackDsp PRIVATE -ffast-math -fPIC -Wno-unused-parameter)
-endif()
-
-# Link the DSP archive WHOLE. Each network architecture registers itself through a file-scope
-# static initialiser, and the linker drops those object files from a normal static link because
-# nothing references them by name. The symptom is a clean build that fails at run time with
-# "No config parser registered for architecture: WaveNet".
-function(namprack_link_whole_dsp target)
-    target_link_libraries(${target}
-        PRIVATE -Wl,--whole-archive NampRackDsp -Wl,--no-whole-archive)
-    target_link_libraries(${target} PRIVATE NampRackDspHeaders)
-endfunction()
+namp_add_dsp(NampRackDsp NampRackDspHeaders)
 
 # ---------------------------------------------------------------------------
 # The amp, as a VST3 bundle.
@@ -693,7 +612,7 @@ target_link_libraries(NampRackPlugin PUBLIC sdk NampRackGfx ${NAMPRACK_PLATFORM_
 target_compile_features(NampRackPlugin PUBLIC cxx_std_17)
 target_compile_options(NampRackPlugin PRIVATE -ffast-math -Wall)
 set_target_properties(NampRackPlugin PROPERTIES POSITION_INDEPENDENT_CODE ON)
-namprack_link_whole_dsp(NampRackPlugin)
+namp_link_whole_dsp(NampRackPlugin)
 
 if(NAMPRACK_BUILD_VST3_BUNDLE)
     smtg_add_vst3plugin(NampRackAmp PACKAGE_NAME "NAMp-Rack-Amp"
@@ -702,7 +621,7 @@ if(NAMPRACK_BUILD_VST3_BUNDLE)
     target_compile_features(NampRackAmp PUBLIC cxx_std_17)
     target_compile_options(NampRackAmp PRIVATE -ffast-math -Wall)
     target_include_directories(NampRackAmp PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
-    namprack_link_whole_dsp(NampRackAmp)
+    namp_link_whole_dsp(NampRackAmp)
     target_link_libraries(NampRackAmp PRIVATE sdk NampRackGfx ${NAMPRACK_PLATFORM_GUI_LIBS})
 
     # The bundle carries its art in Contents/Resources rather than embedded, so it can be replaced
@@ -1016,7 +935,7 @@ if(NAMPRACK_BUILD_TOOLS)
         ${NAMP_CORE_DIR}/capturesource.cpp
     )
     target_include_directories(rations_fadecheck PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES})
-    namprack_link_whole_dsp(rations_fadecheck)
+    namp_link_whole_dsp(rations_fadecheck)
     target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
     target_compile_options(rations_fadecheck PRIVATE -Wall)
 
@@ -1035,7 +954,7 @@ if(NAMPRACK_BUILD_TOOLS)
             ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
         )
         target_include_directories(${_tool} PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
-        namprack_link_whole_dsp(${_tool})
+        namp_link_whole_dsp(${_tool})
         target_compile_features(${_tool} PRIVATE cxx_std_20)
         target_compile_options(${_tool} PRIVATE -Wall)
     endforeach()
@@ -1070,7 +989,7 @@ if(NAMPRACK_BUILD_TOOLS)
     # matcher rather than the one that ships.
     target_include_directories(rations_rtcheck
         PRIVATE ${NAMPRACK_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
-    namprack_link_whole_dsp(rations_rtcheck)
+    namp_link_whole_dsp(rations_rtcheck)
     target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
     # -O0 and -UNDEBUG, and both are load-bearing rather than cautious. The harness works by
     # replacing global operator new, so it can only count calls that are actually MADE — and C++14

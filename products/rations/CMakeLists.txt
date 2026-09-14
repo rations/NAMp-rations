@@ -437,154 +437,17 @@ set_target_properties(RationsGfx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(RationsGfx PRIVATE -Wall)
 
 # ---------------------------------------------------------------------------
-# NAM DSP core as a static library, linked --whole-archive by the plug-in: each
-# network architecture (WaveNet, LSTM, ConvNet, the slimmable container) self-
-# registers via a file-scope static initialiser, and the linker would otherwise
-# drop those object files from the plug-in .so, breaking model loading at
-# runtime.
+# The NAM DSP core as a static library, linked --whole-archive by the plug-in, plus the INTERFACE
+# library carrying what it takes to compile against its headers. Both are built by the shared
+# recipe in cmake/nampcore.cmake, which is where the reasons for each of its parts are written
+# down -- why there are two targets, why the mac arm of namp_link_whole_dsp() needs the second one,
+# and what NAM_ENABLE_A2_FAST is for.
 #
-# NAM_ENABLE_A2_FAST routes models matching the A2 shape signature to the
-# hand-optimised feed-forward WaveNet. That path is what makes running two
-# models at once affordable, and its strictly finite memory is what makes both
-# the gain crossfade and the channel switch exact once the incoming model has
-# been fed one receptive field of input.
+# INCLUDE_DIRS is this product's own addition: deps/ holds the pedalboard's vendored DSP, reached
+# as "bbm/..." and "wdl/..." so the provenance of each block stays visible at every include site.
+# Both trees are header-only, so there is nothing to add to the source list.
 # ---------------------------------------------------------------------------
-add_library(RationsDsp STATIC
-    ${NAM_CORE_DIR}/NAM/activations.cpp
-    ${NAM_CORE_DIR}/NAM/container.cpp
-    ${NAM_CORE_DIR}/NAM/conv1d.cpp
-    ${NAM_CORE_DIR}/NAM/convnet.cpp
-    ${NAM_CORE_DIR}/NAM/dsp.cpp
-    ${NAM_CORE_DIR}/NAM/get_dsp.cpp
-    ${NAM_CORE_DIR}/NAM/linear.cpp
-    ${NAM_CORE_DIR}/NAM/lstm.cpp
-    ${NAM_CORE_DIR}/NAM/ring_buffer.cpp
-    ${NAM_CORE_DIR}/NAM/util.cpp
-    ${NAM_CORE_DIR}/NAM/wavenet/model.cpp
-    ${NAM_CORE_DIR}/NAM/wavenet/a2_fast.cpp
-    ${NAM_CORE_DIR}/NAM/wavenet/slimmable.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/dsp.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/ImpulseResponse.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/NoiseGate.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/RecursiveLinearFilter.cpp
-    ${AUDIO_DSP_TOOLS_DIR}/dsp/wav.cpp
-    ${NAMP_CORE_DIR}/deps/tonestack/ToneStack.cpp
-)
-
-# What it takes to COMPILE against these headers, held separately from the
-# archive itself, because on macOS the two are consumed by different mechanisms.
-#
-# Everywhere else the plug-in names RationsDsp as an ordinary link item and CMake
-# hands over its PUBLIC include paths, definitions and language level along with
-# the archive. The mac arm of rations_link_whole_dsp() below cannot do that: ld64
-# spells whole-archive as a -force_load FLAG carrying a path, so the target is
-# never named and every one of those usage requirements is silently dropped. The
-# first symptom is a missing NAM/dsp.h, which merely fails to build. The second
-# is worse and would not have failed anything: without NAM_ENABLE_A2_FAST the
-# A2 fast path is compiled out, and that path is the whole basis of the
-# click-free gain crossfade and the instant channel switch.
-#
-# So the requirements live on an INTERFACE library both arms can name. It
-# contributes no archive of its own, so naming it alongside -force_load cannot
-# put the same objects on the link line twice.
-add_library(RationsDspHeaders INTERFACE)
-
-target_compile_definitions(RationsDspHeaders INTERFACE NAM_ENABLE_A2_FAST)
-
-target_include_directories(RationsDspHeaders INTERFACE
-    ${NAM_CORE_DIR}
-    ${NAM_CORE_DIR}/NAM
-    ${NAM_CORE_DIR}/Dependencies/nlohmann
-    ${AUDIO_DSP_TOOLS_DIR}/dsp
-    # And its parent, so a header outside that directory can say "dsp/dsp.h" and mean
-    # AudioDSPTools' rather than NAM's. Both trees have a dsp.h, NAM's include dir is listed
-    # first, and a bare "dsp.h" from src/pedals therefore reaches the wrong one -- with an error
-    # about DSP_SAMPLE that says nothing about which of two identically-named headers arrived.
-    ${AUDIO_DSP_TOOLS_DIR}
-    ${EIGEN_DIR}
-    ${RATIONS_ROOT}/deps/tonestack
-    # The pedalboard's vendored DSP, reached as "bbm/..." and "wdl/..." so the
-    # provenance of each block stays visible at every include site. Both trees are
-    # header-only; there is nothing to add to the source list above.
-    ${RATIONS_ROOT}/deps
-)
-
-# C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20
-# library feature. The plug-in itself stays at the SDK's C++17 baseline.
-target_compile_features(RationsDspHeaders INTERFACE cxx_std_20)
-
-# AudioDSPTools' ResamplingContainer.h declares, at class scope,
-#
-#     using LanczosResampler = LanczosResampler<T, NCHANS, A>;
-#
-# which redeclares a name already used in that scope to mean something else.
-# [basic.scope.class]p2 forbade that, and GCC enforces it as a permerror - an
-# error that only -fpermissive downgrades. GCC 14 implemented P1787R6, which
-# deleted the rule, so the same header compiles clean there and the diagnostic
-# is a pre-14 artefact rather than a defect in the code. It is why this tree
-# builds on excalibur (GCC 14) and stops on daedalus (GCC 12).
-#
-# This is PUBLIC because it belongs to the header, not to this library: the
-# AudioDSPTools include path above is PUBLIC, so every consumer that includes
-# the resampler (Rations, rations_fadecheck, rations_switchcheck,
-# rations_racecheck, rations_rtcheck, and anything added later) meets the same
-# permerror, and each would otherwise have to rediscover the flag. Whoever
-# publishes the header publishes what compiling it takes.
-#
-# Version-gated rather than unconditional so the loosened checking disappears on
-# a compiler that does not need it, instead of quietly outliving its reason. The
-# upstream tree is a pinned submodule, so patching the line there would be
-# undone by the next submodule update.
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
-    target_compile_options(RationsDspHeaders INTERFACE -fpermissive)
-endif()
-# The archive both compiles against those requirements and re-publishes them, so
-# a target that links RationsDsp the ordinary way needs nothing else.
-target_link_libraries(RationsDsp PUBLIC RationsDspHeaders)
-
-# -fPIC has no meaning for PE and MinGW warns that it is being ignored; code in
-# a Windows DLL is relocated by the loader, not by position-independent codegen.
-if(RATIONS_WINDOWS)
-    target_compile_options(RationsDsp PRIVATE -ffast-math -Wno-unused-parameter)
-else()
-    target_compile_options(RationsDsp PRIVATE -ffast-math -fPIC -Wno-unused-parameter)
-endif()
-
-# ---------------------------------------------------------------------------
-# Link the whole of RationsDsp, whatever the linker is called.
-#
-# Five targets need every object out of that archive, not just the ones some
-# symbol references: each network architecture registers itself through a
-# file-scope static initialiser, and a normal static link drops the object files
-# holding them because nothing names them. The symptom is a clean build that
-# fails at run time with "No config parser registered for architecture: WaveNet".
-#
-# GNU ld spells that --whole-archive/--no-whole-archive around the library;
-# Apple's ld64 has neither flag and spells it -force_load with the archive's
-# path. -force_load already pulls in every object, so the library must NOT also
-# be named as an ordinary link item or ld64 reports every symbol twice -- which
-# is why the mac arm uses add_dependencies for the build ordering CMake would
-# otherwise infer from the link line.
-#
-# Not naming the target also loses everything CMake would have carried with it:
-# include paths, NAM_ENABLE_A2_FAST and the C++20 level. The mac arm therefore
-# names RationsDspHeaders, the INTERFACE library those requirements were moved
-# onto above -- it has no archive, so it cannot reintroduce the double-link this
-# paragraph is about.
-#
-# Written as one function so the five call sites cannot drift apart, which they
-# were already at risk of doing with the flags spelled out five times.
-# ---------------------------------------------------------------------------
-function(rations_link_whole_dsp target)
-    if(RATIONS_MACOS)
-        target_link_libraries(${target} PRIVATE
-            RationsDspHeaders "-Wl,-force_load,$<TARGET_FILE:RationsDsp>")
-        add_dependencies(${target} RationsDsp)
-    else()
-        target_link_libraries(${target}
-            PRIVATE -Wl,--whole-archive RationsDsp -Wl,--no-whole-archive)
-    endif()
-endfunction()
+namp_add_dsp(RationsDsp RationsDspHeaders INCLUDE_DIRS ${RATIONS_ROOT}/deps)
 
 # ---------------------------------------------------------------------------
 # Art, fonts and captures, named once.
@@ -865,7 +728,7 @@ target_link_libraries(Rations
         RationsGfx
         ${RATIONS_PLATFORM_GUI_LIBS}
 )
-rations_link_whole_dsp(Rations)
+namp_link_whole_dsp(Rations)
 
 # The visibility preset above covers every object we compile; it cannot cover
 # the SDK's own archives, which are built in the SDK's scope at default
@@ -1030,7 +893,7 @@ target_include_directories(rations_fadecheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_
 # linker drops those object files from a normal static link because nothing
 # references them by name. The symptom is a clean build that fails at run time
 # with "No config parser registered for architecture: WaveNet".
-rations_link_whole_dsp(rations_fadecheck)
+namp_link_whole_dsp(rations_fadecheck)
 target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
 target_compile_options(rations_fadecheck PRIVATE -Wall)
 
@@ -1136,7 +999,7 @@ add_executable(rations_switchcheck
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
 )
 target_include_directories(rations_switchcheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
-rations_link_whole_dsp(rations_switchcheck)
+namp_link_whole_dsp(rations_switchcheck)
 target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
 target_compile_options(rations_switchcheck PRIVATE -Wall)
 
@@ -1165,7 +1028,7 @@ add_executable(rations_racecheck
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
 )
 target_include_directories(rations_racecheck PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
-rations_link_whole_dsp(rations_racecheck)
+namp_link_whole_dsp(rations_racecheck)
 target_compile_features(rations_racecheck PRIVATE cxx_std_20)
 target_compile_options(rations_racecheck PRIVATE -Wall)
 # TSan is a Linux gate and always was. MinGW ships no ThreadSanitizer runtime,
@@ -1227,7 +1090,7 @@ add_executable(rations_rtcheck
 # ships.
 target_include_directories(rations_rtcheck
     PRIVATE ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
-rations_link_whole_dsp(rations_rtcheck)
+namp_link_whole_dsp(rations_rtcheck)
 target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
 # The interception harness needs real calls to operator new, so the optimiser
 # must not be allowed to elide them, and NDEBUG must not disable the checks.
@@ -1300,7 +1163,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
         PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_ttlgen
         PRIVATE sdk RationsGfx ${RATIONS_PLATFORM_GUI_LIBS})
-    rations_link_whole_dsp(rations_ttlgen)
+    namp_link_whole_dsp(rations_ttlgen)
     target_compile_features(rations_ttlgen PRIVATE cxx_std_17)
     target_compile_options(rations_ttlgen PRIVATE -Wall)
 
@@ -1335,7 +1198,7 @@ if(RATIONS_LINUX AND RATIONS_LV2_FOUND)
     target_include_directories(rations_lv2
         PRIVATE ${RATIONS_ROOT} ${RATIONS_ROOT}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
     target_link_libraries(rations_lv2 PRIVATE sdk)
-    rations_link_whole_dsp(rations_lv2)
+    namp_link_whole_dsp(rations_lv2)
     target_compile_features(rations_lv2 PRIVATE cxx_std_17)
     # -ffast-math to match the VST3 bundle exactly. The pedals' behaviour was
     # measured under it (D26), and a second build of the same DSP at a different

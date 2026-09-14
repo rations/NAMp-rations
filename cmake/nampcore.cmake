@@ -110,3 +110,200 @@ function(namp_assert_no_fast_math target why)
             "  Whatever added that flag has to exclude this target.")
     endif()
 endfunction()
+
+# ---------------------------------------------------------------------------
+# namp_core_sources(<out> <set>)
+#
+# The source lists that are the same in both products, named once. Two sets, and only two, because
+# those are the two that genuinely have one membership:
+#
+#   GFX  the graphics stack and the resource path resolver -- every file both products' graphics
+#        libraries agree on. What they do NOT agree on is filebrowser.{h,cpp}: the rack compiles it
+#        here because its rack strip opens the same browser to choose a plug-in folder, and rations
+#        compiles it into the plug-in instead. That difference is passed to namp_add_gfx() as extra
+#        sources rather than hidden behind an option here.
+#   DSP  the NAM core, AudioDSPTools and the tone stack -- the compile list of the DSP archive.
+#
+# The amp's own engine sources -- capturesource, modelbank, crossfadeengine, channelrack, irblend,
+# midilearn -- are deliberately NOT a set. Ten targets across the two products name some of them,
+# and no two name the same subset: rations_fadecheck takes one file, rations_switchcheck takes four
+# plus respath, rations_rtcheck takes six plus the pedal chain. A set with a flag per site is how a
+# list stops describing what a target actually compiles, so each of those ten keeps saying so.
+# ---------------------------------------------------------------------------
+function(namp_core_sources out set)
+    if("${set}" STREQUAL "GFX")
+        set(${out}
+            ${NAMP_CORE_DIR}/gfx/canvas.cpp
+            ${NAMP_CORE_DIR}/gfx/fontstack.cpp
+            ${NAMP_CORE_DIR}/gfx/image.cpp
+            ${NAMP_CORE_DIR}/gfx/svg.cpp
+            ${NAMP_CORE_DIR}/gfx/resourcestore.h
+            ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
+            ${NAMP_CORE_DIR}/platform/respath.cpp
+            PARENT_SCOPE)
+    elseif("${set}" STREQUAL "DSP")
+        # NAM_CORE_DIR, AUDIO_DSP_TOOLS_DIR and EIGEN_DIR are the caller's: the dependency probes
+        # that set them run in the product file, and this function is evaluated in its scope.
+        set(${out}
+            ${NAM_CORE_DIR}/NAM/activations.cpp
+            ${NAM_CORE_DIR}/NAM/container.cpp
+            ${NAM_CORE_DIR}/NAM/conv1d.cpp
+            ${NAM_CORE_DIR}/NAM/convnet.cpp
+            ${NAM_CORE_DIR}/NAM/dsp.cpp
+            ${NAM_CORE_DIR}/NAM/get_dsp.cpp
+            ${NAM_CORE_DIR}/NAM/linear.cpp
+            ${NAM_CORE_DIR}/NAM/lstm.cpp
+            ${NAM_CORE_DIR}/NAM/ring_buffer.cpp
+            ${NAM_CORE_DIR}/NAM/util.cpp
+            ${NAM_CORE_DIR}/NAM/wavenet/model.cpp
+            ${NAM_CORE_DIR}/NAM/wavenet/a2_fast.cpp
+            ${NAM_CORE_DIR}/NAM/wavenet/slimmable.cpp
+            ${AUDIO_DSP_TOOLS_DIR}/dsp/dsp.cpp
+            ${AUDIO_DSP_TOOLS_DIR}/dsp/ImpulseResponse.cpp
+            ${AUDIO_DSP_TOOLS_DIR}/dsp/NoiseGate.cpp
+            ${AUDIO_DSP_TOOLS_DIR}/dsp/RecursiveLinearFilter.cpp
+            ${AUDIO_DSP_TOOLS_DIR}/dsp/wav.cpp
+            ${NAMP_CORE_DIR}/deps/tonestack/ToneStack.cpp
+            PARENT_SCOPE)
+    else()
+        message(FATAL_ERROR "namp_core_sources: no such set '${set}'. It is GFX or DSP.")
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
+# namp_add_dsp(<archive> <headers> [INCLUDE_DIRS <dir>...])
+#
+# The NAM DSP core as a static library, plus the INTERFACE library carrying what it takes to
+# COMPILE against its headers. TWO targets, and they have to be two.
+#
+# Everywhere but macOS a consumer names the archive as an ordinary link item and CMake hands over
+# its include paths, definitions and language level along with it. The mac arm of
+# namp_link_whole_dsp() below cannot do that: ld64 spells whole-archive as a -force_load FLAG
+# carrying a path, so the target is never named and every one of those usage requirements is
+# silently dropped. The first symptom is a missing NAM/dsp.h, which merely fails to build. The
+# second is worse and would fail nothing: without NAM_ENABLE_A2_FAST the A2 fast path is compiled
+# out, and that path is the whole basis of the click-free gain crossfade and the instant channel
+# switch. So the requirements live on an INTERFACE library both arms can name; it contributes no
+# archive of its own, so naming it alongside -force_load cannot put the same objects on the link
+# line twice.
+#
+# INCLUDE_DIRS is for what a product publishes on top. rations passes its own deps/, which is where
+# the pedalboard's vendored DSP is reached as "bbm/..." and "wdl/..." so the provenance of each
+# block stays visible at every include site; both trees are header-only, so there is nothing to add
+# to the source list. The rack passes none, because it has no pedals.
+#
+# The pair of names is recorded so namp_link_whole_dsp() below needs only the consumer's name:
+# there is exactly one DSP archive per configure, and asking every one of its thirteen call sites
+# to repeat which one would be thirteen chances to name the wrong one.
+# ---------------------------------------------------------------------------
+function(namp_add_dsp archive headers)
+    cmake_parse_arguments(arg "" "" "INCLUDE_DIRS" ${ARGN})
+
+    namp_core_sources(_dsp_sources DSP)
+    add_library(${archive} STATIC ${_dsp_sources})
+
+    add_library(${headers} INTERFACE)
+    target_compile_definitions(${headers} INTERFACE NAM_ENABLE_A2_FAST)
+    target_include_directories(${headers} INTERFACE
+        ${NAM_CORE_DIR}
+        ${NAM_CORE_DIR}/NAM
+        ${NAM_CORE_DIR}/Dependencies/nlohmann
+        ${AUDIO_DSP_TOOLS_DIR}/dsp
+        # And its parent, so a header outside that directory can say "dsp/dsp.h" and mean
+        # AudioDSPTools' rather than NAM's. Both trees have a dsp.h, NAM's include dir is listed
+        # first, and a bare "dsp.h" therefore reaches the wrong one -- with an error about
+        # DSP_SAMPLE that says nothing about which of two identically-named headers arrived.
+        ${AUDIO_DSP_TOOLS_DIR}
+        ${EIGEN_DIR}
+        # The tone stack, whose ToneStack.cpp is in the list above. Both products used to name a
+        # deps/tonestack beside themselves here; neither directory has existed since the file moved
+        # into core/, so both entries were dead and this is the live one.
+        ${NAMP_CORE_DIR}/deps/tonestack
+        ${arg_INCLUDE_DIRS})
+
+    # C++20: NAM's slimmable wavenet uses std::atomic<std::shared_ptr>, a C++20 library feature.
+    # The plug-in and the host stay at the SDK's C++17 baseline.
+    target_compile_features(${headers} INTERFACE cxx_std_20)
+
+    # AudioDSPTools' ResamplingContainer.h declares, at class scope,
+    #
+    #     using LanczosResampler = LanczosResampler<T, NCHANS, A>;
+    #
+    # which redeclares a name already used in that scope to mean something else.
+    # [basic.scope.class]p2 forbade that, and GCC enforces it as a permerror -- an error only
+    # -fpermissive downgrades. GCC 14 implemented P1787R6, which deleted the rule, so the same
+    # header compiles clean there and the diagnostic is a pre-14 artefact rather than a defect in
+    # the code. It is why this tree builds on GCC 14 and stops on GCC 12.
+    #
+    # INTERFACE because it belongs to the header, not to this library: the AudioDSPTools include
+    # path above is published here, so every consumer that includes the resampler meets the same
+    # permerror and each would otherwise have to rediscover the flag. Whoever publishes a header
+    # publishes what compiling it takes.
+    #
+    # Version-gated rather than unconditional, so the loosened checking disappears on a compiler
+    # that does not need it instead of quietly outliving its reason. The upstream tree is a pinned
+    # submodule, so patching the line there would be undone by the next submodule update.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+        target_compile_options(${headers} INTERFACE -fpermissive)
+    endif()
+
+    # The archive both compiles against those requirements and re-publishes them, so a target that
+    # links it the ordinary way needs nothing else.
+    target_link_libraries(${archive} PUBLIC ${headers})
+
+    if(WIN32)
+        # -fPIC has no meaning for PE and MinGW warns that it is being ignored; code in a Windows
+        # DLL is relocated by the loader, not by position-independent codegen.
+        target_compile_options(${archive} PRIVATE -ffast-math -Wno-unused-parameter)
+    else()
+        target_compile_options(${archive} PRIVATE -ffast-math -fPIC -Wno-unused-parameter)
+    endif()
+
+    set_property(GLOBAL PROPERTY NAMP_DSP_ARCHIVE ${archive})
+    set_property(GLOBAL PROPERTY NAMP_DSP_HEADERS ${headers})
+endfunction()
+
+# ---------------------------------------------------------------------------
+# namp_link_whole_dsp(<target>)
+#
+# Link the whole of the DSP archive, whatever the linker is called.
+#
+# Thirteen targets across the two products need every object out of that archive, not just the ones
+# some symbol references: each network architecture -- WaveNet, LSTM, ConvNet, the slimmable
+# container -- registers itself through a file-scope static initialiser, and a normal static link
+# drops the object files holding them because nothing names them. The symptom is a clean build that
+# fails at run time with "No config parser registered for architecture: WaveNet".
+#
+# GNU ld spells that --whole-archive/--no-whole-archive around the library; Apple's ld64 has
+# neither flag and spells it -force_load with the archive's path. -force_load already pulls in every
+# object, so the library must NOT also be named as an ordinary link item or ld64 reports every
+# symbol twice -- which is why the mac arm uses add_dependencies for the build ordering CMake would
+# otherwise infer from the link line.
+#
+# Not naming the target also loses everything CMake would have carried with it: include paths,
+# NAM_ENABLE_A2_FAST and the C++20 level. The mac arm therefore names the INTERFACE library those
+# requirements live on; it has no archive, so it cannot reintroduce the double-link this paragraph
+# is about. The GNU arm does name the archive target, so the same requirements arrive with it and
+# there is nothing further to add.
+#
+# This is the rations helper, which had the -force_load arm, and it is now the rack's too. The
+# rack's own copy was Linux-only, which was correct for a Linux product and is exactly the kind of
+# difference that would have had to be discovered rather than inherited the day the rack is built
+# on a Mac.
+# ---------------------------------------------------------------------------
+function(namp_link_whole_dsp target)
+    get_property(archive GLOBAL PROPERTY NAMP_DSP_ARCHIVE)
+    get_property(headers GLOBAL PROPERTY NAMP_DSP_HEADERS)
+    if(NOT archive)
+        message(FATAL_ERROR
+            "namp_link_whole_dsp(${target}) before namp_add_dsp(): there is no DSP archive yet.")
+    endif()
+    if(APPLE)
+        target_link_libraries(${target} PRIVATE
+            ${headers} "-Wl,-force_load,$<TARGET_FILE:${archive}>")
+        add_dependencies(${target} ${archive})
+    else()
+        target_link_libraries(${target}
+            PRIVATE -Wl,--whole-archive ${archive} -Wl,--no-whole-archive)
+    endif()
+endfunction()
