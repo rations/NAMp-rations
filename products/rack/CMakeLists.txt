@@ -39,16 +39,17 @@ set(NAMPRACK_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # every quoted include in both products before and after the move and requiring each one to land on
 # the same file it landed on before.
 #
-# The two ${NAMPRACK_ROOT}/src/* entries are scaffolding with a known end. They exist only because
-# resourcestore.h, x11plugview.h and win32plugview.cpp still differ between the products; when
-# those unify into core/ the entries come out and the sibling lookups are sibling lookups again.
+# The ${NAMPRACK_ROOT}/src/platform entry is scaffolding with a known end. It exists only because
+# x11plugview.h and win32plugview.cpp still differ between the products; when those unify the
+# entry comes out and the sibling lookups are sibling lookups again. src/gfx has already gone that
+# way -- canvas.h and resourcestore.h were the last two files in it, and its entry came out with
+# them.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
     ${NAMP_CORE_DIR}/tools
     ${NAMP_CORE_DIR}/standalone
     ${NAMP_CORE_DIR}/deps/tonestack
-    ${NAMPRACK_ROOT}/src/gfx
     ${NAMPRACK_ROOT}/src/platform)
 
 
@@ -477,7 +478,7 @@ add_library(NampRackGfx STATIC
     ${NAMP_CORE_DIR}/gfx/fontstack.cpp
     ${NAMP_CORE_DIR}/gfx/image.cpp
     ${NAMP_CORE_DIR}/gfx/svg.cpp
-    ${NAMPRACK_ROOT}/src/gfx/resourcestore.h
+    ${NAMP_CORE_DIR}/gfx/resourcestore.h
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
     ${NAMP_CORE_DIR}/platform/respath.cpp
     # The in-plug-in file browser lives here rather than with the plug-in because it is drawn with
@@ -723,7 +724,7 @@ endif()
 #
 # ONLY THE STANDALONE LINKS THIS. The plug-in must not: it already carries the same files in
 # Contents/Resources, where a user can replace them, and linking both would put two copies of every
-# layer in one bundle. See src/gfx/resourcestore.h for the disk-first lookup order that makes the
+# layer in one bundle. See core/gfx/resourcestore.h for the disk-first lookup order that makes the
 # built-in set a fallback rather than a lock-in.
 #
 # The generated file depends on the resource files themselves, so replacing a layer rebuilds it and

@@ -49,16 +49,17 @@ set(RATIONS_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # every quoted include in both products before and after the move and requiring each one to land on
 # the same file it landed on before.
 #
-# The two ${RATIONS_ROOT}/src/* entries are scaffolding with a known end. They exist only because
-# resourcestore.h, x11plugview.h and win32plugview.cpp still differ between the products; when
-# those unify into core/ the entries come out and the sibling lookups are sibling lookups again.
+# The ${RATIONS_ROOT}/src/platform entry is scaffolding with a known end. It exists only because
+# x11plugview.h and win32plugview.cpp still differ between the products; when those unify the
+# entry comes out and the sibling lookups are sibling lookups again. src/gfx has already gone that
+# way -- canvas.h and resourcestore.h were the last two files in it, and its entry came out with
+# them.
 set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}
     ${NAMP_CORE_DIR}/platform
     ${NAMP_CORE_DIR}/tools
     ${NAMP_CORE_DIR}/standalone
     ${NAMP_CORE_DIR}/deps/tonestack
-    ${RATIONS_ROOT}/src/gfx
     ${RATIONS_ROOT}/src/platform)
 
 
@@ -424,7 +425,7 @@ add_library(RationsGfx STATIC
     ${NAMP_CORE_DIR}/gfx/fontstack.cpp
     ${NAMP_CORE_DIR}/gfx/image.cpp
     ${NAMP_CORE_DIR}/gfx/svg.cpp
-    ${RATIONS_ROOT}/src/gfx/resourcestore.h
+    ${NAMP_CORE_DIR}/gfx/resourcestore.h
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
     ${NAMP_CORE_DIR}/platform/respath.cpp
 )

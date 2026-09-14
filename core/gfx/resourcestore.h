@@ -2,18 +2,30 @@
 //
 // The VST3 bundle carries its art in Contents/Resources and finds it with dladdr (respath.h), and
 // that stays the primary source everywhere: a file on disk always wins, so a user can still
-// replace a layer without a rebuild. This is the fallback underneath it, and it is what lets the
-// standalone ship as a single executable — it links the amp in rather than loading a bundle, so
-// there is no Contents/Resources for dladdr to find.
+// replace a layer without a rebuild. This is the fallback underneath it: what a binary draws with
+// when it LINKS the amp in rather than loading a bundle, and so has no Contents/Resources for
+// dladdr to find.
 //
-// The table itself is generated at build time by cmake/embedresources.cmake from the same files
-// the bundle copies. ONLY THE STANDALONE LINKS IT. The plug-in must not: it already carries the
-// same files in Contents/Resources, where a user can replace them, and linking both would put two
-// copies of every layer in one bundle.
+// THE TWO PRODUCTS USE THIS DIFFERENTLY, and neither one's story is the general rule.
 //
-// So an empty table is a normal state in the bundle and an impossible one in the standalone, which
-// is what makes embeddedResourceCount() == 0 mean "a missing resource directory is a real problem"
-// rather than "this is the expected state" — the distinction respath.cpp's warning turns on.
+//   products/rack   namp-rack links the amp in and ships as a single executable, so it links the
+//                   generated table too. It is built by cmake/embedresources.cmake from the same
+//                   files the bundle copies. The PLUG-IN must not link it: it already carries
+//                   those files in Contents/Resources, where a user can replace them, and linking
+//                   both would put two copies of every layer in one bundle.
+//
+//   products/rations  nothing links a table, so there is never anything to fall back to. Its
+//                   standalone LOADS the built bundle rather than linking the amp, so it resolves
+//                   art through the same Contents/Resources the plug-in does and needs no
+//                   built-ins. installBuiltinResources() below is declared and never defined
+//                   there, which is exactly right: nothing calls it, so nothing needs it, and a
+//                   target that asked for it without linking a definition would fail at link time
+//                   rather than draw flat rectangles.
+//
+// Either way an empty table is a normal state for a binary that resolves art from a bundle and an
+// impossible one for a binary that does not, which is what makes embeddedResourceCount() == 0 mean
+// "a missing resource directory is a real problem" rather than "this is the expected state" — the
+// distinction respath.cpp's warning turns on.
 //
 // THREADING AND OWNERSHIP. installEmbeddedResources() writes two file-scope pointers and is
 // expected to be called once, from main(), before any window or editor exists; every later access

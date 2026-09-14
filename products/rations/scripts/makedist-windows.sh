@@ -147,11 +147,13 @@ if [ ! -f "$DLL" ]; then
   exit 1
 fi
 
-# RESOURCES. This project embeds NO fallback art: src/gfx/resourcestore.h states
-# that its built-in table is always empty here by design, and NAMp's
-# installBuiltinResources() is deliberately absent from the header. So a bundle
-# that reaches a user without Contents/Resources draws flat rectangles and says
-# so only on stderr, which nobody reads. This assertion is the entire safety net.
+# RESOURCES. This product embeds NO fallback art. core/gfx/resourcestore.h declares
+# installBuiltinResources(), because products/rack's single-executable standalone
+# links a generated table and needs it; nothing in products/rations links a
+# definition, so the built-in table is empty here and there is nothing to fall
+# back to. A bundle that reaches a user without Contents/Resources therefore draws
+# flat rectangles and says so only on stderr, which nobody reads. This assertion is
+# the entire safety net.
 # The SVG in the list is File.svg, which the IR and capture loader rows draw; it
 # was Gear.svg until the settings control became a labelled button and stopped
 # drawing the gear at all.
