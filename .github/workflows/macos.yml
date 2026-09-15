@@ -52,12 +52,14 @@ on:
       - '**.md'
       - 'products/rations/docs/**'
       - 'LICENSE'
-      - 'products/*/NOTICE'
+      - 'NOTICE'
       - '.gitignore'
-      - 'products/rations/installer/**'
+      - 'installer/**'
       - 'products/rations/standalone/**'
       - 'products/rations/scripts/stage-linux.sh'
       - 'products/rations/scripts/stage-windows.sh'
+      - 'scripts/makedist-linux.sh'
+      - 'scripts/makedist-windows.sh'
       - 'scripts/build-win-deps.sh'
       - 'products/rations/gui/**'
       - 'products/rack/**'
@@ -379,9 +381,18 @@ jobs:
           # Derived from the file rather than by re-reading CMakeLists here, so there
           # is ONE source of truth for the version. A second copy of that logic in
           # YAML is exactly how project() and src/version.h drifted apart.
+          # dist/ IS THE REPOSITORY'S, and the three platforms' release scripts all write
+          # there. That was not always true: the macOS script wrote into
+          # products/rations/dist/ after the two products moved under products/, this glob
+          # was never updated with it, and the job built and signed a correct universal
+          # bundle before failing here with a message that said what was missing and not
+          # where it had looked. Both halves are fixed -- the script writes to the
+          # repository's dist/, and the failure below now prints what it found.
           set -- dist/*.zip
           if [ "$#" -eq 1 ] && [ ! -e "$1" ]; then
-            echo "makedist-mac.sh wrote no .zip into dist/" >&2
+            echo "makedist-mac.sh wrote no .zip into $PWD/dist/" >&2
+            echo "what is actually there:" >&2
+            find . -name '*-macos-*.zip' -not -path './slices/*' >&2 || true
             exit 1
           fi
           if [ "$#" -ne 1 ]; then

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package NAMp Rations for macOS into dist/.
+# Package NAMp Rations for macOS into the repository's dist/.
 #
 # ONE PRODUCT, NOT TWO. The Linux release ships the plug-in AND namp-rations-standalone;
 # this one ships the plug-in only. standalone/ is X11, Linux::IRunLoop and JACK
@@ -493,13 +493,25 @@ EOF
 # (iPlug2/Scripts/notarise.sh). It preserves the resource forks and extended
 # attributes that an ordinary zip drops and that bsdtar turns into stray ._
 # files, which is what keeps the code signature intact through the download.
-mkdir -p "$PRODUCT/dist"
+# RELEASE ARCHIVES GO IN THE REPOSITORY'S dist/, not this product's.
+#
+# There is one release directory because there is one release, and the Linux and Windows halves of
+# it are assembled by scripts at the root that write there. macOS is packaged per-product -- there
+# is no macOS build of the rack for it to be packaged WITH -- but where its output LANDS is a
+# property of the release, not of which script happened to produce it.
+#
+# This was a real breakage rather than a tidiness point: the workflow's own check globs dist/*.zip
+# at the workspace root, and had done since before the two products moved under products/, so the
+# macOS job built and signed a correct universal bundle and then failed with "makedist-mac.sh
+# wrote no .zip into dist/". The script was writing to products/rations/dist/ and nothing had told
+# the workflow.
+mkdir -p "$REPO/dist"
 if [ "${#BUNDLES[@]}" -gt 1 ]; then
   SUFFIX="universal"
 else
   SUFFIX="$(uname -m)"
 fi
-ARCHIVE="$PRODUCT/dist/NAMp-rations-${VERSION}-macos-${SUFFIX}.zip"
+ARCHIVE="$REPO/dist/NAMp-rations-${VERSION}-macos-${SUFFIX}.zip"
 rm -f "$ARCHIVE"
 ditto -c -k --keepParent "$PKGDIR" "$ARCHIVE"
 
