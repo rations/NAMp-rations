@@ -56,9 +56,9 @@ if you want the pedals without the amp, or want the standalones.
 
 # NAMp Rations
 
-![The NAMp Rations amp head](docs/amp-head.png)
+![The NAMp Rations amp head](products/rations/docs/amp-head.png)
 
-![The pedalboard page](docs/pedalboard.png)
+![The pedalboard page](products/rations/docs/pedalboard.png)
 
 A four-channel amp head as a **raw VST3** plug-in for **Linux, Windows and macOS**, plus an **LV2**
 build on Linux. The LV2 is the same amp and not a port: the same DSP and the same panel behind a
