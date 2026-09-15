@@ -1,13 +1,33 @@
 #!/usr/bin/env bash
-# Cross-build NAMp Rack for 64-bit Windows and package it into dist/.
+# Cross-build NAMp Rack and the five pedals for 64-bit Windows, gate them, and stage them for the
+# release.
 #
-# ONE PROGRAM, AND FIVE PLUG-INS. namp-rack.exe is self-contained -- the amp, its art and its fonts
-# are linked in, and plug-in discovery re-execs this same binary in scan-child mode, so there is
-# nothing beside it that it needs. Beside it go the five Rations pedals (decision R7), built by this
-# same cross build from a pinned submodule: ordinary VST3 bundles that the rack finds through the
-# same catalogue and the same out-of-process scan as anybody else's, and that any other Windows host
-# will find too. NAMp-Rack-Amp.vst3 is built by every configure and is NOT packaged -- it exists so
-# the SDK validator has something to validate.
+# THIS SCRIPT PRODUCES NO ARCHIVE AND NO INSTALLER. The Windows release is ONE download with ONE
+# NAMp-install.exe in it, installing the plug-in, the standalone and the pedals together; it is
+# assembled by scripts/makedist-windows.sh at the repository root, which calls this and the
+# plug-in's stage script in turn.
+#
+# THE GPLv3 OBLIGATIONS ARE NOT HERE, AND THAT IS DELIBERATE. namp-rack.exe with ASIO in it is the
+# one binary this project conveys under GPLv3, and section 4 and section 6 are duties on the
+# RELEASE -- the thing that is handed to someone -- rather than on a staging step. So the licence
+# text, the Corresponding Source and the directions to it are assembled and asserted by the root
+# script, where the archive is made. What stays here is the part that is about this binary: that
+# ASIO really was compiled into it, that the trademark notice is really in it, and that the SDK is
+# not in the working tree.
+#
+# WHAT IT STAGES:
+#
+#   rack/namp-rack.exe  the whole program. The amp, its art and its fonts are linked in, and
+#                       plug-in discovery re-execs this same binary in scan-child mode, so there
+#                       is nothing beside it that it needs.
+#   pedals/             Boost, Chorus, Flanger, Delay and Reverb, built by this same cross build
+#                       from a pinned submodule. Staged at the TOP of the package rather than
+#                       under rack/ because they are not the rack's: they are ordinary VST3
+#                       bundles that the installer puts in the machine's VST3 folder, where every
+#                       host on it -- including the DAW running NAMp Rations -- will find them.
+#
+# NAMp-Rack-Amp.vst3 is built by every configure and is NOT packaged: it exists so the SDK
+# validator has something to validate.
 #
 # VST3 HOSTING ONLY ON WINDOWS. lilv, suil and jalv's event buffer are Linux-shaped here, so
 # NAMPRACK_BUILD_LV2_HOST is OFF and the rack's CMakeLists refuses the combination loudly rather
@@ -20,13 +40,14 @@
 # so it is the backend the Windows standalone opens first, with WASAPI as the runtime fallback for
 # a machine with no vendor driver.
 #
-# THIS ARCHIVE IS GPLv3, AND IT IS THE ONLY THING THIS PROJECT SHIPS THAT IS NOT MIT. The ASIO SDK
-# is dual-licensed -- proprietary Steinberg agreement, or GPLv3 -- and this project takes the GPLv3
-# arm. So there is no signature to wait for and nothing here is gated on one. What GPLv3 asks for
-# instead is Corresponding Source, and that IS gated, below: an archive that ships without it is a
-# licence breach on the release. The source itself stays MIT and no file was relicensed; only this
-# one binary is conveyed under GPLv3, because only this one binary contains ASIO code.
-# products/rack/LICENSE-windows-asio.txt is the full explanation and it ships in the archive.
+# THE RESULTING BINARY IS GPLv3, AND IT IS THE ONLY THING THIS PROJECT SHIPS THAT IS NOT MIT. The
+# ASIO SDK is dual-licensed -- proprietary Steinberg agreement, or GPLv3 -- and this project takes
+# the GPLv3 arm. So there is no signature to wait for and nothing here is gated on one. The source
+# itself stays MIT and no file was relicensed; only this one binary is conveyed under GPLv3,
+# because only this one binary contains ASIO code. The plug-in, the LV2 bundle, the pedals and
+# everything on Linux stay MIT, and they sit beside it in the release as an aggregate rather than
+# as part of it. products/rack/LICENSE-windows-asio.txt is the full explanation and the root
+# script ships it in the archive.
 #
 # The SDK still reaches the compiler through the untracked dependency sysroot and through nothing
 # else. Under the proprietary arm that was a prohibition; under GPLv3 it is a tidiness rule that
@@ -45,14 +66,10 @@
 # script exists.
 #
 # Environment:
-#   NAMP_SKIP_ASIO=1      configure WASAPI-only, for a build that touches no third-party SDK.
-#   NAMP_SKIP_CORRESPONDING_SOURCE=1
-#                         do not assemble the Corresponding Source tarball. For iterating locally.
-#                         The archive is then named -NOSOURCE and MUST NOT be published: shipping a
-#                         GPLv3 binary without its source is a licence breach. It changes the NAME
-#                         and one text file; every check runs and the binary is identical.
+#   NAMP_SKIP_ASIO=1      configure WASAPI-only, for a build that touches no third-party SDK. The
+#                         result is MIT and the root script drops the GPLv3 paperwork to match.
 #   WINEPREFIX            defaults to ~/.wine-rations.
-#   NAMP_RACK_SKIP_WINE=1 package without the Wine verification. Says so loudly.
+#   NAMP_SKIP_WINE=1      stage without the Wine verification. Says so loudly.
 set -euo pipefail
 
 PRODUCT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,6 +80,11 @@ OBJDUMP="$TRIPLE-objdump"
 STRIP="$TRIPLE-strip"
 
 . "$REPO/scripts/dist-common.sh"
+
+STAGE="${1:-}"
+[ -n "$STAGE" ] && [ -d "$STAGE" ] ||
+  namp_dist_die "usage: stage-windows.sh <stagedir>   (an existing directory to stage into)
+This script stages; it packages nothing. Run scripts/makedist-windows.sh to build a release."
 
 command -v "$TRIPLE-g++" >/dev/null || {
   echo "error: $TRIPLE-g++ not found. Install the MinGW-w64 cross toolchain:" >&2
@@ -87,11 +109,15 @@ cmake --build "$BUILD" --parallel "$(nproc)"
 
 VERSION="$(namp_dist_version "$PRODUCT/CMakeLists.txt")"
 
-STAGEDIR="$(mktemp -d)"
-PKGDIR="$STAGEDIR/pkg"
+PKGDIR="$STAGE/rack"
+PEDALDIR="$STAGE/pedals"
 mkdir -p "$PKGDIR"
-trap 'rm -rf "$STAGEDIR"' EXIT
 
+# Working space OUTSIDE the staged tree, so nothing here can end up in the release by accident.
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+# --- the program --------------------------------------------------------------
 EXE="$BUILD/namp-rack.exe"
 [ -f "$EXE" ] || namp_dist_die "namp-rack.exe was not built at $EXE"
 cp "$EXE" "$PKGDIR/"
@@ -178,7 +204,7 @@ fi
 namp_dist_pe_assert_no_timestamp "$PKGEXE" "namp-rack.exe"
 
 # --- the audio backends ------------------------------------------------------
-EXE_STRINGS="$STAGEDIR/namp-rack.strings"
+EXE_STRINGS="$SCRATCH/namp-rack.strings"
 strings "$PKGEXE" > "$EXE_STRINGS"
 
 # WASAPI IS ALWAYS IN. It is the fallback for a machine with no vendor driver, so a build without
@@ -279,13 +305,13 @@ PEDAL_BUNDLES="$(sed -n 's/^NAMPRACK_PEDAL_BUNDLES:INTERNAL=//p' "$BUILD/CMakeCa
   namp_dist_die "the build declared no NAMPRACK_PEDAL_BUNDLES, so it was configured with
 -DNAMPRACK_BUILD_PEDALS=OFF. This release ships the pedals: reconfigure with it ON."
 
-mkdir -p "$PKGDIR/pedals"
+mkdir -p "$PEDALDIR"
 PEDAL_COUNT=0
 for _pedal in $PEDAL_BUNDLES; do
   _src="$BUILD/VST3/Release/${_pedal}.vst3"
   [ -d "$_src" ] || namp_dist_die "${_pedal}.vst3 was not built at $_src."
-  cp -r "$_src" "$PKGDIR/pedals/"
-  _pkg="$PKGDIR/pedals/${_pedal}.vst3"
+  cp -r "$_src" "$PEDALDIR/"
+  _pkg="$PEDALDIR/${_pedal}.vst3"
 
   # A build directory configured for another platform at some point keeps the old architecture
   # folder, and cp -r then carries a Linux .so into the Windows ZIP. Same prune, same reason, as
@@ -324,17 +350,17 @@ pedals looks complete and is not."
 
 # Their attribution travels with their binaries: this archive redistributes them, and therefore
 # the third-party components they vendor, which are not the ones this project's own NOTICE covers.
-cp "$REPO/rations-pedals/NOTICE" "$PKGDIR/pedals/NOTICE"
+cp "$REPO/rations-pedals/NOTICE" "$PEDALDIR/NOTICE"
 
 # --- verification under Wine -------------------------------------------------
-if [ "${NAMP_RACK_SKIP_WINE:-0}" = "1" ]; then
+if [ "${NAMP_SKIP_WINE:-${NAMP_RACK_SKIP_WINE:-0}}" = "1" ]; then
   echo
-  echo "WARNING: NAMP_RACK_SKIP_WINE=1 - the binary was NOT run and the editor pages" >&2
+  echo "WARNING: NAMP_SKIP_WINE=1 - the binary was NOT run and the editor pages" >&2
   echo "were NOT compared against the Linux render." >&2
   echo
 else
   command -v wine >/dev/null || {
-    echo "error: wine not found. Install it, or set NAMP_RACK_SKIP_WINE=1." >&2
+    echo "error: wine not found. Install it, or set NAMP_SKIP_WINE=1." >&2
     exit 1
   }
   export WINEPREFIX="${WINEPREFIX:-$HOME/.wine-rations}"
@@ -392,7 +418,7 @@ else
   fi
 
   echo "comparing the editor pages against the Linux render"
-  PANELS="$STAGEDIR/panels"
+  PANELS="$SCRATCH/panels"
   mkdir -p "$PANELS"
   "$LINUX_PANELRENDER" "$PANELS/lin" "$PRODUCT/resources" 1.0 >/dev/null
   # The resource directory is passed explicitly rather than left to respath.cpp's module-relative
@@ -418,7 +444,7 @@ else
   # build tree, because that is the copy that ships.
   echo "checking the pedals"
   for _pedal in $PEDAL_BUNDLES; do
-    _pkg="$PKGDIR/pedals/${_pedal}.vst3"
+    _pkg="$PEDALDIR/${_pedal}.vst3"
     _winb="$(winepath -w "$_pkg")"
     wine "$BUILD/bin/moduleinfotool.exe" -create -version "$VERSION" \
          -path "$_winb" \
@@ -434,217 +460,21 @@ $(printf '%s' "$_val" | tail -20)"
   done
 fi
 
-# --- the GPLv3 obligations ---------------------------------------------------
-# WHAT THIS SECTION IS FOR. With ASIO compiled in, this binary is a combined work containing GPLv3
-# code and is conveyed under GPLv3. Two of that licence's requirements are mechanical, so they are
-# machine-checked here rather than remembered:
-#
-#   section 4  "give all recipients a copy of this License along with the Program"
-#              -> COPYING.GPL-3 goes in the archive.
-#   section 6  the Complete Corresponding Source must be available to whoever got the binary
-#              -> scripts/corresponding-source.sh assembles it, and CORRESPONDING-SOURCE.txt --
-#                 the "clear directions" 6(d) asks for -- goes in the archive beside the .exe.
-#
-# THE MARK IS MEASURED NOW, NOT DECLARED. An earlier version of this script named the archive
-# -TESTBUILD unless it was TOLD the Steinberg agreement had been signed, because nothing here could
-# check that. Under GPLv3 there is nothing to declare and the one thing that matters is something
-# this script can actually verify: whether the Corresponding Source for this exact binary exists.
-# So the mark now tracks a fact. An archive named -NOSOURCE is one whose source was not assembled,
-# and publishing it would be the breach.
-CS_DIRECTIONS="$PKGDIR/CORRESPONDING-SOURCE.txt"
-NOSOURCE=""
-if [ "$WANT_ASIO" != "ON" ]; then
-  # No ASIO, no GPLv3 code, no obligation: a WASAPI-only build is MIT like everything else here.
-  echo "WASAPI-only build: MIT, no Corresponding Source obligation."
-elif [ "${NAMP_SKIP_CORRESPONDING_SOURCE:-0}" = "1" ]; then
-  NOSOURCE="asked for with NAMP_SKIP_CORRESPONDING_SOURCE=1"
-elif ! git -C "$REPO" diff --quiet HEAD -- 2>/dev/null; then
-  # Corresponding Source is identified by a commit. A dirty tree cannot produce it honestly, so the
-  # archive is marked rather than the build refused -- this is the ordinary state while working,
-  # and the whole point is that building is never gated.
-  NOSOURCE="the working tree has uncommitted changes"
-else
-  echo
-  echo "== Corresponding Source (GPLv3 section 6) =="
-  "$REPO/scripts/corresponding-source.sh" "$PRODUCT/dist"
-  "$REPO/scripts/corresponding-source.sh" --directions > "$CS_DIRECTIONS"
+# WHAT THIS BUILD ACTUALLY DID, reported back to the root script, which needs it to decide whether
+# the release carries the GPLv3 paperwork. Read from the CMake CACHE rather than restated from
+# WANT_ASIO, for the same reason the pedal list is: what matters is what the configure that
+# produced THIS binary decided, not what this script asked it for. A file, because the root script
+# is a different process and a shell variable would not survive the trip -- the same lesson the
+# ABI-overshoot gate had to learn after it silently stopped marking dev builds.
+if [ -n "${NAMP_DIST_FACTS_FILE:-}" ]; then
+  _cached_asio="$(sed -n 's/^NAMPRACK_WIN_ASIO:BOOL=//p' "$BUILD/CMakeCache.txt" | head -1)"
+  [ -n "$_cached_asio" ] ||
+    namp_dist_die "the rack's build cache declares no NAMPRACK_WIN_ASIO, so this script cannot
+tell the release whether the binary it just staged contains GPLv3 code. That is not a question to
+guess at."
+  echo "asio=$_cached_asio" >> "$NAMP_DIST_FACTS_FILE"
 fi
 
-if [ -n "$NOSOURCE" ]; then
-  cat > "$PKGDIR/NOT-A-RELEASE.txt" <<NOTEOF
-This archive is NOT a release and MUST NOT be published.
-
-It contains a GPLv3 binary -- namp-rack.exe with the ASIO backend compiled in --
-whose Corresponding Source was not assembled, because ${NOSOURCE}.
-GPLv3 section 6 requires that source to be available to anyone who receives the
-binary, so distributing this archive as it stands would be a licence breach.
-
-The binary itself is fine and every check passed. To make a publishable archive,
-commit the tree and run products/rack/scripts/makedist-windows.sh again without
-NAMP_SKIP_CORRESPONDING_SOURCE.
-NOTEOF
-fi
-
-# --- licence, attribution, instructions --------------------------------------
-cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
-if [ "$WANT_ASIO" = "ON" ]; then
-  cp "$PRODUCT/COPYING.GPL-3" "$PRODUCT/LICENSE-windows-asio.txt" "$PKGDIR/"
-fi
-
-# The licence paragraph differs between the two configurations and says so plainly, because "this
-# program is MIT" printed on a GPLv3 binary is the kind of wrong that a user acts on.
-if [ "$WANT_ASIO" = "ON" ]; then
-  LICENCE_PARA="This build is under the GNU GPL version 3, not MIT, and the reason is worth
-knowing: it hosts ASIO, Steinberg's SDK for that is dual-licensed, and this
-project takes its GPLv3 arm rather than sign a proprietary agreement. So you
-get this program under GPLv3 and you are entitled to its complete source.
-COPYING.GPL-3 has the terms, CORRESPONDING-SOURCE.txt says where the source is,
-and LICENSE-windows-asio.txt explains the whole arrangement in one page.
-
-The project's own code is MIT and stays MIT - see LICENSE. Only this particular
-binary, the Windows one with ASIO in it, is GPLv3. The Linux build, the plug-ins
-and the LV2 bundle are all MIT."
-else
-  LICENCE_PARA="MIT. See LICENSE. This build has no ASIO in it, which is what keeps it MIT -
-the Windows build WITH ASIO is GPLv3 instead."
-fi
-
-cat > "$PKGDIR/INSTALL.txt" <<EOF
-NAMp Rack ${VERSION} - a four-channel Neural Amp Modeler amp head, and a rack
-for your plug-ins, for 64-bit Windows
-
-This archive holds one program:
-
-    namp-rack.exe
-
-That is the whole program. The amp, its art and its fonts are inside it, so
-there is nothing to install and nothing for it to go looking for. Put it
-wherever you like and run it.
-
-...and five pedals, in pedals\\:
-
-    RationsBoost      a Tube Screamer-style overdrive
-    RationsChorus     two modulated taps per channel
-    RationsFlanger    swept comb with feedback
-    RationsDelay      tempo-syncable, optional ping-pong
-    RationsReverb     a Freeverb-lineage room
-
-These are ordinary VST3 plug-ins. Copy the five .vst3 folders into your VST3
-folder - usually C:\\Program Files\\Common Files\\VST3 - and they turn up in the
-rack's plug-in list after a rescan, exactly like any other plug-in you have
-installed and through exactly the same route. Nothing about them is special to
-this program, and any other host on the machine will find them as well. Leaving
-them where they are works too: the rack also scans its own directory.
-
-Audio
------
-It opens ASIO first, because that is what your interface's own driver exposes
-and what the latency depends on, and falls back to WASAPI when the machine has
-no ASIO driver installed. --list-devices shows what it can see.
-
-If you have an audio interface, install its manufacturer's ASIO driver and use
-that. ASIO4ALL is a wrapper rather than a driver and will work, but the latency
-is not what a real driver gives you.
-
-Plug-ins
---------
-It hosts VST3. It does NOT host LV2 on Windows - lilv and suil are Linux
-libraries and there is no Windows build of this program that includes them, so
-LV2 plug-ins will not appear in the list and that is by design rather than a
-missing dependency.
-
-Plug-ins are scanned in a separate process on purpose: one that crashes while it
-is being examined takes that process with it and is recorded as bad rather than
-retried, so a single broken plug-in on your disk cannot stop the rack starting.
-
-Your settings
--------------
-Saved racks, which captures were loaded, your audio device choice and your MIDI
-bindings live under %APPDATA%\\NAMp-Rack. The plug-in scan cache lives under
-%LOCALAPPDATA%\\NAMp-Rack and can be deleted at any time; a rescan rebuilds it.
-
-Captures
---------
-NAMp Rack ships NO captures - it plays yours, and it wants four sets of them.
-Open the setup page and point each channel's loader at a folder of .nam files,
-or at a single .nam. That folder's name becomes the channel's name, and each
-channel's dial then sweeps that whole bank continuously.
-
-Captures are ordered by the number in the filename (the LAST run of digits, so
-"GAIN 2" comes before "GAIN 10"), then anything ending in MAX, then anything
-with no number, alphabetically. Capture your amp at each mark of its own gain
-control and put that mark last in the name, and the dial becomes that amp's gain
-control at the amp's own spacing.
-
-A channel with nothing loaded is silent rather than broken. Captures must be
-feed-forward (WaveNet or ConvNet); an LSTM capture is refused.
-
-Requirements
-------------
-64-bit Windows. Nothing else: cairo, FreeType, libpng and zlib are statically
-linked, and so is the C++ runtime.
-
-Licence
--------
-${LICENCE_PARA}
-
-NOTICE has the third-party attribution, which matters more for this build than
-for the Linux one: it statically links cairo, pixman, FreeType, libpng and zlib
-and therefore redistributes them.
-
-The five pedals are MIT, separately from all of the above - they are their own
-binaries, not part of namp-rack.exe - and carry their own attribution in
-pedals\\NOTICE.
-
-ASIO is a trademark of Steinberg Media Technologies GmbH, registered in Europe
-and other countries.
-EOF
-
-MARK=""
-if [ -n "$NOSOURCE" ]; then
-  MARK="-NOSOURCE"
-  echo
-  echo "WARNING: this archive contains a GPLv3 binary whose Corresponding Source was" >&2
-  echo "not assembled, because $NOSOURCE." >&2
-  echo "It is named -NOSOURCE and MUST NOT be published -- GPLv3 section 6 requires the" >&2
-  echo "source to be available to whoever receives the binary. The binary itself is fine" >&2
-  echo "and every check above passed; commit the tree and re-run to get a releasable one." >&2
-  echo
-fi
-
-# THE LICENCE FILES ARE ASSERTED, NOT ASSUMED. GPLv3 section 4 requires the licence text to travel
-# with the program and section 6(d) requires the directions to the source to sit next to the object
-# code. Both are one `cp` away from being silently dropped by an edit to the block above, and
-# neither absence would break anything a user would notice -- which is exactly the shape of mistake
-# a gate is for.
-if [ "$WANT_ASIO" = "ON" ]; then
-  namp_dist_require_files "$PKGDIR" "the GPLv3 archive" \
-    COPYING.GPL-3 LICENSE-windows-asio.txt NOTICE LICENSE
-  if [ -z "$NOSOURCE" ]; then
-    namp_dist_require_files "$PKGDIR" "the GPLv3 archive" CORRESPONDING-SOURCE.txt
-    CS_TARBALL="$PRODUCT/dist/namp-rack-${VERSION}-corresponding-source.tar.gz"
-    [ -f "$CS_TARBALL" ] ||
-      namp_dist_die "the Corresponding Source tarball was not produced at $CS_TARBALL. A GPLv3
-binary may not be published without it."
-  else
-    namp_dist_require_files "$PKGDIR" "the unpublishable archive" NOT-A-RELEASE.txt
-  fi
-  # The GPL text must be the real one. A truncated or reflowed copy is not the licence, and this
-  # file is copied around by hand often enough to be worth checking rather than trusting.
-  grep -qx '                       Version 3, 29 June 2007' "$PKGDIR/COPYING.GPL-3" ||
-    namp_dist_die "COPYING.GPL-3 in the archive is not the verbatim GPLv3 text."
-fi
-
-PKGNAME="namp-rack-${VERSION}${MARK}-windows-x86_64"
-mv "$PKGDIR" "$STAGEDIR/$PKGNAME"
-mkdir -p "$PRODUCT/dist"
-ZIP="$PRODUCT/dist/${PKGNAME}.zip"
-rm -f "$ZIP"
-# python3 rather than zip(1): zip is not installed everywhere and this needs no extra package.
-( cd "$STAGEDIR" && python3 -m zipfile -c "$ZIP" "$PKGNAME" )
-
-echo ""
-echo "Packaged: $ZIP"
-echo ""
-echo "Contents:"
-python3 -m zipfile -l "$ZIP"
+echo "staged the standalone and the pedals:"
+echo "  rack/namp-rack.exe   (ASIO $WANT_ASIO)"
+echo "  pedals/              (5 plug-ins)"

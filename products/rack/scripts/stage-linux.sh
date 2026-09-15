@@ -1,31 +1,36 @@
 #!/usr/bin/env bash
-# Build NAMp Rack for 64-bit Linux and package the release tarball into dist/.
+# Build NAMp Rack and the five pedals for 64-bit Linux, gate them, and stage them for the release.
 #
-# ONE PROGRAM, AND IT IS SELF-CONTAINED.
+# THIS SCRIPT PRODUCES NO ARCHIVE. The release is ONE package holding all three things this
+# project ships, and it is assembled by scripts/makedist-linux.sh at the repository root, which
+# calls this and the plug-in's stage script in turn. See that script's header for why the split is
+# here and not somewhere else.
 #
-#   namp-rack           the amp head as a JACK application, with a rack that hosts other people's
+# WHAT IT STAGES:
+#
+#   rack/namp-rack      the amp head as a JACK application, with a rack that hosts other people's
 #                       VST3 and LV2 plug-ins before and after it. The amp, its art and its fonts
 #                       are linked IN -- there is no bundle beside it to find and nothing to
 #                       install first -- and plug-in discovery re-execs this same binary in
 #                       scan-child mode, so a bundle that crashes during a scan takes a throwaway
 #                       process with it instead of the rack. That is why the archive holds one
 #                       executable and a launcher rather than a program and its plug-in.
-#
-# AND THE FIVE PEDALS. Boost, Chorus, Flanger, Delay and Reverb, built by this same build from a
-# pinned submodule and installed to ~/.vst3, where the rack's own scan finds them. They are
-# ORDINARY PLUG-INS and get no privileged route into the program -- which is the point of shipping
-# them this way rather than drawing them onto a page: the path they take in is the path everybody
-# else's plug-in takes, so it is exercised every time the program is run. Any other host on the
-# machine will find them too.
+#   rack/desktop/       the menu entry and its four icons.
+#   pedals/             Boost, Chorus, Flanger, Delay and Reverb, built by this same build from a
+#                       pinned submodule. They are staged at the TOP of the package rather than
+#                       under rack/ because they are not the rack's: they are ORDINARY PLUG-INS
+#                       that any host on the machine will find, and the install script puts them
+#                       in ~/.vst3 beside NAMp Rations rather than anywhere the rack owns. That
+#                       they are built by this build is a fact about the build, not about them.
 #
 # WHAT IS NOT IN HERE. NAMp-Rack-Amp.vst3 is built by every configure, and it is NOT packaged:
 # it exists so the SDK validator has something to validate, which is by a wide margin the cheapest
-# gate on the amp. The amp as a plug-in for a DAW is NAMp Rations, which is its own release and
-# ships both VST3 and LV2. Shipping a second, pedal-less plug-in that does a subset of what that
-# one does would be asking a user to choose with nothing to go on.
+# gate on the amp. The amp as a plug-in for a DAW is NAMp Rations, and it is in this same release,
+# staged by the other script. Shipping a second, pedal-less plug-in that does a subset of what
+# that one does would be asking a user to choose with nothing to go on.
 #
-# THE SAME AMP IS IN BOTH RELEASES, and that is the point of the repository rather than a
-# duplication to apologise for: one tree, so a fix to the amp lands once.
+# THE SAME AMP IS IN BOTH, and that is the point of the repository rather than a duplication to
+# apologise for: one tree, so a fix to the amp lands once.
 #
 # WHAT THIS GATES ON. Everything is measured on the built binary -- what it links, what it
 # exports, whether its art really is inside it, what runtime it asks its loader for, and that it
@@ -43,15 +48,17 @@ ARCH="$(uname -m)"
 # shellcheck source=../../../scripts/dist-common.sh
 . "$REPO/scripts/dist-common.sh"
 
+STAGE="${1:-}"
+[ -n "$STAGE" ] && [ -d "$STAGE" ] ||
+  namp_dist_die "usage: stage-linux.sh <stagedir>   (an existing directory to stage into)
+This script stages; it packages nothing. Run scripts/makedist-linux.sh to build a release."
+
 cmake -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DNAMP_PRODUCT=rack -S "$REPO"
 cmake --build "$BUILD" --parallel "$(nproc)"
 
-VERSION="$(namp_dist_version "$PRODUCT/CMakeLists.txt")"
-
-STAGEDIR="$(mktemp -d)"
-PKGDIR="$STAGEDIR/pkg"
+PKGDIR="$STAGE/rack"
+PEDALDIR="$STAGE/pedals"
 mkdir -p "$PKGDIR"
-trap 'rm -rf "$STAGEDIR"' EXIT
 
 # --- the program ------------------------------------------------------------
 RACK="$BUILD/namp-rack"
@@ -102,7 +109,8 @@ namp_dist_no_unique "$PKGRACK" "namp-rack"
 # `grep -q`. That is not only six times faster: grep -q closes the pipe as soon as it matches,
 # strings takes SIGPIPE, and under `set -o pipefail` the successful case becomes a FAILING
 # pipeline. Found by this check reporting a missing head.png that was demonstrably present.
-RACK_STRINGS="$STAGEDIR/namp-rack.strings"
+RACK_STRINGS="$(mktemp)"
+trap 'rm -f "$RACK_STRINGS"' EXIT
 strings "$PKGRACK" > "$RACK_STRINGS"
 for _res in img/head.png img/cabinet.png img/dial.png img/File.svg \
             fonts/Michroma-Regular.ttf fonts/Roboto-Regular.ttf; do
@@ -162,15 +170,15 @@ VALIDATOR="$BUILD/bin/Release/validator"
   namp_dist_die "no SDK validator at $VALIDATOR. It is built by this same configure; a build tree
 without it is one that was configured differently from the one this script expects."
 
-mkdir -p "$PKGDIR/pedals"
+mkdir -p "$PEDALDIR"
 PEDAL_COUNT=0
 for _pedal in $PEDAL_BUNDLES; do
   _src="$BUILD/VST3/Release/${_pedal}.vst3"
   [ -d "$_src" ] || namp_dist_die "${_pedal}.vst3 was not built at $_src.
 Configure with -DNAMPRACK_BUILD_PEDALS=ON, or check the rations-pedals submodule is checked out:
   git submodule update --init rations-pedals"
-  cp -r "$_src" "$PKGDIR/pedals/"
-  _pkg="$PKGDIR/pedals/${_pedal}.vst3"
+  cp -r "$_src" "$PEDALDIR/"
+  _pkg="$PEDALDIR/${_pedal}.vst3"
   namp_dist_prune_bundle_arches "$_pkg" "$ARCH"
   _so="$_pkg/Contents/${ARCH}-linux/${_pedal}.so"
   [ -f "$_so" ] || namp_dist_die "${_pedal}.vst3 holds no ${ARCH}-linux binary."
@@ -214,228 +222,9 @@ pedals looks complete and is not."
 # The pedals' own NOTICE travels with them, because this archive redistributes their binaries and
 # therefore the third-party components they vendor. Their LICENCE is this project's licence, but
 # their attribution is not this project's attribution.
-cp "$REPO/rations-pedals/NOTICE" "$PKGDIR/pedals/NOTICE"
+cp "$REPO/rations-pedals/NOTICE" "$PEDALDIR/NOTICE"
 
-# --- licence, attribution, installer ----------------------------------------
-cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
-
-{
-  cat <<'EOF'
-#!/usr/bin/env bash
-# Install (or remove) NAMp Rack for the current user. Nothing here needs root, and nothing is
-# installed outside your home directory.
-#
-#   namp-rack            -> ~/.local/bin                              (the program)
-#   namp-rack.desktop    -> ~/.local/share/applications               (the menu entry)
-#   namp-rack-<size>.png -> ~/.local/share/icons/hicolor/<size>/apps  (its icon)
-#   pedals/*.vst3        -> ~/.vst3                                   (the five pedals)
-#
-# The program is self-contained: the amp, its art and its fonts are inside the binary, so there is
-# nothing else to install and nothing for it to find.
-#
-# The pedals go to ~/.vst3 because that is one of the directories the rack's own scan looks in, so
-# they appear in its plug-in list on the next rescan -- and so does every other VST3 you already
-# have there. They are ordinary plug-ins: any other host on this machine will find them too.
-EOF
-  namp_install_preamble plugin desktop
-  cat <<'EOF'
-
-if [ "${1:-}" = "--uninstall" ]; then
-  rm -f "$BIN_DIR/namp-rack"
-  for _p in "$HERE"/pedals/*.vst3; do
-    [ -d "$_p" ] || continue
-    rm -rf "$VST3_DIR/$(basename "$_p")"
-  done
-EOF
-  namp_install_icons_remove namp-rack
-  cat <<'EOF'
-  refresh
-  echo "NAMp Rack removed."
-  echo "Your settings are NOT removed: ~/.config/NAMp-Rack holds your saved racks, which"
-  echo "captures were loaded and your audio device choice, and ~/.cache/NAMp-Rack holds the"
-  echo "plug-in scan cache. Delete them by hand if you want them gone."
-  exit 0
-fi
-
-mkdir -p "$BIN_DIR" "$APP_DIR" "$VST3_DIR"
-install -m 755 "$HERE/namp-rack" "$BIN_DIR/namp-rack"
-
-# Replaced rather than merged: a .vst3 is a DIRECTORY, so copying over an older one would leave
-# whatever the old version had and the new one does not, and the result is a bundle that is
-# neither release.
-for _p in "$HERE"/pedals/*.vst3; do
-  [ -d "$_p" ] || continue
-  rm -rf "$VST3_DIR/$(basename "$_p")"
-  cp -r "$_p" "$VST3_DIR/"
-done
-EOF
-  namp_install_icons_install namp-rack
-  cat <<'EOF'
-refresh
-
-echo "Installed:"
-echo "  program     $BIN_DIR/namp-rack"
-echo "  launcher    $APP_DIR/namp-rack.desktop"
-echo "  pedals      $VST3_DIR  (5 plug-ins; rescan in the rack to see them)"
-echo
-echo "Start a JACK server first, or run a PipeWire desktop, which provides one."
-EOF
-  namp_install_path_note namp-rack
-} > "$PKGDIR/install.sh"
-chmod +x "$PKGDIR/install.sh"
-
-cat > "$PKGDIR/INSTALL.txt" <<EOF
-NAMp Rack ${VERSION} - a four-channel Neural Amp Modeler amp head, and a rack
-for your plug-ins, for Linux
-
-This archive holds one program:
-
-    namp-rack     the amp in its own window, on JACK, with a rack that hosts
-                  other people's VST3 and LV2 plug-ins before and after it
-
-It is self-contained. The amp, its art and its fonts are inside the binary, so
-there is nothing to install first and nothing for it to go looking for.
-
-...and five pedals, in pedals/:
-
-    RationsBoost      a Tube Screamer-style overdrive
-    RationsChorus     two modulated taps per channel
-    RationsFlanger    swept comb with feedback
-    RationsDelay      tempo-syncable, optional ping-pong
-    RationsReverb     a Freeverb-lineage room
-
-These are ordinary VST3 plug-ins. install.sh puts them in ~/.vst3, which is one
-of the places the rack looks, so they turn up in its plug-in list after a
-rescan - exactly like any other plug-in you have installed, through exactly the
-same route. Nothing about them is special to this program, and any other host on
-this machine will find them as well. You can delete them and the rack is
-unaffected.
-
-If you want the amp inside your DAW instead, as a plug-in, that is NAMp
-Rations - the same amp, with a five-pedal pedalboard built in, as both VST3 and
-LV2. It is a separate download.
-
-Install
--------
-    ./install.sh
-
-Everything goes under your home directory and nothing needs root:
-
-    ~/.local/bin/namp-rack                 the program
-    ~/.local/share/applications/           a menu entry, with an icon
-    ~/.vst3/Rations*.vst3                  the five pedals
-
-To remove it again: ./install.sh --uninstall
-
-You can also just run it where you extracted it, with no installation at all:
-
-    ./namp-rack
-
-Running it
-----------
-It is a JACK application. Start a JACK server first (qjackctl, or e.g.
-"jackd -R -d alsa -r 48000 -p 256"), or run a PipeWire desktop, which provides
-one. With no server it still opens, so you can set your captures and your rack
-up, but it makes no sound and says so.
-
-It registers these ports:
-
-    namp-rack:in       your guitar
-    namp-rack:out_l    \\ the amp, in stereo from the cabinet onwards
-    namp-rack:out_r    /
-    namp-rack:midi_in  a MIDI footswitch
-
-The audio ports are connected to the first physical capture and playback ports
-it finds. The MIDI port is left UNCONNECTED on purpose: which of your MIDI
-devices is the footswitch is not something to guess at, and the wrong guess has
-a keyboard changing amp channels. Connect it in your patchbay.
-
-Your saved racks, which captures were loaded, your audio device choice and your
-MIDI bindings live in ~/.config/NAMp-Rack. The plug-in scan cache lives in
-~/.cache/NAMp-Rack and can be deleted at any time; it is rebuilt by a rescan.
-
-The rack
---------
-Plug-ins load before the amp and after it, in the order you put them. The
-pre-amp section is mono and the post-amp section is stereo, because that is
-where the amp makes it stereo.
-
-Scanning happens in a separate process on purpose: a plug-in that crashes while
-it is being examined takes that process with it and is recorded as bad rather
-than retried, so one broken bundle on your disk cannot stop the rack from
-starting. A plug-in that misbehaves once it is RUNNING is a different matter -
-it is on the audio thread and no host can prevent that - so the rack counts what
-each one does and shows you which one it was.
-
-Adding and removing plug-ins while audio is running is safe and is not heard.
-
-Captures
---------
-NAMp Rack ships NO captures - it plays yours, and it wants four sets of them.
-
-Open the setup page and point each channel's loader at a DIRECTORY of .nam
-files, or at a single .nam. That folder's name becomes the channel's name on the
-front panel, and you can type over it if you would rather call it something else.
-
-Each channel's dial then sweeps that whole bank continuously - no reload, no
-click, no dialog. One click of the mouse wheel on a channel dial is exactly one
-capture. Rest on one and you are playing that capture exactly; in between, you
-are hearing the two either side blended.
-
-Captures are ordered by the number in the filename (the LAST run of digits, so
-"GAIN 2" comes before "GAIN 10"), then anything ending in MAX, then anything
-with no number at all, alphabetically. So capture your amp at each mark of its
-own gain control and put that mark last in the name:
-
-    MyAmp - crunch - GAIN 1.nam
-    MyAmp - crunch - GAIN 2.nam
-    ...
-    MyAmp - crunch - GAIN MAX.nam
-
-and that channel's dial is that amp's gain control, at the amp's own spacing.
-
-A channel with nothing loaded is silent rather than broken; a fresh instance has
-four of them. Captures must be feed-forward (WaveNet or ConvNet); an LSTM
-capture is refused rather than silently accepted.
-
-The four channels
------------------
-Exactly one channel sounds at a time. Click its bat switch, or learn a MIDI
-footswitch to it on the setup page - the switch is instant and silent even
-mid-note, which is the whole reason this program exists.
-
-The rest of the panel: shared Threshold / Bass / Middle / Treble, Input and
-Output, each reading its value under the dial. BYPASS, EQ and GATE switch out the
-whole chain, the tone stack and the noise gate. The icon beside the setup button
-is Slim, which trades model size for CPU - it appears only when your captures can
-actually use it. The setup page also carries the cabinet section, which blends
-one or two impulse responses.
-
-The file picker is drawn inside the program rather than being a GTK or Qt dialog,
-so it looks like the rest of the panel and cannot clash with whatever toolkit
-your desktop is built on.
-
-Requirements
-------------
-cairo, freetype2, fontconfig, libX11, lilv and suil, which a desktop Linux
-install with a plug-in host on it already has, plus the JACK client library
-(libjack.so.0) and a running JACK server. On Debian/Devuan/Ubuntu:
-
-    sudo apt install jackd2 liblilv-0-0 libsuil-0-0
-
-On a PipeWire desktop, "pipewire-jack" provides the JACK library and server.
-
-Nothing here needs a -dev package; those are only for building from source.
-
-There is no 32-bit build.
-
-Licence
--------
-MIT. See LICENSE, and NOTICE for third-party attribution. The pedals are MIT
-too and carry their own attribution in pedals/NOTICE, which covers the
-third-party pieces they use and this one does not.
-EOF
-
-PKGNAME="namp-rack-${VERSION}$(namp_dist_mark)-linux-${ARCH}"
-mv "$PKGDIR" "$STAGEDIR/$PKGNAME"
-namp_dist_tarball "$STAGEDIR" "$PKGNAME" "$PRODUCT/dist"
+echo "staged the standalone and the pedals:"
+echo "  rack/namp-rack"
+echo "  rack/desktop/   (1 launcher, 4 icons)"
+echo "  pedals/         ($PEDAL_COUNT plug-ins)"

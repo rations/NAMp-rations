@@ -6,7 +6,7 @@
 # knows what NAMp-rations.vst3 or namp-rack is, and that is the line:
 #
 #   this file          the mechanism -- one implementation, so a fix to it lands once
-#   products/*/scripts/makedist-linux.sh
+#   products/*/scripts/stage-linux.sh
 #                      WHICH assertions each artefact gets, spelled out one call per line
 #
 # The per-artefact assertions are deliberately NOT collapsed into a flag on a single packaging
@@ -54,7 +54,7 @@ namp_dist_die() {
 }
 
 # The project() version, which is the first VERSION line in the product's lists file. Read rather
-# than duplicated, and read the SAME way makedist-windows.sh reads it, so two releases of one
+# than duplicated, and read the SAME way every other release path reads it, so two releases of one
 # product cannot be tagged differently from one another.
 namp_dist_version() {
     local lists="$1" v
@@ -63,13 +63,36 @@ namp_dist_version() {
     printf '%s' "$v"
 }
 
+# THE RELEASE VERSION, AND THE ASSERTION THAT THERE IS ONLY ONE OF IT.
+#
+# The release is one package holding both products, so it has one version number -- and the two
+# products each carry their own project() version in their own lists file. Those two numbers
+# agreeing is a fact to check, not an arrangement to trust: they are in different files, edited by
+# different hands on different days, and a package labelled 0.3.0 whose plug-in half says 0.2.9 is
+# wrong in a way that survives every other check here and only surfaces in a host's plug-in list,
+# months later, as a version nobody can account for.
+#
+# This is the same class of drift the whole repository exists to end. The two trees were kept in
+# step by hand for twenty-six commits and a parameter default fell out of step silently; a version
+# number is cheaper to check than that was and there is no reason to find out the hard way twice.
+namp_dist_release_version() {
+    local repo="$1" v_rations v_rack
+    v_rations="$(namp_dist_version "$repo/products/rations/CMakeLists.txt")"
+    v_rack="$(namp_dist_version "$repo/products/rack/CMakeLists.txt")"
+    [ "$v_rations" = "$v_rack" ] || namp_dist_die "the two products disagree about the version:
+  products/rations/CMakeLists.txt  $v_rations
+  products/rack/CMakeLists.txt     $v_rack
+They ship in ONE package, so they need ONE version. Bump whichever is behind and re-run."
+    printf '%s' "$v_rations"
+}
+
 # ONE ARCHITECTURE FOLDER, AND IT IS THE LINUX ONE.
 #
 # A VST3 bundle holds Contents/<arch>/ per platform, so a build tree that was once configured with
 # the MinGW toolchain and later re-configured natively keeps its Contents/x86_64-win directory:
 # CMake writes the new binary beside the old one instead of replacing it, and `cp -r` then carries
 # a Windows DLL into the Linux tarball. It loads nowhere and is pure weight. This is the mirror of
-# the prune in makedist-windows.sh, for the mirror-image mistake.
+# the prune in the Windows stage scripts, for the mirror-image mistake.
 namp_dist_prune_bundle_arches() {
     local bundle="$1" arch="$2" dir name
     for dir in "$bundle/Contents"/*/; do
@@ -158,6 +181,19 @@ namp_dist_require_files() {
     done
 }
 
+# The same for directories -- a VST3 bundle and an LV2 bundle are DIRECTORIES, so require_files
+# cannot ask after one. Separate rather than one function that accepts either, because "it is
+# there" and "it is there and it is a directory" are different claims and a bundle that arrived
+# as a stray regular file is a failure worth naming.
+namp_dist_require_dirs() {
+    local root="$1" label="$2"
+    shift 2
+    local d
+    for d in "$@"; do
+        [ -d "$root/$d" ] || namp_dist_die "$label is missing the $d directory"
+    done
+}
+
 # --- the ABI baseline gate --------------------------------------------------
 # Reads the symbol VERSION REFERENCES out of the dynamic table -- what the binary asks its loader
 # for -- and compares the highest of each family against the declared ceiling above. This is the
@@ -194,7 +230,21 @@ namp_dist_abi_baseline() {
             bad=1
         fi
     done
-    [ "$bad" -eq 0 ] || NAMP_DIST_ABI_OVER=1
+    # THE OVERSHOOT HAS TO CROSS A PROCESS BOUNDARY, so it is recorded in a FILE and not only in
+    # a variable. Each product builds and gates itself in its own stage script, which is a
+    # separate process from the one that names the tarball -- so a plain shell variable set here
+    # dies with that process and namp_dist_mark, running in the parent, reads its own copy and
+    # sees 0 forever. Measured, not deduced: the first release run after the two products were
+    # merged into one package produced an unmarked tarball from an overshooting build, which is
+    # the precise failure -DEVBUILD exists to prevent and the precise shape the gate is meant to
+    # make impossible.
+    #
+    # The file is the caller's to create and to place OUTSIDE the staged tree; one line per
+    # artefact, so what comes back is the list of what overshot rather than a boolean.
+    if [ "$bad" -ne 0 ]; then
+        NAMP_DIST_ABI_OVER=1
+        [ -z "${NAMP_DIST_ABI_OVER_FILE:-}" ] || echo "$label" >> "$NAMP_DIST_ABI_OVER_FILE"
+    fi
 }
 
 # WHAT AN OVERSHOOT DOES, AND WHAT IT DELIBERATELY DOES NOT DO. It refuses the RELEASE, not the
@@ -210,7 +260,17 @@ namp_dist_abi_baseline() {
 # an overshooting build: the difference is in the filename, where it cannot be lost by someone
 # uploading the wrong file a month later.
 namp_dist_mark() {
-    if [ "${NAMP_DIST_ABI_OVER:-0}" -ne 0 ]; then
+    local over="${NAMP_DIST_ABI_OVER:-0}"
+    # Either this process saw the overshoot itself, or a stage script in a child process recorded
+    # it in the shared file. Both are checked, because the two packaging shapes -- one script that
+    # gates and packages, and a root script that delegates the gating -- both exist here.
+    if [ -s "${NAMP_DIST_ABI_OVER_FILE:-/nonexistent}" ]; then
+        over=1
+        echo >&2
+        echo "  These overshot the declared release baseline:" >&2
+        sed 's/^/    /' "$NAMP_DIST_ABI_OVER_FILE" >&2
+    fi
+    if [ "$over" -ne 0 ]; then
         echo >&2
         echo "  ^ This build needs a newer runtime than the declared release baseline, so it is" >&2
         echo "  NOT a release: it would fail to load on the distribution releases are built for." >&2
@@ -300,18 +360,78 @@ build is not reproducible. The linker zeroes that field and \`strip\` writes it 
 step must call namp_dist_pe_derandomise after stripping."
 }
 
+# --- reproducibility of the ARCHIVE, as distinct from the binaries inside it -----------------
+#
+# THE BINARIES WERE REPRODUCIBLE AND THE ARCHIVES WERE NOT, and nothing here was watching. This
+# project verifies itself by building twice and comparing every byte, and a great deal of work has
+# gone into making that true of the artefacts -- -ffile-prefix-map, -Wl,--no-insert-timestamp, and
+# namp_dist_pe_derandomise above for the COFF stamp `strip` puts back. None of it reached the
+# tarball or the ZIP, because an archive records more than its members' contents:
+#
+#   mtime        every member carries one, and it is whatever the staging `cp` happened to write
+#   order        tar walks readdir order, which is the filesystem's, not a defined one
+#   owner/group  the packager's uid, gid and names
+#   gzip header  gzip writes the CURRENT TIME into its own header, independent of tar
+#
+# So two release runs from one commit produced two different files, and "did the release move?"
+# could not be asked of the thing that is actually uploaded. These two helpers close that: stamp
+# the staged tree to a fixed time, then archive it in a defined order with no identity in it.
+#
+# THE TIME IS THE COMMIT'S, not the wall clock and not zero. Zero would make every release in
+# history look identical to a mirror, and the wall clock is the thing being removed; the commit
+# date is the one timestamp that is a genuine fact about what is in the archive. A dirty tree
+# still gets HEAD's, which is fine -- it is a fixed value, and a dirty tree is marked as
+# unpublishable by the gates that care.
+namp_dist_epoch() {
+    local repo="$1" e
+    e="$(git -C "$repo" show -s --format=%ct HEAD 2>/dev/null || true)"
+    [ -n "$e" ] || e=0
+    printf '%s' "$e"
+}
+
+namp_dist_stamp_tree() {
+    local dir="$1" epoch="$2"
+    find "$dir" -exec touch -h -d "@$epoch" {} +
+}
+
 # --- the tarball ------------------------------------------------------------
 namp_dist_tarball() {
-    local stagedir="$1" pkgname="$2" outdir="$3" tarball
+    local stagedir="$1" pkgname="$2" outdir="$3" epoch="${4:-}" tarball
     mkdir -p "$outdir"
     tarball="$outdir/${pkgname}.tar.gz"
     rm -f "$tarball"
-    tar -czf "$tarball" -C "$stagedir" "$pkgname"
+    if [ -n "$epoch" ]; then
+        namp_dist_stamp_tree "$stagedir/$pkgname" "$epoch"
+        # --sort=name for a defined order, --owner/--group/--numeric-owner to take the packager's
+        # identity out, --mtime to override what is on disk, and `gzip -n` because gzip writes its
+        # OWN timestamp into its header and tar -z gives no way to say otherwise.
+        tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
+            -cf - -C "$stagedir" "$pkgname" | gzip -n > "$tarball"
+    else
+        tar -czf "$tarball" -C "$stagedir" "$pkgname"
+    fi
     echo ""
     echo "Packaged: $tarball"
     echo ""
     echo "Contents:"
     tar -tzf "$tarball"
+}
+
+# The ZIP equivalent. python3 rather than zip(1): zip is not installed everywhere and this needs no
+# extra package. It stores each member's mtime from the filesystem, so the stamp above is what
+# makes it reproducible -- there is no flag to pass. -c takes the directory and stores it with its
+# own name at the archive root, which is what an extract-anywhere release wants.
+namp_dist_zip() {
+    local stagedir="$1" pkgname="$2" zip="$3" epoch="${4:-}"
+    rm -f "$zip"
+    mkdir -p "$(dirname "$zip")"
+    [ -z "$epoch" ] || namp_dist_stamp_tree "$stagedir/$pkgname" "$epoch"
+    ( cd "$stagedir" && python3 -m zipfile -c "$zip" "$pkgname" )
+    echo ""
+    echo "Packaged: $zip"
+    echo ""
+    echo "Contents:"
+    python3 -m zipfile -l "$zip"
 }
 
 # --- install.sh fragments ---------------------------------------------------
@@ -355,12 +475,16 @@ EOF
     done
 }
 
+# $1 is the application name; $2 is the staged directory holding its .desktop and its four PNGs,
+# relative to the extracted archive. The directory is a parameter rather than a constant because
+# the release package holds more than one product and each keeps its own files under its own
+# subdirectory -- there is no one "desktop/" any more.
 namp_install_icons_install() {
     cat <<EOF
-install -m 644 "\$HERE/desktop/$1.desktop" "\$APP_DIR/$1.desktop"
+install -m 644 "\$HERE/$2/$1.desktop" "\$APP_DIR/$1.desktop"
 for SIZE in 256 128 64 48; do
   mkdir -p "\$ICON_ROOT/\${SIZE}x\${SIZE}/apps"
-  install -m 644 "\$HERE/desktop/$1-\${SIZE}.png" "\$ICON_ROOT/\${SIZE}x\${SIZE}/apps/$1.png"
+  install -m 644 "\$HERE/$2/$1-\${SIZE}.png" "\$ICON_ROOT/\${SIZE}x\${SIZE}/apps/$1.png"
 done
 EOF
 }

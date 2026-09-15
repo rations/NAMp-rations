@@ -14,7 +14,8 @@ around it.
 | **[products/rack](products/rack)** | **NAMp Rack** — the amp as a program you run on its own, for Linux and Windows, with the same amp built in as the chain anchor. It is also a plug-in HOST: you load other people's plug-ins into the chain before and after the amp, so the pedalboard is whatever you own rather than five fixed ones. Linux hosts VST3 and LV2; Windows hosts VST3 only. **The five Rations Pedals ship with it.** |
 
 **If you want the amp in your DAW, that is NAMp Rations. If you want to plug in and play without a
-DAW, that is NAMp Rack.** They are separate downloads and you can have both; they do not conflict.
+DAW, that is NAMp Rack.** You do not have to choose: there is **one download per platform** and it
+holds both, plus the pedals. The installer asks which of the three you want.
 
 Nothing here ships any captures. A fresh instance of either comes up with four empty channels,
 which is an ordinary state rather than an error, and the first thing to do after installing is
@@ -24,14 +25,26 @@ load your own into them.
 
 [github.com/rations/NAMp-rations/releases](https://github.com/rations/NAMp-rations/releases)
 
+**One file per platform. Each holds all three things**, and installs them with one script or one
+installer.
+
 | file | what it is |
 |---|---|
-| `NAMp-rations-<v>-linux-x86_64.tar.gz` | NAMp Rations — VST3 + LV2 |
-| `NAMp-rations-<v>-windows-x86_64.zip` | NAMp Rations — VST3, with an installer |
-| `NAMp-rations-<v>-macos.zip` | NAMp Rations — VST3, universal, **[experimental](#macos-experimental)** |
-| `namp-rack-<v>-linux-x86_64.tar.gz` | NAMp Rack — the program, plus the five pedals |
-| `namp-rack-<v>-windows-x86_64.zip` | NAMp Rack — the program, plus the five pedals |
-| `namp-rack-<v>-corresponding-source.tar.gz` | source for the Windows Rack build — see [Licence](#licence) |
+| `NAMp-<v>-linux-x86_64.tar.gz` | the plug-in (VST3 + LV2), the program, and the five pedals — `./install.sh` |
+| `NAMp-<v>-windows-x86_64.zip` | the same three, with `NAMp-install.exe` |
+| `NAMp-rations-<v>-macos.zip` | the plug-in only, universal, **[experimental](#macos-experimental)** — there is no macOS build of the program |
+| `namp-rack-<v>-corresponding-source.tar.gz` | source for the Windows program — see [Licence](#licence) |
+
+Inside the Linux and Windows archives:
+
+```
+plugin/     NAMp Rations — the VST3, and on Linux the LV2 as well
+rack/       NAMp Rack — the program, and on Linux its menu entry and icons
+pedals/     the five Rations pedals, as ordinary VST3 bundles
+```
+
+Each part can be left out at install time, and each can be copied into place by hand instead;
+nothing in the archive depends on anything else in it being installed.
 
 The five pedals are **also their own release**, from
 [github.com/rations/rations-pedals](https://github.com/rations/rations-pedals) — the same five
@@ -153,14 +166,11 @@ outside your home directory on Linux or macOS.
 
 ## Linux
 
-### NAMp Rations — the plug-in
-
-The tarball holds two things and they are the same amp twice: the VST3 and the LV2. They are
-interchangeable — install whichever your host handles best and ignore the other.
+One archive, one script, all three parts.
 
 ```
-tar xf NAMp-rations-*-linux-x86_64.tar.gz
-cd NAMp-rations-*/
+tar xf NAMp-*-linux-x86_64.tar.gz
+cd NAMp-*/
 ./install.sh
 ```
 
@@ -168,49 +178,38 @@ cd NAMp-rations-*/
 |---|---|
 | `~/.vst3/NAMp-rations.vst3` | the plug-in, VST3 |
 | `~/.lv2/rations.lv2` | the plug-in, LV2 |
-
-Then rescan plug-ins in your DAW. `./install.sh --uninstall` removes all of it again.
-
-You can also skip the script: copy `NAMp-rations.vst3` into `~/.vst3/` or `rations.lv2` into
-`~/.lv2/` by hand. There is nothing else in the archive to install. cairo, FreeType and fontconfig
-come from your system.
-
-If a host shows you an older version of the LV2 after installing, check for `rations.lv2` under
-`/usr/lib/lv2` or `/usr/local/lib/lv2`: a copy there shadows the one in your home directory. The
-installer says so if it finds one.
-
-### NAMp Rack — the program, and the pedals
-
-```
-tar xf namp-rack-*-linux-x86_64.tar.gz
-cd namp-rack-*/
-./install.sh
-```
-
-| goes to | what |
-|---|---|
-| `~/.local/bin/namp-rack` | the program |
-| `~/.local/share/applications/namp-rack.desktop` | the menu entry |
-| `~/.local/share/icons/hicolor/<size>/apps/namp-rack.png` | its icon, at 48, 64, 128 and 256 |
 | `~/.vst3/RationsBoost.vst3` … `RationsReverb.vst3` | the five pedals |
+| `~/.local/bin/namp-rack` | the program |
+| `~/.local/share/applications/namp-rack.desktop` | its menu entry |
+| `~/.local/share/icons/hicolor/<size>/apps/namp-rack.png` | its icon, at 48, 64, 128 and 256 |
 
-The pedals go to `~/.vst3` because that is one of the folders the Rack's own scan looks in, so they
-appear in its plug-in list after a rescan — and so does every other VST3 you already have there.
-Any other host on the machine will find them too. Delete them and the Rack is unaffected.
+Nothing needs root and nothing lands outside your home directory. Then rescan plug-ins in your
+DAW. `./install.sh --uninstall` removes every one of those again.
 
-`./install.sh --uninstall` removes the program, the launcher, the icons and the five pedals. It
-deliberately does **not** remove your settings: `~/.config/NAMp-Rack` holds your saved racks, which
-captures were loaded, your audio device choice and your MIDI bindings, and `~/.cache/NAMp-Rack`
-holds the plug-in scan cache, which can be deleted at any time and is rebuilt by a rescan.
+**The VST3 and the LV2 are the same amp twice** and are interchangeable — your host will find both
+if both are installed, so use whichever it handles best and ignore the other. If a host shows you
+an older version of the LV2, check for `rations.lv2` under `/usr/lib/lv2` or `/usr/local/lib/lv2`:
+a copy there shadows the one in your home directory. The install script says so if it finds one.
 
-You can also just run it where you extracted it, with no installation at all — `./namp-rack`. The
-Rack also scans its own directory, so the `pedals/` folder beside it is found without installing
-anything.
+**The pedals go to `~/.vst3`** because that is one of the folders the Rack's own scan looks in, so
+they appear in its plug-in list after a rescan — and so does every other VST3 you already have
+there. Your DAW will find them as well. They are ordinary plug-ins with no privileged route into
+the Rack; delete them and it is unaffected.
 
-**Requirements:** cairo, freetype2, fontconfig, libX11, lilv and suil, which a desktop Linux
-install with a plug-in host on it already has, plus the JACK client library and a running JACK
-server. On Debian / Devuan / Ubuntu: `sudo apt install jackd2 liblilv-0-0 libsuil-0-0`. On a
-PipeWire desktop, `pipewire-jack` provides both.
+**You do not have to install any of it.** Copy any bundle into `~/.vst3` or `~/.lv2` by hand, and
+run the program straight out of the archive with `./rack/namp-rack` — it also scans its own
+directory, so the pedals beside it are found without installing anything.
+
+`--uninstall` deliberately does **not** remove your settings: `~/.config/NAMp-rations` and
+`~/.config/NAMp-Rack` hold your saved racks, which captures were loaded, your audio device choice
+and your MIDI bindings, and `~/.cache/NAMp-Rack` holds the plug-in scan cache, which can be
+deleted at any time and is rebuilt by a rescan.
+
+**Requirements:** the plug-in, the LV2 and the pedals need cairo, freetype2, fontconfig and libX11,
+which a desktop Linux install already has. The program needs those plus lilv and suil, the JACK
+client library and a running JACK server. On Debian / Devuan / Ubuntu:
+`sudo apt install jackd2 liblilv-0-0 libsuil-0-0`. On a PipeWire desktop, `pipewire-jack` provides
+both the library and the server.
 
 ### Rations Pedals on their own
 
@@ -233,45 +232,39 @@ cd RationsPedals-*/
 
 ## Windows
 
-### NAMp Rations — the plug-in
+One archive, one installer, all three parts.
 
-The ZIP holds `NAMp-rations-install.exe` and the same bundle loose, so you can install it either
-way.
+**With the installer.** Run `NAMp-install.exe`. It asks which of the three you want — the plug-in,
+the pedals, the program — and installs those. It is not code-signed, so SmartScreen shows a blue
+"Windows protected your PC" box: click *More info*, then *Run anyway*, or install by hand instead;
+the two put exactly the same folders in exactly the same places.
 
-**With the installer.** Run it. It is not code-signed, so SmartScreen shows a blue "Windows
-protected your PC" box — click *More info*, then *Run anyway*, or install by hand instead; the two
-put exactly the same folder in exactly the same place.
+| run as | plug-in and pedals | program |
+|---|---|---|
+| administrator | `C:\Program Files\Common Files\VST3\` (every user) | `C:\Program Files\NAMp\` |
+| normally | `%LOCALAPPDATA%\Programs\Common\VST3\` (just you) | `%LOCALAPPDATA%\Programs\NAMp\` |
 
-| run as | goes to |
-|---|---|
-| administrator | `C:\Program Files\Common Files\VST3\NAMp-rations.vst3` (every user) |
-| normally | `%LOCALAPPDATA%\Programs\Common\VST3\NAMp-rations.vst3` (just you) |
+It tells you which, and you can change the VST3 folder. The program gets a Start Menu entry. Remove
+all of it later from *Apps & features*, or with the uninstaller it leaves beside the program.
 
-It tells you which, and you can change the folder. Remove it later from *Apps & features*.
-
-**By hand.** Copy the whole `NAMp-rations.vst3` **folder** — not a file — into one of those same two
-directories, then rescan plug-ins in your DAW. Do not rename anything inside it: the bundle carries
-its own art and fonts in `Contents\Resources`, and the binary inside `Contents\x86_64-win` must
-keep the name `NAMp-rations.vst3` or no host will load it. To uninstall, delete the folder.
-
-Either way, keep only **one** copy: hosts scan both directories, so a copy in each shows up as two
-NAMp Rations entries. There is no runtime to install — cairo, FreeType, libpng and zlib are linked
-into the bundle.
-
-### NAMp Rack — the program, and the pedals
-
-**There is no installer, and there is nothing to install.** The ZIP holds:
+**By hand.** The same bundles are loose in the ZIP, which is the fallback for a machine whose
+SmartScreen or antivirus refuses an unsigned installer:
 
 | | |
 |---|---|
-| `namp-rack.exe` | the whole program — put it anywhere and run it |
-| `pedals\Rations<Pedal>.vst3` | the five pedals, as five folders |
+| `plugin\NAMp-rations.vst3` | copy the whole **folder** into one of the two VST3 directories above |
+| `pedals\Rations<Pedal>.vst3` | the same, five more folders |
+| `rack\namp-rack.exe` | the whole program — put it anywhere and run it |
 
-For the pedals, copy those five **folders** into your VST3 directory — usually
-`C:\Program Files\Common Files\VST3`, or `%LOCALAPPDATA%\Programs\Common\VST3` if you would
-rather not need administrator rights — and rescan in the Rack. Leaving them where they are works
-too: the Rack also scans its own directory, so a `pedals` folder beside the .exe is found without
-copying anything.
+Then rescan plug-ins in your DAW. Do not rename anything inside a bundle: each carries its own art
+and fonts in `Contents\Resources`, and the binary in `Contents\x86_64-win` must keep the bundle's
+own name or no host will load it. To uninstall a hand-installed copy, delete the folder.
+
+Either way, keep only **one** copy of each bundle: hosts scan both directories, so a copy in each
+shows up twice in the plug-in list. The installer offers to remove the other one for you.
+
+The Rack also scans its own directory, so leaving `pedals\` beside the .exe works without copying
+anything anywhere.
 
 Your settings live in `%APPDATA%\NAMp-Rack` — saved racks, which captures were loaded, your audio
 device choice and your MIDI bindings. The plug-in scan cache is in `%LOCALAPPDATA%\NAMp-Rack` and
@@ -282,7 +275,11 @@ ASIO4ALL is a wrapper rather than a driver and will work, but the latency is not
 gives you. With no ASIO driver at all the Rack falls back to WASAPI.
 
 **Requirements:** 64-bit Windows and nothing else. cairo, FreeType, libpng and zlib are statically
-linked, and so is the C++ runtime.
+linked, and so is the C++ runtime. There is no 32-bit build.
+
+**Note on the licence:** `namp-rack.exe` is the one binary in this archive that is **GPLv3 rather
+than MIT**, because it has the ASIO SDK compiled in. The plug-in and the pedals beside it are MIT
+and stay MIT — see [Licence](#licence).
 
 ### Rations Pedals on their own
 
@@ -372,6 +369,31 @@ are a fifth submodule, pinned the same way and built by the Rack's own build;
 its build; the one at the root only chooses between them.
 
 Per-product build notes, dependencies and platform details are in each product's own directory.
+
+## Packaging a release
+
+The release is **one package per platform**, so it is built by one script at the root rather than
+one per product:
+
+```sh
+scripts/makedist-linux.sh      # -> dist/NAMp-<v>-linux-x86_64.tar.gz
+scripts/makedist-windows.sh    # -> dist/NAMp-<v>-windows-x86_64.zip, with NAMp-install.exe in it
+```
+
+Each configures and builds both products — two build directories, for the reason above — and calls
+`products/*/scripts/stage-{linux,windows}.sh` to gate and stage them into one tree. The per-artefact
+checks live in those stage scripts, beside the product that owns them: what each binary links, what
+it exports, what is inside each bundle, the ASIO markers, the pixel-for-pixel comparison of the
+Windows editor against the Linux one. What the root scripts own is what is genuinely shared — the
+version (cross-checked between the two products before anything is built), the licence files, the
+install script or installer, and the archive.
+
+macOS is `products/rations/scripts/makedist-mac.sh` and stays per-product, because there is no
+macOS build of the Rack for it to be packaged with.
+
+Both archives are byte-reproducible from a given commit: the members' timestamps, order and
+ownership are normalised, and the Windows PE timestamps are zeroed after stripping, which `strip`
+would otherwise refill from the wall clock.
 
 # Licence
 

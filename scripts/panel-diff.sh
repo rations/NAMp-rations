@@ -15,7 +15,7 @@
 #
 # It has two callers with two different questions:
 #
-#   products/*/scripts/makedist-windows.sh
+#   products/*/scripts/stage-windows.sh
 #                        Linux against the MinGW cross build, under Wine. Both
 #                        products ask this one.
 #   .github/workflows/macos.yml  the arm64 slice against the x86_64 one. That

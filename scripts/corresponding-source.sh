@@ -232,7 +232,7 @@ Meson. The build is a cross build; no Windows machine is involved.
 
   2. Build and package:
 
-       products/rack/scripts/makedist-windows.sh
+       scripts/makedist-windows.sh
 
 REPRODUCIBILITY. This build is bit-reproducible: the PE TimeDateStamp is zeroed
 by the link, no source path reaches the binary, and the same source produces a

@@ -13,11 +13,11 @@
 # (public.sdk/source/vst/hosting/module_win32.cpp, loadAsPackage), and the
 # default DLL search order does not include the loaded module's own directory,
 # so a DLL next to the bundle would simply not be found. Everything is linked in
-# instead, which is also why makedist-windows.sh can assert that the finished
+# instead, which is also why the Windows stage scripts can assert that the finished
 # plug-in and standalone import nothing but system DLLs.
 #
 # VERSIONS MATCH THE LINUX BUILD, and that is a test requirement rather than
-# tidiness: products/rations/scripts/makedist-windows.sh renders all four of THAT
+# tidiness: products/rations/scripts/stage-windows.sh renders all four of THAT
 # product's editor pages with the Windows panelrender under Wine and compares them
 # pixel for pixel against the Linux render, and a different FreeType would move
 # glyph rasterisation enough to make that comparison meaningless.
@@ -258,7 +258,7 @@ if ! done_stamp freetype; then
     # the parent project's bundle came out re-exporting 151 FreeType symbols
     # beside its own three entry points. -Wl,--exclude-all-symbols does not
     # help, because a .drectve export is explicit rather than automatic
-    # (verified by trying it). makedist-windows.sh's exports gate is what
+    # (verified by trying it). the Windows stage script's exports gate is what
     # detects a regression here.
     #
     # Removing the define is the fix at the cause. Guarded so that a future

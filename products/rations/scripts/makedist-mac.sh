@@ -60,8 +60,8 @@ for _tool in lipo codesign xattr ditto otool nm strip; do
 done
 
 # The project() version, which is the first VERSION line in the top-level lists
-# file. Read rather than duplicated, and read the SAME way makedist-linux.sh and
-# makedist-windows.sh read it, so the three releases cannot be tagged differently
+# file. Read rather than duplicated, and read the SAME way stage-linux.sh and
+# stage-windows.sh read it, so the three releases cannot be tagged differently
 # from one another.
 VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
   "$PRODUCT/CMakeLists.txt" | head -1)"
@@ -128,7 +128,7 @@ if [ "${#BUNDLES[@]}" -gt 1 ]; then
   lipo "${SLICE_BINS[@]}" -create -output "$BIN"
 fi
 
-# strip -x, not the GNU --strip-unneeded makedist-linux.sh uses: this is Apple's
+# strip -x, not the GNU --strip-unneeded stage-linux.sh uses: this is Apple's
 # strip, where -x removes local symbols and is what the reference project runs on
 # its own VST3 (NeuralAmpModelerPlugin/TemplateProject/scripts/makedist-mac.sh).
 # Anything stronger would take the three entry points with it.

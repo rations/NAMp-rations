@@ -1,52 +1,50 @@
 #!/usr/bin/env bash
-# Cross-build NAMp Rations for 64-bit Windows and package the release ZIP into dist/.
+# Cross-build NAMp Rations for 64-bit Windows, gate the result, and stage it for the release.
 #
-# ONE PRODUCT ON WINDOWS. This archive is the VST3 bundle and nothing else. The
-# standalone is a JACK application and therefore a Linux product - it ships with
-# that release (scripts/makedist-linux.sh) - and there is no rack and no plug-in
-# host on either platform, so there is no second binary to package here.
+# THIS SCRIPT PRODUCES NO ARCHIVE AND NO INSTALLER. The Windows release is ONE download with ONE
+# NAMp-install.exe in it, installing the plug-in, the standalone and the pedals together; it is
+# assembled by scripts/makedist-windows.sh at the repository root, which calls this and the rack's
+# stage script in turn. The assertions below are about THIS artefact and stay here beside the
+# product that owns them; the installer, the licence files and the ZIP are shared and are written
+# once at the root.
 #
-# TWO WAYS TO INSTALL IT, both in the ZIP. NAMp-rations-install.exe puts the bundle
-# where hosts look and registers an uninstall entry; the NAMp-rations.vst3 folder
-# beside it is the same bundle for anyone who would rather copy it themselves —
-# which is not a stylistic preference, it is the fallback for a machine whose
-# SmartScreen or antivirus refuses an unsigned installer. See
-# installer/namp-rations.nsi.
+# WHAT IT STAGES, into <stagedir>/plugin/:
 #
-# NO WINDOWS MACHINE IS INVOLVED. The compiler is MinGW-w64 running here; the
-# verification runs the cross-built binaries under Wine, which is enough to
-# prove the bundle loads, passes the SDK validator and draws its editor pages
-# the same way the Linux build does. It is NOT a substitute for a test on real
-# Windows, which is the actual gate before a release goes out.
+#   NAMp-rations.vst3   the amp as a plug-in, for a DAW. A folder, not a file.
+#
+# NO WINDOWS MACHINE IS INVOLVED. The compiler is MinGW-w64 running here; the verification runs
+# the cross-built binaries under Wine, which is enough to prove the bundle loads, passes the SDK
+# validator and draws its editor pages the same way the Linux build does. It is NOT a substitute
+# for a test on real Windows, which is the actual gate before a release goes out.
 #
 # Environment:
-#   WINEPREFIX          defaults to ~/.wine-rations — a prefix of its own,
-#                       because a desktop's ~/.wine is usually managed by
-#                       something else (here, by vstbridge).
-#   RATIONS_SKIP_WINE   set to 1 to package without the Wine verification. The
-#                       ZIP is then unverified AND has no moduleinfo.json; the
-#                       script says so loudly rather than quietly producing a
-#                       lesser build.
-#   RATIONS_NSIS_DIR    the NSIS prefix, defaulting to ~/third_party/nsis (bin/
-#                       and share/nsis/). A makensis on PATH is used if absent.
-#   RATIONS_SKIP_INSTALLER
-#                       set to 1 to package the bundle without
-#                       NAMp-rations-install.exe.
+#   WINEPREFIX          defaults to ~/.wine-rations — a prefix of its own, because a desktop's
+#                       ~/.wine is usually managed by something else (here, by vstbridge).
+#   NAMP_SKIP_WINE      set to 1 to stage without the Wine verification. The bundle is then
+#                       unverified AND has no moduleinfo.json; the script says so loudly rather
+#                       than quietly producing a lesser build.
+#   NAMP_BUILD_DIR      the NATIVE Linux build directory, whose panelrender produces the
+#                       reference render the Windows one is compared against. Defaults to build/.
 set -euo pipefail
 
 # PRODUCT is this product's own directory; REPO is the REPOSITORY root, and they have been
 # different places since the two products moved under products/. This script needs both: the build
-# directory, the CMake source root and the top-level LICENCE are the repository's, while the
-# resources, packaging, installer, NOTICE and README are this product's. Naming the product
+# directory, the CMake source root and the shared packaging machinery are the repository's, while
+# the resources and the lists file that carries the version are this product's. Naming the product
 # directory "REPO" is what hid three separate breakages here, so it is named for what it is.
 PRODUCT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$PRODUCT/../.." && pwd)"
-BUILD="$REPO/build-win"
-TRIPLE="${RATIONS_WIN_TRIPLE:-x86_64-w64-mingw32}"
+BUILD="${NAMP_WIN_BUILD_DIR:-$REPO/build-win}"
+TRIPLE="${NAMP_WIN_TRIPLE:-${RATIONS_WIN_TRIPLE:-x86_64-w64-mingw32}}"
 OBJDUMP="$TRIPLE-objdump"
 STRIP="$TRIPLE-strip"
 
 . "$REPO/scripts/dist-common.sh"
+
+STAGE="${1:-}"
+[ -n "$STAGE" ] && [ -d "$STAGE" ] ||
+  namp_dist_die "usage: stage-windows.sh <stagedir>   (an existing directory to stage into)
+This script stages; it packages nothing. Run scripts/makedist-windows.sh to build a release."
 
 command -v "$TRIPLE-g++" >/dev/null || {
   echo "error: $TRIPLE-g++ not found. Install the MinGW-w64 cross toolchain:" >&2
@@ -60,47 +58,18 @@ if [ ! -d "$SYSROOT_DIR/lib/pkgconfig" ]; then
   exit 1
 fi
 
-# makensis is a NATIVE Linux binary: it links one of NSIS's prebuilt PE stubs
-# and appends the compressed payload, so NAMp-rations-install.exe is produced without
-# Wine and without the cross compiler. Prefer an unpacked prefix (bin/ +
-# share/nsis/, which is what `apt-get download nsis nsis-common` + `dpkg-deb -x`
-# gives without root); fall back to a system install.
-MAKENSIS=""
-NSIS_PREFIX="${RATIONS_NSIS_DIR:-$HOME/third_party/nsis}"
-if [ -x "$NSIS_PREFIX/bin/makensis" ] && [ -d "$NSIS_PREFIX/share/nsis" ]; then
-  MAKENSIS="$NSIS_PREFIX/bin/makensis"
-  export NSISDIR="$NSIS_PREFIX/share/nsis"
-elif command -v makensis >/dev/null; then
-  MAKENSIS="makensis"
-fi
-if [ "${RATIONS_SKIP_INSTALLER:-0}" != "1" ] && [ -z "$MAKENSIS" ]; then
-  echo "error: makensis not found, so NAMp-rations-install.exe cannot be built." >&2
-  echo "  sudo apt install nsis" >&2
-  echo "or unpack it without root into \$RATIONS_NSIS_DIR (default" >&2
-  echo "$NSIS_PREFIX) as bin/makensis and share/nsis/:" >&2
-  echo "  apt-get download nsis nsis-common && dpkg-deb -x <each>.deb root/" >&2
-  echo "Set RATIONS_SKIP_INSTALLER=1 to package the bundle without an installer." >&2
-  exit 1
-fi
-
 cmake -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/toolchain-mingw-w64.cmake" -S "$REPO"
 cmake --build "$BUILD" --parallel "$(nproc)"
 
-# The project() version, which is the first VERSION line in the top-level lists
-# file. Read rather than duplicated, so a release cannot be tagged one thing and
-# packaged as another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
-  "$PRODUCT/CMakeLists.txt" | head -1)"
-if [ -z "$VERSION" ]; then
-  echo "could not read the project version from CMakeLists.txt" >&2
-  exit 1
-fi
+VERSION="$(namp_dist_version "$PRODUCT/CMakeLists.txt")"
 
-STAGEDIR="$(mktemp -d)"
-PKGDIR="$STAGEDIR/NAMp-rations-${VERSION}"
+PKGDIR="$STAGE/plugin"
 mkdir -p "$PKGDIR"
-trap 'rm -rf "$STAGEDIR"' EXIT
+
+# Working space OUTSIDE the staged tree, so nothing here can end up in the release by accident.
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH"' EXIT
 
 # --- the plug-in ------------------------------------------------------------
 BUNDLE="$BUILD/VST3/Release/NAMp-rations.vst3"
@@ -237,15 +206,15 @@ if [ "$EXPORTS" != "$EXPECTED" ]; then
 fi
 
 # --- verification under Wine ------------------------------------------------
-if [ "${RATIONS_SKIP_WINE:-0}" = "1" ]; then
+if [ "${NAMP_SKIP_WINE:-${RATIONS_SKIP_WINE:-0}}" = "1" ]; then
   echo
-  echo "WARNING: RATIONS_SKIP_WINE=1 - the SDK validator was NOT run against" >&2
+  echo "WARNING: NAMP_SKIP_WINE=1 - the SDK validator was NOT run against" >&2
   echo "this bundle, the editor pages were NOT compared against the Linux" >&2
   echo "render, and no moduleinfo.json was generated. Do not release this." >&2
   echo
 else
   command -v wine >/dev/null || {
-    echo "error: wine not found. Install it, or set RATIONS_SKIP_WINE=1 to" >&2
+    echo "error: wine not found. Install it, or set NAMP_SKIP_WINE=1 to" >&2
     echo "package an unverified build." >&2
     exit 1
   }
@@ -323,15 +292,15 @@ else
   # Python standard library now, so there is nothing left to be missing and
   # nothing left to skip.
   echo "comparing the editor pages against the Linux render"
-  PANELS="$STAGEDIR/panels"
+  PANELS="$SCRATCH/panels"
   mkdir -p "$PANELS"
 
   # The Linux reference has to come from a Linux build of the same tree.
-  LINUX_PANELRENDER="${RATIONS_BUILD_DIR:-$REPO/build}/panelrender"
+  LINUX_PANELRENDER="${NAMP_BUILD_DIR:-${RATIONS_BUILD_DIR:-$REPO/build}}/panelrender"
   if [ ! -x "$LINUX_PANELRENDER" ]; then
     echo "no Linux panelrender at $LINUX_PANELRENDER - build the native tree first:" >&2
     echo "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
-    echo "or set RATIONS_BUILD_DIR to a native build directory." >&2
+    echo "or set NAMP_BUILD_DIR to a native build directory." >&2
     exit 1
   fi
 
@@ -352,190 +321,6 @@ else
     "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
 fi
 
-# --- licence, attribution and instructions ----------------------------------
-cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 
-cat > "$PKGDIR/INSTALL.txt" <<EOF
-NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head,
-VST3 for Windows
-
-This archive holds the plug-in, twice over - an installer, and the same bundle
-loose so you can install it by hand instead:
-
-    NAMp-rations-install.exe  the installer
-    NAMp-rations.vst3         a folder, not a file. Copy the WHOLE folder.
-
-Install, the easy way
----------------------
-Run NAMp-rations-install.exe.
-
-It is not code-signed, so Windows SmartScreen will show a blue "Windows
-protected your PC" box. Click "More info", then "Run anyway" - or install by
-hand instead, below; the two put exactly the same folder in exactly the same
-place.
-
-Run it as an administrator and it installs for everyone, in
-C:\\Program Files\\Common Files\\VST3. Run it normally and it installs just for
-you, in %LOCALAPPDATA%\\Programs\\Common\\VST3. Either way it tells you which,
-and you can change the folder. To remove it later, use "Apps & features" in
-Windows Settings, or the uninstaller it leaves in the folder it names at the
-end.
-
-Install, by hand
-----------------
-A VST3 plug-in is installed by copying its folder to where hosts look. There
-are two such places, and hosts search them in this order:
-
-  1. Just for you - no administrator rights needed:
-
-         %LOCALAPPDATA%\\Programs\\Common\\VST3\\
-
-     Paste that into the Explorer address bar. If the VST3 folder is not there,
-     create it.
-
-  2. For every user on the machine - needs administrator rights:
-
-         C:\\Program Files\\Common Files\\VST3\\
-
-Copy NAMp-rations.vst3 into one of them, then rescan plug-ins in your DAW.
-
-Do not rename anything inside the folder. The bundle carries its own art and
-fonts in NAMp-rations.vst3\\Contents\\Resources, and the binary in
-NAMp-rations.vst3\\Contents\\x86_64-win must keep the name
-NAMp-rations.vst3 or no host will load it.
-
-To uninstall a hand-installed copy, delete the NAMp-rations.vst3 folder.
-
-Whichever way you install, make sure you only have ONE copy. Hosts scan both
-folders, so a copy left in each shows up as two NAMp Rations entries in the
-plug-in list. The installer offers to remove the other one for you.
-
-Requirements
-------------
-64-bit Windows and a VST3 host. Nothing else: cairo, FreeType, libpng, zlib and
-the GCC runtime are all linked into the plug-in, so there is no redistributable
-to install and nothing to put beside the binary.
-
-There is no 32-bit build, and no standalone in this archive: the standalone is
-a JACK application, so it ships with the Linux release - which is a separate
-download, and the only place anything here is built for Linux.
-
-Captures
---------
-NAMp Rations ships NO captures - it plays yours, and it wants four sets
-of them.
-
-Click the "Captures, MIDI, Settings" button, top right, to open the settings
-page. The top section has one loader per channel: point each at a DIRECTORY of
-.nam files, or at a single .nam. That folder's name becomes the channel's name
-on the front panel, and you can type over it if you would rather call it
-something else.
-
-Each channel's dial then sweeps that whole bank continuously - no reload, no
-click, no dialog. One click of the mouse wheel on a channel dial is exactly one
-capture. Rest on one and you are playing that capture exactly; in between, you
-are hearing the two either side blended.
-
-Captures are ordered by the number in the filename (the LAST run of digits, so
-"GAIN 2" comes before "GAIN 10"), then anything ending in MAX, then anything
-with no number at all, alphabetically. So capture your amp at each mark of its
-own gain control and put that mark last in the name:
-
-    MyAmp - crunch - GAIN 1.nam
-    MyAmp - crunch - GAIN 2.nam
-    ...
-    MyAmp - crunch - GAIN MAX.nam
-
-and that channel's dial is that amp's gain control, at the amp's own spacing.
-
-A channel with nothing loaded is silent rather than broken; a fresh instance
-has four of them. Captures must be feed-forward (WaveNet or ConvNet); an LSTM
-capture is refused rather than silently accepted.
-
-The four channels
------------------
-Exactly one channel sounds at a time. Click its bat switch, or learn a MIDI
-footswitch to it on the settings page - the switch is instant and silent even
-mid-note, which is the whole reason this plug-in exists.
-
-The settings page also carries a trim per channel (for when a high-gain channel
-reads louder than a clean one at the same measured loudness), the MIDI learn
-rows, and the output section - Raw / Normalized / Calibrated, plus input
-calibration. Normalized is the default.
-
-MIDI learn: a learned CC or Program Change answers on ANY MIDI channel, because
-both arrive at a VST3 plug-in as parameter changes and the channel is already
-gone by then. Only a learned NOTE can be pinned to one MIDI channel.
-
-The rest of the panel
----------------------
-Shared Threshold / Bass / Middle / Treble, Input and Output, each reading its
-value under the dial. BYPASS, EQ and GATE switch out the whole chain, the tone
-stack and the noise gate. The icon left of the settings button is Slim, which trades model
-size for CPU - it appears only when your captures can actually use it.
-
-Two more pages, reached by the buttons at the bottom: a cabinet page that loads
-one or two impulse responses with a blend between them, and a pedalboard of
-five pedals - Boost and Chorus before the amp, Flanger, Delay and Reverb after
-it.
-
-The file picker is drawn inside the plug-in rather than being a Windows dialog,
-so it looks like the rest of the panel. ".." goes up; above a drive root it
-lists the drives, so captures on D: are reachable.
-
-Licence
--------
-MIT. See LICENSE, and NOTICE for third-party attribution - which matters more
-for this build than for the Linux one, because the Windows plug-in statically
-links cairo, pixman, FreeType, libpng and zlib and therefore redistributes
-them.
-EOF
-
-# --- the installer ----------------------------------------------------------
-# Built LAST, from the staged tree, so NAMp-rations-install.exe carries exactly
-# the bundle that is also loose in the ZIP - the same stripped binary and the same
-# moduleinfo.json. Building it from build-win instead would quietly ship an
-# unstripped, unverified copy the moment either step above changed.
-if [ "${RATIONS_SKIP_INSTALLER:-0}" = "1" ]; then
-  echo
-  echo "WARNING: RATIONS_SKIP_INSTALLER=1 - the ZIP has no NAMp-rations-install.exe." >&2
-  echo
-else
-  # VIProductVersion wants exactly four components; project() gives three.
-  VERSION4="$VERSION"
-  while [ "$(printf '%s' "$VERSION4" | tr -cd '.' | wc -c)" -lt 3 ]; do
-    VERSION4="$VERSION4.0"
-  done
-
-  echo "building NAMp-rations-install.exe with $MAKENSIS"
-  "$MAKENSIS" -V2 -NOCD \
-    "-DVERSION=$VERSION" "-DVERSION4=$VERSION4" \
-    "-DBUNDLE_DIR=$PKGBUNDLE" "-DDOC_DIR=$PKGDIR" \
-    "-DOUTFILE=$PKGDIR/NAMp-rations-install.exe" \
-    "$PRODUCT/installer/namp-rations.nsi"
-
-  if [ ! -s "$PKGDIR/NAMp-rations-install.exe" ]; then
-    echo "makensis produced no NAMp-rations-install.exe" >&2
-    exit 1
-  fi
-  # It must be a PE executable, not whatever else ended up at that path. file(1)
-  # is not guaranteed to be installed, so check the magic directly.
-  if [ "$(head -c2 "$PKGDIR/NAMp-rations-install.exe")" != "MZ" ]; then
-    echo "NAMp-rations-install.exe is not a PE executable" >&2
-    exit 1
-  fi
-fi
-
-mkdir -p "$PRODUCT/dist"
-ZIP="$PRODUCT/dist/NAMp-rations-${VERSION}-windows-x86_64.zip"
-rm -f "$ZIP"
-# python3 rather than zip(1): zip is not installed everywhere and this needs no
-# extra package. -c takes the directory and stores it with its own name at the
-# archive root, which is what an extract-anywhere release wants.
-( cd "$STAGEDIR" && python3 -m zipfile -c "$ZIP" "NAMp-rations-${VERSION}" )
-
-echo ""
-echo "Packaged: $ZIP"
-echo ""
-echo "Contents:"
-python3 -m zipfile -l "$ZIP"
+echo "staged the plug-in:"
+echo "  plugin/NAMp-rations.vst3"

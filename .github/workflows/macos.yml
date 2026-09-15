@@ -56,8 +56,8 @@ on:
       - '.gitignore'
       - 'products/rations/installer/**'
       - 'products/rations/standalone/**'
-      - 'products/rations/scripts/makedist-linux.sh'
-      - 'products/rations/scripts/makedist-windows.sh'
+      - 'products/rations/scripts/stage-linux.sh'
+      - 'products/rations/scripts/stage-windows.sh'
       - 'scripts/build-win-deps.sh'
       - 'products/rations/gui/**'
       - 'products/rack/**'
@@ -218,7 +218,7 @@ jobs:
 
       # moduleinfo.json is generated for us: SMTG_CREATE_MODULE_INFO defaults ON
       # and its POST_BUILD step runs a natively-built moduleinfotool, which is why
-      # this needs none of the explicit generation makedist-windows.sh does under
+      # this needs none of the explicit generation stage-windows.sh does under
       # Wine. Asserted rather than assumed, because a silent failure there would
       # leave the bundle valid and the file missing.
       - name: moduleinfo.json
@@ -241,7 +241,7 @@ jobs:
           echo "$OUT" | grep -qE '^Result: [0-9]+ tests passed, 0 tests failed' \
             || { echo "the SDK validator did not pass" >&2; exit 1; }
 
-      # The mirror of makedist-windows.sh's objdump export gate. A VST3 bundle
+      # The mirror of stage-windows.sh's objdump export gate. A VST3 bundle
       # offers exactly three entry points; anything else in the dynamic table is a
       # symbol two SDK versions in one host could interpose on each other.
       #
