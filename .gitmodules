@@ -10,3 +10,6 @@
 [submodule "eigen"]
 	path = eigen
 	url = https://gitlab.com/libeigen/eigen.git
+[submodule "rations-pedals"]
+	path = rations-pedals
+	url = https://github.com/rations/rations-pedals.git

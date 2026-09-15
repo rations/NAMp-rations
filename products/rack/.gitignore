@@ -1,0 +1,26 @@
+# Rules local to this product. Everything general -- build directories, CMake
+# output, the ASIO SDK's filenames, captures, the guidance documents -- is at the
+# repository root and applies here already.
+
+# Rack presets and scan caches written while testing. Derived state that names
+# absolute paths on whichever machine produced it.
+*.rack
+scancache
+pluginindex
+
+# tools/local/ — rigs that drive the RUNNING product rather than its sources: the XTest window
+# driver, the channel stomper, the state seeder and the geometry probe. See tools/local/README.md
+# for what each one measures.
+#
+# Untracked as a category, not for being unfinished. Each needs something a phase gate may never
+# depend on — a live X server, libXtst, a running JACK server, a built bundle, a directory of
+# captures — and a gate that needs a window server is a gate that cannot run. The tracked gate on
+# the same code is tools/panelrender.cpp, which renders every page offline and audits the art.
+#
+# Anchored here rather than at the root, so it means THIS product's tools directory and not any
+# other's.
+tools/local/
+
+# Renders written by panelrender and rackrender when either is run from this directory. See the
+# note on the same rule at the repository root.
+/*.png

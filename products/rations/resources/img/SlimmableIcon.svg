@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="64" viewBox="0 0 128 64" fill="none">
+  <title>Slim: model size</title>
+  <desc>Slider-ring icon for the slimmable-model overlay. Derived from the sibling
+        single-capture plug-in's SlimmableIcon.svg, recoloured to this panel's palette:
+        the gold is kGold (0xB88B4C), the piping colour sampled from the faceplate art
+        that edges the level meters, and the unfilled track is kTextColor
+        (0xFFFFFF) - the gear beside it is white, and at this size kDimColor was a stub
+        nobody could see.</desc>
+  <g shape-rendering="geometricPrecision">
+    <!-- Left track: the filled part of the travel -->
+    <line x1="24" y1="32" x2="68" y2="32" stroke="#B88B4C" stroke-width="8" stroke-linecap="round"/>
+    <!-- Right track: what is left of it -->
+    <line x1="92" y1="32" x2="104" y2="32" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+    <!-- Knob ring, nudged slightly right -->
+    <circle cx="80" cy="32" r="11" stroke="#B88B4C" stroke-width="8" fill="none"/>
+  </g>
+</svg>

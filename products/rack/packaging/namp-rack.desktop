@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=NAMp Rack
+GenericName=Guitar Amplifier and Plug-in Host
+Comment=Four-channel Neural Amp Modeler amp head with a VST3/LV2 plug-in rack (JACK)
+Exec=namp-rack
+Icon=namp-rack
+Terminal=false
+Categories=AudioVideo;Audio;X-Digital_Processing;
+Keywords=guitar;amp;amplifier;NAM;neural;JACK;VST3;LV2;host;rack;
+StartupNotify=false
+StartupWMClass=namp-rack

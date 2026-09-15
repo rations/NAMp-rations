@@ -3,8 +3,8 @@
 #
 # usage: panel-diff.sh <dirA> <prefixA> <dirB> <prefixB> [labelA labelB]
 #
-# Each directory holds <prefix>-head.png, -cabinet.png, -pedalboard.png and
-# -settings.png, which is exactly what tools/panelrender writes.
+# Each directory holds <prefix>-<page>.png for every page in $PANEL_PAGES, which is exactly what
+# a product's tools/panelrender writes.
 #
 # WHAT THIS IS FOR. It is the only automated check of a NON-LINUX editor's
 # appearance, and the reason scripts/build-win-deps.sh and scripts/build-mac-deps.sh
@@ -15,7 +15,9 @@
 #
 # It has two callers with two different questions:
 #
-#   makedist-windows.sh  Linux against the MinGW cross build, under Wine.
+#   products/*/scripts/stage-windows.sh
+#                        Linux against the MinGW cross build, under Wine. Both
+#                        products ask this one.
 #   .github/workflows/macos.yml  the arm64 slice against the x86_64 one. That
 #                        pair asks a question the Windows one cannot: whether the
 #                        two ISAs round the dial trigonometry the same way. It
@@ -26,6 +28,13 @@
 # they arrive as $PANEL_MAX_PIXELS and $PANEL_MAX_DELTA rather than being fixed
 # here, because a figure measured for one pair of platforms says nothing about
 # another. Each caller records what it measured beside the number it set.
+#
+# SO IS THE PAGE LIST, for the same reason and a sharper one: the two products do
+# not have the same pages. Rations has four, each with its own window size; the
+# rack has two, Head and Setup, because the pedalboard page is what the rack
+# replaced. $PANEL_PAGES is required rather than defaulted -- a default would be
+# one product's list silently applied to the other, and the failure mode of a
+# page list that is too short is a comparison that PASSES without looking.
 #
 # MAX_DELTA IS THE SHARPER OF THE TWO GATES and the one to trust. A rounding
 # difference is 1/255 by definition; a real rasterisation change puts down ink
@@ -43,8 +52,9 @@ LABEL_A="${5:-$PRE_A}"; LABEL_B="${6:-$PRE_B}"
 
 : "${PANEL_MAX_PIXELS:?set PANEL_MAX_PIXELS (per page) before calling}"
 : "${PANEL_MAX_DELTA:?set PANEL_MAX_DELTA (per channel) before calling}"
+: "${PANEL_PAGES:?set PANEL_PAGES (space-separated page names) before calling}"
 
-for _p in head cabinet pedalboard settings; do
+for _p in $PANEL_PAGES; do
   for _stem in "$DIR_A/$PRE_A" "$DIR_B/$PRE_B"; do
     if [ ! -f "$_stem-$_p.png" ]; then
       echo "missing render: $_stem-$_p.png" >&2
@@ -54,7 +64,8 @@ for _p in head cabinet pedalboard settings; do
 done
 
 STEM_A="$DIR_A/$PRE_A" STEM_B="$DIR_B/$PRE_B" LABEL_A="$LABEL_A" LABEL_B="$LABEL_B" \
-PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" python3 - <<'PYEOF'
+PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
+PANEL_PAGES="$PANEL_PAGES" python3 - <<'PYEOF'
 import os, sys, zlib, struct
 
 stem_a     = os.environ["STEM_A"]
@@ -63,6 +74,7 @@ max_pixels = int(os.environ["PANEL_MAX_PIXELS"])
 max_delta  = int(os.environ["PANEL_MAX_DELTA"])
 label_a    = os.environ["LABEL_A"]
 label_b    = os.environ["LABEL_B"]
+pages      = os.environ["PANEL_PAGES"].split()
 
 
 def decode_png_rgb(path):
@@ -135,7 +147,7 @@ def decode_png_rgb(path):
 
 
 fail, tot_d, tot_p = [], 0, 0
-for page in ("head", "cabinet", "pedalboard", "settings"):
+for page in pages:
     try:
         a = decode_png_rgb(f"{stem_a}-{page}.png")
         b = decode_png_rgb(f"{stem_b}-{page}.png")

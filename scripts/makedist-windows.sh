@@ -1,366 +1,310 @@
 #!/usr/bin/env bash
-# Cross-build NAMp Rations for 64-bit Windows and package the release ZIP into dist/.
+# Build the NAMp release for 64-bit Windows: ONE package, with ONE installer that installs
+# everything this project ships.
 #
-# ONE PRODUCT ON WINDOWS. This archive is the VST3 bundle and nothing else. The
-# standalone is a JACK application and therefore a Linux product - it ships with
-# that release (scripts/makedist-linux.sh) - and there is no rack and no plug-in
-# host on either platform, so there is no second binary to package here.
+# ONE DOWNLOAD, THREE THINGS IN IT, AND ONE NAMp-install.exe THAT INSTALLS THEM ALL.
 #
-# TWO WAYS TO INSTALL IT, both in the ZIP. NAMp-rations-install.exe puts the bundle
-# where hosts look and registers an uninstall entry; the NAMp-rations.vst3 folder
-# beside it is the same bundle for anyone who would rather copy it themselves —
-# which is not a stylistic preference, it is the fallback for a machine whose
-# SmartScreen or antivirus refuses an unsigned installer. See
-# installer/namp-rations.nsi.
+#   plugin/NAMp-rations.vst3   the amp as a plug-in for a DAW
+#   rack/namp-rack.exe         the same amp standalone, with a rack for other people's plug-ins
+#   pedals/Rations*.vst3       the five pedals, as ordinary plug-ins any host will find
 #
-# NO WINDOWS MACHINE IS INVOLVED. The compiler is MinGW-w64 running here; the
-# verification runs the cross-built binaries under Wine, which is enough to
-# prove the bundle loads, passes the SDK validator and draws its editor pages
-# the same way the Linux build does. It is NOT a substitute for a test on real
-# Windows, which is the actual gate before a release goes out.
+# The installer offers the three as components, so a user who wants only the plug-in gets only the
+# plug-in. What they cannot do is end up with halves from different releases: one download, one
+# version, and the version is cross-checked below before anything is built.
+#
+# THE BUNDLES ARE ALSO LOOSE IN THE ZIP, and that is not a stylistic preference -- it is the
+# fallback for a machine whose SmartScreen or antivirus refuses an unsigned installer. Copying a
+# .vst3 folder into the VST3 directory is the whole of a manual install.
+#
+# HOW IT IS ASSEMBLED. Each product builds and gates itself in its own scripts/stage-windows.sh,
+# into its own subdirectory of one staging tree. Those assertions are artefact-specific -- imports,
+# exports, bundle shape, the ASIO markers, the panel diff -- and stay beside the product that owns
+# them. What lives HERE is what is genuinely shared: the version, the GPLv3 obligations, the
+# licence files, the installer and the ZIP.
+#
+# THIS ARCHIVE CONTAINS ONE GPLv3 BINARY AND EVERYTHING ELSE IS MIT.
+#
+# namp-rack.exe is built with the ASIO SDK compiled in. That SDK is dual-licensed -- proprietary
+# Steinberg agreement, or GPLv3 -- and this project takes the GPLv3 arm, so that one binary is
+# conveyed under GPLv3. The plug-in, the LV2 bundle, the pedals and everything on Linux contain no
+# ASIO code and stay MIT. Every SOURCE file stays MIT and nothing was relicensed: MIT combines into
+# a GPLv3 work, so no contributor had to be asked.
+#
+# PUTTING THEM IN ONE PACKAGE DOES NOT CHANGE THAT. GPLv3 section 5's last paragraph is explicit:
+# separate and independent works, which are not by their nature extensions of the covered work and
+# are not combined with it into a larger program, are an AGGREGATE when they share a distribution
+# medium, and "inclusion of a covered work in an aggregate does not cause this License to apply to
+# the other parts". The plug-in and the pedals are separate binaries that a DAW loads without the
+# standalone existing; they are not linked into it and do not extend it. So they stay MIT here
+# exactly as they are on Linux, and the documents in the archive say which is which rather than
+# leaving a user to work it out.
+#
+# WHAT GPLv3 ASKS FOR IS GATED, NOT PROMISED. Section 4 wants the licence text to travel with the
+# binary and section 6 wants the Corresponding Source available to whoever received it. Both are
+# assembled and asserted below. An archive that ships the binary without them is a breach on the
+# release itself, which is why it is a gate and why -NOSOURCE is in the FILENAME -- where it
+# cannot be lost by someone uploading the wrong file a month later.
+#
+# NO WINDOWS MACHINE IS INVOLVED. The compiler is MinGW-w64 running here and the verification runs
+# the cross-built binaries under Wine, which proves they load, pass the SDK validator and draw
+# their editor pages the way the Linux build does. It is NOT a substitute for a test on real
+# Windows, which is the actual gate before a release goes out -- and the installer in particular is
+# covered by no validator and no test in this tree: install it, run what it installed, and
+# uninstall it.
 #
 # Environment:
-#   WINEPREFIX          defaults to ~/.wine-rations — a prefix of its own,
-#                       because a desktop's ~/.wine is usually managed by
-#                       something else (here, by vstbridge).
-#   RATIONS_SKIP_WINE   set to 1 to package without the Wine verification. The
-#                       ZIP is then unverified AND has no moduleinfo.json; the
-#                       script says so loudly rather than quietly producing a
-#                       lesser build.
-#   RATIONS_NSIS_DIR    the NSIS prefix, defaulting to ~/third_party/nsis (bin/
-#                       and share/nsis/). A makensis on PATH is used if absent.
-#   RATIONS_SKIP_INSTALLER
-#                       set to 1 to package the bundle without
-#                       NAMp-rations-install.exe.
+#   NAMP_SKIP_ASIO=1      configure the standalone WASAPI-only. The whole archive is then MIT and
+#                         the GPLv3 paperwork is dropped to match.
+#   NAMP_SKIP_CORRESPONDING_SOURCE=1
+#                         do not assemble the Corresponding Source tarball. For iterating locally.
+#                         The archive is then named -NOSOURCE and MUST NOT be published. It changes
+#                         the NAME and one text file; every check runs and the binaries are
+#                         identical.
+#   NAMP_SKIP_WINE=1      package without the Wine verification. Says so loudly.
+#   NAMP_SKIP_INSTALLER=1 package the bundles without NAMp-install.exe.
+#   NAMP_NSIS_DIR         the NSIS prefix, defaulting to ~/third_party/nsis (bin/ and share/nsis/).
+#                         A makensis on PATH is used if absent.
+#   NAMP_BUILD_DIR        the NATIVE Linux build directory, whose panelrender produces the
+#                         reference render the Windows one is compared against.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD="$REPO/build-win"
-TRIPLE="${RATIONS_WIN_TRIPLE:-x86_64-w64-mingw32}"
-OBJDUMP="$TRIPLE-objdump"
-STRIP="$TRIPLE-strip"
 
-command -v "$TRIPLE-g++" >/dev/null || {
-  echo "error: $TRIPLE-g++ not found. Install the MinGW-w64 cross toolchain:" >&2
-  echo "  sudo apt install g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64" >&2
-  exit 1
-}
-if [ ! -d "${RATIONS_WIN_SYSROOT:-$HOME/third_party/win-deps/sysroot}/lib/pkgconfig" ]; then
-  echo "error: the Windows dependency sysroot is missing. Build it first:" >&2
-  echo "  scripts/build-win-deps.sh" >&2
-  exit 1
-fi
+# shellcheck source=dist-common.sh
+. "$REPO/scripts/dist-common.sh"
 
-# makensis is a NATIVE Linux binary: it links one of NSIS's prebuilt PE stubs
-# and appends the compressed payload, so NAMp-rations-install.exe is produced without
-# Wine and without the cross compiler. Prefer an unpacked prefix (bin/ +
-# share/nsis/, which is what `apt-get download nsis nsis-common` + `dpkg-deb -x`
-# gives without root); fall back to a system install.
+VERSION="$(namp_dist_release_version "$REPO")"
+
+# makensis is a NATIVE Linux binary: it links one of NSIS's prebuilt PE stubs and appends the
+# compressed payload, so NAMp-install.exe is produced without Wine and without the cross compiler.
+# Prefer an unpacked prefix (bin/ + share/nsis/, which is what `apt-get download nsis nsis-common`
+# + `dpkg-deb -x` gives without root); fall back to a system install.
+#
+# FOUND BEFORE ANYTHING IS BUILT. It used to be looked for at the end, after two cross builds and
+# two Wine verifications, which is twenty minutes of work to discover a missing package.
 MAKENSIS=""
-NSIS_PREFIX="${RATIONS_NSIS_DIR:-$HOME/third_party/nsis}"
+NSIS_PREFIX="${NAMP_NSIS_DIR:-${RATIONS_NSIS_DIR:-$HOME/third_party/nsis}}"
 if [ -x "$NSIS_PREFIX/bin/makensis" ] && [ -d "$NSIS_PREFIX/share/nsis" ]; then
   MAKENSIS="$NSIS_PREFIX/bin/makensis"
   export NSISDIR="$NSIS_PREFIX/share/nsis"
 elif command -v makensis >/dev/null; then
   MAKENSIS="makensis"
 fi
-if [ "${RATIONS_SKIP_INSTALLER:-0}" != "1" ] && [ -z "$MAKENSIS" ]; then
-  echo "error: makensis not found, so NAMp-rations-install.exe cannot be built." >&2
+if [ "${NAMP_SKIP_INSTALLER:-0}" != "1" ] && [ -z "$MAKENSIS" ]; then
+  echo "error: makensis not found, so NAMp-install.exe cannot be built." >&2
   echo "  sudo apt install nsis" >&2
-  echo "or unpack it without root into \$RATIONS_NSIS_DIR (default" >&2
+  echo "or unpack it without root into \$NAMP_NSIS_DIR (default" >&2
   echo "$NSIS_PREFIX) as bin/makensis and share/nsis/:" >&2
   echo "  apt-get download nsis nsis-common && dpkg-deb -x <each>.deb root/" >&2
-  echo "Set RATIONS_SKIP_INSTALLER=1 to package the bundle without an installer." >&2
-  exit 1
-fi
-
-cmake -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_TOOLCHAIN_FILE="$REPO/cmake/toolchain-mingw-w64.cmake" -S "$REPO"
-cmake --build "$BUILD" --parallel "$(nproc)"
-
-# The project() version, which is the first VERSION line in the top-level lists
-# file. Read rather than duplicated, so a release cannot be tagged one thing and
-# packaged as another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
-  "$REPO/CMakeLists.txt" | head -1)"
-if [ -z "$VERSION" ]; then
-  echo "could not read the project version from CMakeLists.txt" >&2
+  echo "Set NAMP_SKIP_INSTALLER=1 to package the bundles without an installer." >&2
   exit 1
 fi
 
 STAGEDIR="$(mktemp -d)"
-PKGDIR="$STAGEDIR/NAMp-rations-${VERSION}"
+PKGDIR="$STAGEDIR/pkg"
 mkdir -p "$PKGDIR"
 trap 'rm -rf "$STAGEDIR"' EXIT
 
-# --- the plug-in ------------------------------------------------------------
-BUNDLE="$BUILD/VST3/Release/NAMp-rations.vst3"
-if [ ! -d "$BUNDLE" ]; then
-  echo "VST3 bundle not found at $BUNDLE" >&2
-  exit 1
-fi
-cp -r "$BUNDLE" "$PKGDIR/"
-PKGBUNDLE="$PKGDIR/NAMp-rations.vst3"
+# WHAT THE STAGE SCRIPTS REPORT BACK. They are separate processes, so a shell variable set in one
+# cannot be read here; these files are how facts cross that boundary. Outside PKGDIR, so neither
+# is packaged.
+export NAMP_DIST_FACTS_FILE="$STAGEDIR/facts"
+export NAMP_DIST_ABI_OVER_FILE="$STAGEDIR/abi-overshoot"
+: > "$NAMP_DIST_FACTS_FILE"
+: > "$NAMP_DIST_ABI_OVER_FILE"
 
-# ONE ARCHITECTURE FOLDER, AND IT IS THE WINDOWS ONE.
+echo "== NAMp $VERSION, Windows x86_64 =="
+echo
+echo "-- NAMp Rations (the plug-in) --"
+"$REPO/products/rations/scripts/stage-windows.sh" "$PKGDIR"
+echo
+echo "-- NAMp Rack (the standalone) and the pedals --"
+"$REPO/products/rack/scripts/stage-windows.sh" "$PKGDIR"
+echo
+
+# EVERY PART ARRIVED. The two stage scripts each assert their own artefacts in detail; what
+# neither can assert is that the OTHER one ran. An archive missing a whole product is the one
+# failure mode created by splitting the work in two, so it is checked where the two meet.
+namp_dist_require_dirs "$PKGDIR" "the release package" \
+  plugin/NAMp-rations.vst3 \
+  pedals
+namp_dist_require_files "$PKGDIR" "the release package" \
+  plugin/NAMp-rations.vst3/Contents/x86_64-win/NAMp-rations.vst3 \
+  rack/namp-rack.exe \
+  pedals/NOTICE
+
+# WHETHER THIS ARCHIVE CONTAINS GPLv3 CODE is read from what the rack's build actually configured,
+# reported through the facts file, rather than recomputed from NAMP_SKIP_ASIO here. The two would
+# agree today; they would stop agreeing the moment a configure demoted itself, and the question
+# "is this binary GPLv3?" is not one to answer from an intention.
+WANT_ASIO="$(sed -n 's/^asio=//p' "$NAMP_DIST_FACTS_FILE" | head -1)"
+[ -n "$WANT_ASIO" ] ||
+  namp_dist_die "the rack's stage script reported no ASIO state, so this script cannot tell
+whether the archive it is about to build contains GPLv3 code."
+
+# --- the GPLv3 obligations ---------------------------------------------------
+# WHAT THIS SECTION IS FOR. With ASIO compiled in, namp-rack.exe is a combined work containing
+# GPLv3 code and is conveyed under GPLv3. Two of that licence's requirements are mechanical, so
+# they are machine-checked here rather than remembered:
 #
-# A VST3 bundle holds Contents/<arch>/ per platform, so a build tree that was
-# once configured natively and later re-configured with the MinGW toolchain
-# keeps its Contents/x86_64-linux directory: CMake writes the new binary beside
-# the old one instead of replacing it, and `cp -r` then carries a Linux .so into
-# the Windows ZIP. It loads nowhere and is pure weight. Prune anything that is
-# not x86_64-win from the staged copy and say why, loudly enough that a stale
-# build-win gets cleaned rather than tolerated.
-for _arch in "$PKGBUNDLE/Contents"/*/; do
-  _arch="${_arch%/}"
-  _name="$(basename "$_arch")"
-  case "$_name" in
-    Resources | x86_64-win) ;;
-    *)
-      echo "warning: removing $_name/ from the packaged bundle - it is not a" >&2
-      echo "  Windows architecture folder and belongs to no Windows release." >&2
-      echo "  '$BUILD' was configured for another platform at some point; run" >&2
-      echo "  'rm -rf $BUILD' and re-run this script to stop seeing this." >&2
-      rm -rf "$_arch"
-      ;;
-  esac
-done
-
-# The art and fonts in Contents/Resources are copied as they are: they are
-# looked up at run time, not embedded, which is what lets a user replace them
-# without a rebuild.
-DLL="$PKGBUNDLE/Contents/x86_64-win/NAMp-rations.vst3"
-
-# SHAPE. Module::validateBundleStructure in the SDK's module_win32.cpp requires
-# the inner DLL to be named exactly like the bundle folder — NAMp-rations.vst3 inside
-# NAMp-rations.vst3/Contents/<arch>/. A DLL called NAMp-rations.dll in the right folder
-# does not load, and nothing before this point would have said so: the CMake
-# bundle machinery places the binary with a foreach over
-# CMAKE_CONFIGURATION_TYPES, which is EMPTY under every single-config generator,
-# so getting this wrong produces a complete-looking bundle with the binary
-# somewhere else entirely.
-if [ ! -f "$DLL" ]; then
-  echo "no NAMp-rations.vst3 binary inside $PKGBUNDLE/Contents/x86_64-win/" >&2
-  echo "The bundle layout is wrong; see the LIBRARY_OUTPUT_DIRECTORY block in" >&2
-  echo "CMakeLists.txt. No host can load this." >&2
-  find "$PKGBUNDLE" -type f >&2
-  exit 1
-fi
-
-# RESOURCES. This project embeds NO fallback art: src/gfx/resourcestore.h states
-# that its built-in table is always empty here by design, and NAMp's
-# installBuiltinResources() is deliberately absent from the header. So a bundle
-# that reaches a user without Contents/Resources draws flat rectangles and says
-# so only on stderr, which nobody reads. This assertion is the entire safety net.
-# The SVG in the list is File.svg, which the IR and capture loader rows draw; it
-# was Gear.svg until the settings control became a labelled button and stopped
-# drawing the gear at all.
-for _res in Contents/Resources/img/head.png \
-            Contents/Resources/img/pedal-boost.png \
-            Contents/Resources/img/File.svg \
-            Contents/Resources/fonts/Michroma-Regular.ttf \
-            Contents/Resources/fonts/Roboto-Regular.ttf; do
-  if [ ! -f "$PKGBUNDLE/$_res" ]; then
-    echo "the bundle is missing $_res; the editor would draw flat rectangles." >&2
-    exit 1
-  fi
-done
-
-"$STRIP" --strip-unneeded "$DLL"
-
-# IMPORTS. Nothing but Windows' own DLLs may appear here.
+#   section 4  "give all recipients a copy of this License along with the Program"
+#              -> COPYING.GPL-3 goes in the archive.
+#   section 6  the Complete Corresponding Source must be available to whoever got the binary
+#              -> scripts/corresponding-source.sh assembles it, and CORRESPONDING-SOURCE.txt --
+#                 the "clear directions" 6(d) asks for -- goes in the archive beside the .exe.
 #
-# The MinGW toolchain's default is to link libgcc_s_seh-1.dll, libstdc++-6.dll
-# and libwinpthread-1.dll, and a VST3 bundle CANNOT ship those beside the
-# binary: the SDK loads a plug-in with a plain LoadLibraryW of the full path
-# (module_win32.cpp, loadAsPackage) and the default DLL search order does not
-# include the loaded module's own directory. The -static in
-# cmake/toolchain-mingw-w64.cmake is what prevents it, it is one edit away from
-# being lost, and losing it fails on the user's machine — as a plug-in that
-# simply never appears — rather than here.
-ALLOWED_DLLS='^(KERNEL32|USER32|GDI32|MSIMG32|SHELL32|ADVAPI32|ole32|OLEAUT32|COMDLG32|WINSPOOL|SHLWAPI|msvcrt|api-ms-win-)'
-BAD_IMPORTS="$("$OBJDUMP" -p "$DLL" | sed -n 's/^\tDLL Name: //p' \
-  | sed 's/\.dll$//I' | grep -Ev "$ALLOWED_DLLS" || true)"
-if [ -n "$BAD_IMPORTS" ]; then
-  echo "the VST3 bundle imports non-system DLLs:" >&2
-  echo "$BAD_IMPORTS" >&2
-  echo "A VST3 bundle cannot ship sibling DLLs - the host LoadLibraryW's the" >&2
-  echo "plug-in by full path and its own directory is not searched. Check that" >&2
-  echo "-static survived in cmake/toolchain-mingw-w64.cmake." >&2
-  exit 1
-fi
-
-# EXPORTS. Exactly three, no more.
-#
-# The three are what a VST3 host calls. "No more" is the part worth checking:
-# a static archive built with __declspec(dllexport) still in effect carries
-# .drectve export directives that the linker obeys, so linking one silently
-# re-exports somebody else's entire API from our plug-in. FreeType's meson build
-# does exactly that on Windows — it defines DLL_EXPORT without testing
-# default_library — and the parent project's bundle shipped 151 FreeType symbols
-# until scripts/build-win-deps.sh started removing it.
-# -Wl,--exclude-all-symbols does NOT catch this, because a .drectve export is
-# explicit rather than automatic.
-EXPORTS="$("$OBJDUMP" -p "$DLL" \
-  | sed -n '/\[Ordinal\/Name Pointer\] Table/,$p' \
-  | sed -n 's/^\t\[ *[0-9]* *\] +base\[ *[0-9]* *\] *[0-9a-f]* \(.*\)$/\1/p' \
-  | sort)"
-EXPECTED="$(printf 'ExitDll\nGetPluginFactory\nInitDll\n')"
-if [ "$EXPORTS" != "$EXPECTED" ]; then
-  echo "the VST3 bundle does not export exactly the three entry points." >&2
-  echo "expected:" >&2; echo "$EXPECTED" | sed 's/^/  /' >&2
-  echo "found ($(echo "$EXPORTS" | grep -c .)):" >&2
-  echo "$EXPORTS" | head -20 | sed 's/^/  /' >&2
-  [ "$(echo "$EXPORTS" | grep -c .)" -gt 20 ] && echo "  ..." >&2
-  exit 1
-fi
-
-# --- verification under Wine ------------------------------------------------
-if [ "${RATIONS_SKIP_WINE:-0}" = "1" ]; then
-  echo
-  echo "WARNING: RATIONS_SKIP_WINE=1 - the SDK validator was NOT run against" >&2
-  echo "this bundle, the editor pages were NOT compared against the Linux" >&2
-  echo "render, and no moduleinfo.json was generated. Do not release this." >&2
-  echo
+# THE MARK IS MEASURED NOW, NOT DECLARED. An earlier version of this named the archive -TESTBUILD
+# unless it was TOLD the Steinberg agreement had been signed, because nothing here could check
+# that. Under GPLv3 there is nothing to declare and the one thing that matters is something this
+# script can actually verify: whether the Corresponding Source for this exact binary exists. So the
+# mark tracks a fact. An archive named -NOSOURCE is one whose source was not assembled, and
+# publishing it would be the breach.
+CS_DIRECTIONS="$PKGDIR/CORRESPONDING-SOURCE.txt"
+CS_TARBALL="$REPO/dist/namp-rack-${VERSION}-corresponding-source.tar.gz"
+NOSOURCE=""
+if [ "$WANT_ASIO" != "ON" ]; then
+  # No ASIO, no GPLv3 code, no obligation: a WASAPI-only build is MIT like everything else here.
+  echo "WASAPI-only build: the whole archive is MIT, no Corresponding Source obligation."
+elif [ "${NAMP_SKIP_CORRESPONDING_SOURCE:-0}" = "1" ]; then
+  NOSOURCE="asked for with NAMP_SKIP_CORRESPONDING_SOURCE=1"
+elif ! git -C "$REPO" diff --quiet HEAD -- 2>/dev/null; then
+  # Corresponding Source is identified by a commit. A dirty tree cannot produce it honestly, so the
+  # archive is marked rather than the build refused -- this is the ordinary state while working,
+  # and the whole point is that building is never gated.
+  NOSOURCE="the working tree has uncommitted changes"
 else
-  command -v wine >/dev/null || {
-    echo "error: wine not found. Install it, or set RATIONS_SKIP_WINE=1 to" >&2
-    echo "package an unverified build." >&2
-    exit 1
-  }
-  export WINEPREFIX="${WINEPREFIX:-$HOME/.wine-rations}"
-  export WINEDEBUG="${WINEDEBUG:--all}"
-  if [ ! -d "$WINEPREFIX" ]; then
-    echo "creating a Wine prefix at $WINEPREFIX"
-    wineboot --init >/dev/null 2>&1 || true
-  fi
-
-  WIN_BUNDLE="$(winepath -w "$PKGBUNDLE")"
-
-  # moduleinfo.json is OPTIONAL — Module::getModuleInfoPath returns an empty
-  # optional when it is absent and the validator does not require it — but it is
-  # one Wine call, so generate it. It has to happen here rather than as a build
-  # step because CMake would run the freshly cross-built moduleinfotool.exe
-  # natively on the build host, where it cannot execute.
-  echo "generating moduleinfo.json"
-  wine "$BUILD/bin/moduleinfotool.exe" -create -version "$VERSION" \
-       -path "$WIN_BUNDLE" \
-       -output "$(winepath -w "$PKGBUNDLE/Contents/Resources/moduleinfo.json")" 2>/dev/null
-  if [ ! -s "$PKGBUNDLE/Contents/Resources/moduleinfo.json" ]; then
-    echo "moduleinfotool produced no moduleinfo.json" >&2
-    exit 1
-  fi
-
-  echo "running the SDK validator"
-  VALIDATOR_OUT="$(wine "$BUILD/bin/validator.exe" "$WIN_BUNDLE" 2>&1 || true)"
-  if ! printf '%s' "$VALIDATOR_OUT" | grep -qE '^Result: [0-9]+ tests passed, 0 tests failed'; then
-    echo "the SDK validator did not pass against the packaged bundle:" >&2
-    printf '%s\n' "$VALIDATOR_OUT" | tail -40 >&2
-    exit 1
-  fi
-  printf '%s\n' "$VALIDATOR_OUT" | grep -E '^Result:'
-
-  #-------------------------------------------------------------------------
-  # THE PANEL DIFF: does the Windows editor DRAW what the Linux one draws?
-  #
-  # This is the only automated check of the Windows editor's appearance, and it
-  # is why scripts/build-win-deps.sh pins its five dependencies to this
-  # machine's system versions. It renders all four pages with both panelrender
-  # binaries — the same sources, the same resources/ tree, the same scale — and
-  # compares them pixel for pixel. It therefore exercises cairo, FreeType
-  # rasterisation, PNG decode, NanoSVG and the whole of src/gfx in the cross
-  # build, plus panelrender's own art, text-clearance and hit-target audits.
-  #
-  # THE THRESHOLDS ARE MEASURED, NOT CHOSEN. As first taken, at cairo 1.18.4 /
-  # freetype 2.13.3 / pixman 0.44.0 / libpng 1.6.48 / zlib 1.3.1:
-  #
-  #     head         32 of  456,599 px    worst channel delta 1/255
-  #     cabinet       0 of  294,400 px    byte-identical
-  #     pedalboard   32 of  450,822 px    worst channel delta 1/255
-  #     settings      0 of  746,240 px    byte-identical
-  #     TOTAL        64 of 1,948,061 px
-  #
-  # Every differing pixel is a single quantisation step, and the two pages that
-  # differ at all are the two that draw rotated dials — which is where the
-  # trigonometry, and so the float rounding, lives. The caps below sit well
-  # above that so an ordinary art edit does not trip them, while a genuine
-  # divergence stays impossible to miss: a different FreeType or cairo moves
-  # glyph rasterisation by thousands of pixels at full contrast, three orders of
-  # magnitude away.
-  #
-  # MAX_DELTA IS THE SHARPER OF THE TWO GATES and the one to trust. A rounding
-  # difference is 1/255 by definition; a real rasterisation change puts down ink
-  # where there was none, which is a delta of tens or hundreds whatever the
-  # pixel count says.
-  #-------------------------------------------------------------------------
-  PANEL_MAX_PIXELS=256     # per page
-  PANEL_MAX_DELTA=1        # per channel, any page
-
-  # This used to be skipped with a warning when ImageMagick was absent, which is
-  # a gate that can quietly not run. panel-diff.sh decodes the PNGs with the
-  # Python standard library now, so there is nothing left to be missing and
-  # nothing left to skip.
-  echo "comparing the editor pages against the Linux render"
-  PANELS="$STAGEDIR/panels"
-  mkdir -p "$PANELS"
-
-  # The Linux reference has to come from a Linux build of the same tree.
-  LINUX_PANELRENDER="${RATIONS_BUILD_DIR:-$REPO/build}/panelrender"
-  if [ ! -x "$LINUX_PANELRENDER" ]; then
-    echo "no Linux panelrender at $LINUX_PANELRENDER - build the native tree first:" >&2
-    echo "  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build" >&2
-    echo "or set RATIONS_BUILD_DIR to a native build directory." >&2
-    exit 1
-  fi
-
-  "$LINUX_PANELRENDER" "$PANELS/lin" "$REPO/resources" 1.0 >/dev/null
-  # The resource directory is passed explicitly rather than left to
-  # respath.cpp's module-relative fallback, which resolves to nothing for a
-  # bare .exe sitting outside a bundle.
-  wine "$BUILD/panelrender.exe" "$(winepath -w "$PANELS")\\win" \
-       "$(winepath -w "$REPO/resources")" 1.0 >/dev/null
-
-  # The comparison itself is scripts/panel-diff.sh, which the macOS workflow
-  # calls too -- one implementation, so the two platforms' figures are
-  # produced the same way and stay comparable. The thresholds stay HERE
-  # because they are this pair's measurement, not that script's.
-  PANEL_MAX_PIXELS="$PANEL_MAX_PIXELS" PANEL_MAX_DELTA="$PANEL_MAX_DELTA" \
-    "$REPO/scripts/panel-diff.sh" "$PANELS" lin "$PANELS" win Linux Windows
+  echo
+  echo "== Corresponding Source (GPLv3 section 6) =="
+  "$REPO/scripts/corresponding-source.sh" "$REPO/dist"
+  "$REPO/scripts/corresponding-source.sh" --directions > "$CS_DIRECTIONS"
 fi
 
-# --- licence, attribution and instructions ----------------------------------
+if [ -n "$NOSOURCE" ]; then
+  cat > "$PKGDIR/NOT-A-RELEASE.txt" <<NOTEOF
+This archive is NOT a release and MUST NOT be published.
+
+It contains a GPLv3 binary -- namp-rack.exe with the ASIO backend compiled in --
+whose Corresponding Source was not assembled, because ${NOSOURCE}.
+GPLv3 section 6 requires that source to be available to anyone who receives the
+binary, so distributing this archive as it stands would be a licence breach.
+
+The binaries themselves are fine and every check passed. To make a publishable
+archive, commit the tree and run scripts/makedist-windows.sh again without
+NAMP_SKIP_CORRESPONDING_SOURCE.
+
+The plug-in and the pedals in this archive are MIT and are unaffected -- it is
+only the standalone that carries the obligation.
+NOTEOF
+fi
+
+# --- licence, attribution ----------------------------------------------------
 cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
+if [ "$WANT_ASIO" = "ON" ]; then
+  cp "$REPO/products/rack/COPYING.GPL-3" \
+     "$REPO/products/rack/LICENSE-windows-asio.txt" "$PKGDIR/"
+fi
+
+# --- the installer's pedal list ----------------------------------------------
+# GENERATED FROM WHAT WAS STAGED, never written into the .nsi by hand. The names come from the
+# build (the rack's CMake cache declares them and its stage script copies exactly those), so a
+# sixth pedal upstream ships without anyone remembering to edit an installer script -- and a list
+# that quietly stopped matching, which is how a release starts installing four of five, cannot
+# happen. The same fragment is included twice, once by each side, so the install and uninstall
+# lists are the same list by construction rather than by two edits staying in step.
+PEDALS_NSH="$STAGEDIR/pedals.nsh"
+{
+  echo "; GENERATED by scripts/makedist-windows.sh from the staged pedals. Do not edit."
+  echo "!ifdef UNINSTALLING"
+  for _p in "$PKGDIR"/pedals/*.vst3; do
+    [ -d "$_p" ] || continue
+    _n="$(basename "$_p" .vst3)"
+    printf '    ${If} ${FileExists} "$Vst3Dir\\%s.vst3\\Contents\\x86_64-win\\%s.vst3"\n' "$_n" "$_n"
+    printf '        RMDir /r "$Vst3Dir\\%s.vst3"\n' "$_n"
+    printf '        DetailPrint "Removed $Vst3Dir\\%s.vst3"\n' "$_n"
+    printf '    ${EndIf}\n'
+  done
+  echo "!else"
+  for _p in "$PKGDIR"/pedals/*.vst3; do
+    [ -d "$_p" ] || continue
+    _n="$(basename "$_p" .vst3)"
+    printf '    ${If} ${FileExists} "$Vst3Dir\\%s.vst3\\Contents\\*.*"\n' "$_n"
+    printf '        RMDir /r "$Vst3Dir\\%s.vst3"\n' "$_n"
+    printf '    ${EndIf}\n'
+    printf '    SetOutPath "$Vst3Dir\\%s.vst3"\n' "$_n"
+    printf '    File /r "${PEDALS_DIR}\\%s.vst3\\*"\n' "$_n"
+    printf '    DetailPrint "Installed $Vst3Dir\\%s.vst3"\n' "$_n"
+  done
+  echo "!endif"
+} > "$PEDALS_NSH"
+
+PEDAL_N="$(grep -c 'SetOutPath' "$PEDALS_NSH" || true)"
+[ "$PEDAL_N" = "5" ] ||
+  namp_dist_die "the generated installer list holds $PEDAL_N pedals, expected 5. An installer that
+puts four of five on disk looks like it worked."
+
+# --- the notes ---------------------------------------------------------------
+# The licence paragraph differs between the two configurations and says so plainly, because "this
+# program is MIT" printed on a GPLv3 binary is the kind of wrong that a user acts on.
+if [ "$WANT_ASIO" = "ON" ]; then
+  LICENCE_PARA="Almost all of this is MIT - see LICENSE, and NOTICE for third-party
+attribution. ONE file in this archive is not, and it is worth knowing which:
+
+    rack\\namp-rack.exe    GNU GPL version 3
+
+The standalone hosts ASIO, Steinberg's SDK for that is dual-licensed, and this
+project takes its GPLv3 arm rather than sign a proprietary agreement. So you get
+that one program under GPLv3 and you are entitled to its complete source.
+COPYING.GPL-3 has the terms, CORRESPONDING-SOURCE.txt says where the source is,
+and LICENSE-windows-asio.txt explains the whole arrangement in one page.
+
+Everything else here - the plug-in, the five pedals, and every line of this
+project's own source - is MIT and stays MIT. They are separate programs that
+happen to be in the same download, which is what the GPL calls an aggregate, and
+being next to a GPLv3 binary does not change their terms. The Linux release,
+which has no ASIO in it, is MIT throughout."
+else
+  LICENCE_PARA="MIT, all of it. See LICENSE, and NOTICE for third-party attribution.
+
+This build has no ASIO in it, which is what keeps the standalone MIT - the
+Windows standalone WITH ASIO is GPLv3 instead."
+fi
 
 cat > "$PKGDIR/INSTALL.txt" <<EOF
-NAMp Rations ${VERSION} - a four-channel Neural Amp Modeler amp head,
-VST3 for Windows
+NAMp ${VERSION} - a four-channel Neural Amp Modeler amp head, for 64-bit Windows
 
-This archive holds the plug-in, twice over - an installer, and the same bundle
-loose so you can install it by hand instead:
+One amp, three ways to run it, and one installer that installs all of them.
 
-    NAMp-rations-install.exe  the installer
-    NAMp-rations.vst3         a folder, not a file. Copy the WHOLE folder.
+    plugin\\NAMp-rations.vst3   the amp as a plug-in, for your DAW
+    rack\\namp-rack.exe         the same amp standalone, in its own window, with
+                               a rack that hosts other people's VST3 plug-ins
+                               before and after it
+    pedals\\                    five pedals, as ordinary plug-ins
+
+The plug-in and the standalone are the SAME amp from the SAME source, released
+together and versioned together. The difference is the surround: the plug-in has
+a five-pedal pedalboard built into its panel, and the standalone leaves that out
+because it hosts your own plug-ins instead - including the five in pedals\\, which
+reach it by exactly the route everybody else's plug-in takes.
 
 Install, the easy way
 ---------------------
-Run NAMp-rations-install.exe.
+Run NAMp-install.exe. It asks which of the three you want and installs them.
 
-It is not code-signed, so Windows SmartScreen will show a blue "Windows
-protected your PC" box. Click "More info", then "Run anyway" - or install by
-hand instead, below; the two put exactly the same folder in exactly the same
-place.
+It is not code-signed, so Windows SmartScreen will show a blue "Windows protected
+your PC" box. Click "More info", then "Run anyway" - or install by hand instead,
+below; the two put exactly the same folders in exactly the same places.
 
 Run it as an administrator and it installs for everyone, in
-C:\\Program Files\\Common Files\\VST3. Run it normally and it installs just for
-you, in %LOCALAPPDATA%\\Programs\\Common\\VST3. Either way it tells you which,
-and you can change the folder. To remove it later, use "Apps & features" in
-Windows Settings, or the uninstaller it leaves in the folder it names at the
-end.
+C:\\Program Files\\Common Files\\VST3 and C:\\Program Files\\NAMp. Run it normally
+and it installs just for you, in %LOCALAPPDATA%\\Programs\\Common\\VST3 and
+%LOCALAPPDATA%\\Programs\\NAMp. Either way it tells you which, and you can change
+the VST3 folder. To remove it later, use "Apps & features" in Windows Settings,
+or the uninstaller it leaves beside the program.
 
 Install, by hand
 ----------------
-A VST3 plug-in is installed by copying its folder to where hosts look. There
-are two such places, and hosts search them in this order:
+A VST3 plug-in is installed by copying its folder to where hosts look. There are
+two such places, and hosts search them in this order:
 
   1. Just for you - no administrator rights needed:
 
@@ -373,39 +317,29 @@ are two such places, and hosts search them in this order:
 
          C:\\Program Files\\Common Files\\VST3\\
 
-Copy NAMp-rations.vst3 into one of them, then rescan plug-ins in your DAW.
+Copy plugin\\NAMp-rations.vst3 into one of them, and the five folders in pedals\\
+as well if you want them, then rescan plug-ins in your DAW.
 
-Do not rename anything inside the folder. The bundle carries its own art and
-fonts in NAMp-rations.vst3\\Contents\\Resources, and the binary in
-NAMp-rations.vst3\\Contents\\x86_64-win must keep the name
-NAMp-rations.vst3 or no host will load it.
+Do not rename anything inside a bundle. Each carries its own art and fonts in
+Contents\\Resources, and the binary in Contents\\x86_64-win must keep the bundle's
+own name or no host will load it.
 
-To uninstall a hand-installed copy, delete the NAMp-rations.vst3 folder.
+The standalone needs no installation at all. rack\\namp-rack.exe is the whole
+program - the amp, its art and its fonts are inside it - so put it wherever you
+like and run it.
 
-Whichever way you install, make sure you only have ONE copy. Hosts scan both
-folders, so a copy left in each shows up as two NAMp Rations entries in the
-plug-in list. The installer offers to remove the other one for you.
-
-Requirements
-------------
-64-bit Windows and a VST3 host. Nothing else: cairo, FreeType, libpng, zlib and
-the GCC runtime are all linked into the plug-in, so there is no redistributable
-to install and nothing to put beside the binary.
-
-There is no 32-bit build, and no standalone in this archive: the standalone is
-a JACK application, so it ships with the Linux release - which is a separate
-download, and the only place anything here is built for Linux.
+Whichever way you install, make sure you only have ONE copy of each bundle. Hosts
+scan both folders, so a copy left in each shows up twice in the plug-in list. The
+installer offers to remove the other one for you.
 
 Captures
 --------
-NAMp Rations ships NO captures - it plays yours, and it wants four sets
-of them.
+NAMp ships NO captures - it plays yours, and it wants four sets of them.
 
-Click the "Captures, MIDI, Settings" button, top right, to open the settings
-page. The top section has one loader per channel: point each at a DIRECTORY of
-.nam files, or at a single .nam. That folder's name becomes the channel's name
-on the front panel, and you can type over it if you would rather call it
-something else.
+In the plug-in, click "Captures, MIDI, Settings", top right. In the standalone,
+open the setup page. Either way, point each channel's loader at a FOLDER of .nam
+files, or at a single .nam. That folder's name becomes the channel's name on the
+front panel, and you can type over it if you would rather call it something else.
 
 Each channel's dial then sweeps that whole bank continuously - no reload, no
 click, no dialog. One click of the mouse wheel on a channel dial is exactly one
@@ -413,9 +347,9 @@ capture. Rest on one and you are playing that capture exactly; in between, you
 are hearing the two either side blended.
 
 Captures are ordered by the number in the filename (the LAST run of digits, so
-"GAIN 2" comes before "GAIN 10"), then anything ending in MAX, then anything
-with no number at all, alphabetically. So capture your amp at each mark of its
-own gain control and put that mark last in the name:
+"GAIN 2" comes before "GAIN 10"), then anything ending in MAX, then anything with
+no number at all, alphabetically. So capture your amp at each mark of its own gain
+control and put that mark last in the name:
 
     MyAmp - crunch - GAIN 1.nam
     MyAmp - crunch - GAIN 2.nam
@@ -424,57 +358,139 @@ own gain control and put that mark last in the name:
 
 and that channel's dial is that amp's gain control, at the amp's own spacing.
 
-A channel with nothing loaded is silent rather than broken; a fresh instance
-has four of them. Captures must be feed-forward (WaveNet or ConvNet); an LSTM
-capture is refused rather than silently accepted.
+A channel with nothing loaded is silent rather than broken; a fresh instance has
+four of them. Captures must be feed-forward (WaveNet or ConvNet); an LSTM capture
+is refused rather than silently accepted.
 
 The four channels
 -----------------
 Exactly one channel sounds at a time. Click its bat switch, or learn a MIDI
-footswitch to it on the settings page - the switch is instant and silent even
-mid-note, which is the whole reason this plug-in exists.
+footswitch to it, and the change is instant and silent even mid-note - which is
+the whole reason this project exists.
 
-The settings page also carries a trim per channel (for when a high-gain channel
-reads louder than a clean one at the same measured loudness), the MIDI learn
-rows, and the output section - Raw / Normalized / Calibrated, plus input
-calibration. Normalized is the default.
+The settings page also carries a trim per channel, the MIDI learn rows, and the
+output section: Raw / Normalized / Calibrated, plus input calibration. Normalized
+is the default.
 
 MIDI learn: a learned CC or Program Change answers on ANY MIDI channel, because
-both arrive at a VST3 plug-in as parameter changes and the channel is already
-gone by then. Only a learned NOTE can be pinned to one MIDI channel.
+both arrive at a VST3 plug-in as parameter changes and the channel is already gone
+by then. Only a learned NOTE can be pinned to one MIDI channel.
 
 The rest of the panel
 ---------------------
 Shared Threshold / Bass / Middle / Treble, Input and Output, each reading its
 value under the dial. BYPASS, EQ and GATE switch out the whole chain, the tone
-stack and the noise gate. The icon left of the settings button is Slim, which trades model
-size for CPU - it appears only when your captures can actually use it.
+stack and the noise gate. The icon beside the settings button is Slim, which
+trades model size for CPU - it appears only when your captures can actually use
+it. A cabinet section loads one or two impulse responses with a blend between
+them.
 
-Two more pages, reached by the buttons at the bottom: a cabinet page that loads
-one or two impulse responses with a blend between them, and a pedalboard of
-five pedals - Boost and Chorus before the amp, Flanger, Delay and Reverb after
-it.
+The file picker is drawn inside the panel rather than being a Windows dialog, so
+it looks like the rest of the program. ".." goes up; above a drive root it lists
+the drives, so captures on D: are reachable.
 
-The file picker is drawn inside the plug-in rather than being a Windows dialog,
-so it looks like the rest of the panel. ".." goes up; above a drive root it
-lists the drives, so captures on D: are reachable.
+The five pedals
+---------------
+    RationsBoost      a Tube Screamer-style overdrive
+    RationsChorus     two modulated taps per channel
+    RationsFlanger    swept comb with feedback
+    RationsDelay      tempo-syncable, optional ping-pong
+    RationsReverb     a Freeverb-lineage room
+
+The installer puts them in your VST3 folder, so they turn up in the standalone's
+plug-in list after a rescan, and in your DAW's as well. They are also built into
+the plug-in's own pedalboard page, so you do not need them installed to use that -
+the separate bundles are for the standalone and for any other host.
+
+The standalone
+--------------
+It opens ASIO first, because that is what your interface's own driver exposes and
+what the latency depends on, and falls back to WASAPI when the machine has no ASIO
+driver installed. --list-devices shows what it can see.
+
+If you have an audio interface, install its manufacturer's ASIO driver and use
+that. ASIO4ALL is a wrapper rather than a driver and will work, but the latency is
+not what a real driver gives you.
+
+It hosts VST3. It does NOT host LV2 on Windows - lilv and suil are Linux libraries
+and there is no Windows build of this program that includes them, so LV2 plug-ins
+will not appear in the list and that is by design rather than a missing dependency.
+
+Plug-ins are scanned in a separate process on purpose: one that crashes while it is
+being examined takes that process with it and is recorded as bad rather than
+retried, so a single broken plug-in on your disk cannot stop the rack starting.
+Adding and removing plug-ins while audio is running is safe and is not heard.
+
+Saved racks, which captures were loaded, your audio device choice and your MIDI
+bindings live under %APPDATA%\\NAMp-Rack. The plug-in scan cache lives under
+%LOCALAPPDATA%\\NAMp-Rack and can be deleted at any time; a rescan rebuilds it.
+
+Requirements
+------------
+64-bit Windows. Nothing else: cairo, FreeType, libpng and zlib are statically
+linked, and so is the C++ runtime. There is no redistributable to install and
+nothing to put beside any of the binaries.
+
+There is no 32-bit build. The Linux release is a separate download and holds the
+same three things, plus an LV2 build of the plug-in.
 
 Licence
 -------
-MIT. See LICENSE, and NOTICE for third-party attribution - which matters more
-for this build than for the Linux one, because the Windows plug-in statically
-links cairo, pixman, FreeType, libpng and zlib and therefore redistributes
-them.
+${LICENCE_PARA}
+
+NOTICE has the third-party attribution, and it matters more for this build than
+for the Linux one: these binaries statically link cairo, pixman, FreeType, libpng
+and zlib and therefore redistribute them.
+
+The five pedals carry their own attribution in pedals\\NOTICE, covering components
+they use and this project does not.
+
+ASIO is a trademark of Steinberg Media Technologies GmbH, registered in Europe
+and other countries.
 EOF
 
-# --- the installer ----------------------------------------------------------
-# Built LAST, from the staged tree, so NAMp-rations-install.exe carries exactly
-# the bundle that is also loose in the ZIP - the same stripped binary and the same
-# moduleinfo.json. Building it from build-win instead would quietly ship an
-# unstripped, unverified copy the moment either step above changed.
-if [ "${RATIONS_SKIP_INSTALLER:-0}" = "1" ]; then
+MARK=""
+if [ -n "$NOSOURCE" ]; then
+  MARK="-NOSOURCE"
   echo
-  echo "WARNING: RATIONS_SKIP_INSTALLER=1 - the ZIP has no NAMp-rations-install.exe." >&2
+  echo "WARNING: this archive contains a GPLv3 binary whose Corresponding Source was" >&2
+  echo "not assembled, because $NOSOURCE." >&2
+  echo "It is named -NOSOURCE and MUST NOT be published -- GPLv3 section 6 requires the" >&2
+  echo "source to be available to whoever receives the binary. The binaries themselves are" >&2
+  echo "fine and every check above passed; commit the tree and re-run to get a releasable one." >&2
+  echo
+fi
+
+# THE LICENCE FILES ARE ASSERTED, NOT ASSUMED. GPLv3 section 4 requires the licence text to travel
+# with the program and section 6(d) requires the directions to the source to sit next to the object
+# code. Both are one `cp` away from being silently dropped by an edit to the block above, and
+# neither absence would break anything a user would notice -- which is exactly the shape of mistake
+# a gate is for.
+if [ "$WANT_ASIO" = "ON" ]; then
+  namp_dist_require_files "$PKGDIR" "the GPLv3 archive" \
+    COPYING.GPL-3 LICENSE-windows-asio.txt NOTICE LICENSE
+  if [ -z "$NOSOURCE" ]; then
+    namp_dist_require_files "$PKGDIR" "the GPLv3 archive" CORRESPONDING-SOURCE.txt
+    [ -f "$CS_TARBALL" ] ||
+      namp_dist_die "the Corresponding Source tarball was not produced at $CS_TARBALL. A GPLv3
+binary may not be published without it."
+  else
+    namp_dist_require_files "$PKGDIR" "the unpublishable archive" NOT-A-RELEASE.txt
+  fi
+  # The GPL text must be the real one. A truncated or reflowed copy is not the licence, and this
+  # file is copied around by hand often enough to be worth checking rather than trusting.
+  grep -qx '                       Version 3, 29 June 2007' "$PKGDIR/COPYING.GPL-3" ||
+    namp_dist_die "COPYING.GPL-3 in the archive is not the verbatim GPLv3 text."
+fi
+
+# --- the installer ------------------------------------------------------------
+# Built LAST, from the staged tree, so NAMp-install.exe carries exactly the binaries that are also
+# loose in the ZIP - the same stripped, de-randomised files and the same moduleinfo.json. Building
+# it from the build directories instead would quietly ship unstripped, unverified copies the moment
+# any step above changed.
+if [ "${NAMP_SKIP_INSTALLER:-0}" = "1" ]; then
+  echo
+  echo "WARNING: NAMP_SKIP_INSTALLER=1 - the ZIP has no NAMp-install.exe." >&2
   echo
 else
   # VIProductVersion wants exactly four components; project() gives three.
@@ -483,35 +499,52 @@ else
     VERSION4="$VERSION4.0"
   done
 
-  echo "building NAMp-rations-install.exe with $MAKENSIS"
+  # TWO DEFINES, BECAUSE THEY ARE CONDITIONAL ON DIFFERENT THINGS. GPLV3_DOCS says the standalone
+  # contains GPLv3 code, so section 4's copy of the licence must accompany it -- true of every ASIO
+  # build including one whose source was not assembled. CS_DOC says the 6(d) directions exist to be
+  # installed, which is only true when corresponding-source.sh actually ran. Collapsing the two
+  # into one condition is what the first version of this did, and it silently left an ASIO binary
+  # on disk with no copy of the licence that covers it.
+  NSIS_GPL=()
+  [ "$WANT_ASIO" = "ON" ] && NSIS_GPL+=("-DGPLV3_DOCS=1")
+  [ -f "$CS_DIRECTIONS" ] && NSIS_GPL+=("-DCS_DOC=1")
+
+  # STAMP BEFORE BUILDING THE INSTALLER, NOT ONLY BEFORE ZIPPING. NSIS's SetDateSave defaults ON,
+  # so makensis records each staged file's mtime inside NAMp-install.exe and restores it on
+  # install. Those mtimes are whatever the staging `cp` happened to write, so without this the
+  # installer moved on every run even though every binary it carries is byte-identical -- and it
+  # would have gone on doing so after the ZIP itself was cured, because the ZIP is built later and
+  # from the same tree. Stamping here fixes both, and gives the installed files a date that is a
+  # fact about the release rather than about when someone packaged it.
+  namp_dist_stamp_tree "$PKGDIR" "$(namp_dist_epoch "$REPO")"
+
+  echo "building NAMp-install.exe with $MAKENSIS"
   "$MAKENSIS" -V2 -NOCD \
     "-DVERSION=$VERSION" "-DVERSION4=$VERSION4" \
-    "-DBUNDLE_DIR=$PKGBUNDLE" "-DDOC_DIR=$PKGDIR" \
-    "-DOUTFILE=$PKGDIR/NAMp-rations-install.exe" \
-    "$REPO/installer/namp-rations.nsi"
+    "-DPLUGIN_DIR=$PKGDIR/plugin/NAMp-rations.vst3" \
+    "-DPEDALS_DIR=$PKGDIR/pedals" \
+    "-DRACK_EXE=$PKGDIR/rack/namp-rack.exe" \
+    "-DDOC_DIR=$PKGDIR" \
+    "-DPEDALS_NSH=$PEDALS_NSH" \
+    "${NSIS_GPL[@]+"${NSIS_GPL[@]}"}" \
+    "-DOUTFILE=$PKGDIR/NAMp-install.exe" \
+    "$REPO/installer/namp.nsi"
 
-  if [ ! -s "$PKGDIR/NAMp-rations-install.exe" ]; then
-    echo "makensis produced no NAMp-rations-install.exe" >&2
-    exit 1
-  fi
-  # It must be a PE executable, not whatever else ended up at that path. file(1)
-  # is not guaranteed to be installed, so check the magic directly.
-  if [ "$(head -c2 "$PKGDIR/NAMp-rations-install.exe")" != "MZ" ]; then
-    echo "NAMp-rations-install.exe is not a PE executable" >&2
-    exit 1
-  fi
+  [ -s "$PKGDIR/NAMp-install.exe" ] || namp_dist_die "makensis produced no NAMp-install.exe"
+  # It must be a PE executable, not whatever else ended up at that path. file(1) is not guaranteed
+  # to be installed, so check the magic directly.
+  [ "$(head -c2 "$PKGDIR/NAMp-install.exe")" = "MZ" ] ||
+    namp_dist_die "NAMp-install.exe is not a PE executable"
+
+  # THE INSTALLER IS AN ARTEFACT LIKE ANY OTHER and carries the same wall-clock stamp everything
+  # else here had to be cured of. NSIS writes a COFF TimeDateStamp into the stub it links, so two
+  # release runs from one commit produced two different installers even after every binary inside
+  # them had been made reproducible.
+  namp_dist_pe_derandomise "$PKGDIR/NAMp-install.exe"
+  namp_dist_pe_assert_no_timestamp "$PKGDIR/NAMp-install.exe" "NAMp-install.exe"
 fi
 
-mkdir -p "$REPO/dist"
-ZIP="$REPO/dist/NAMp-rations-${VERSION}-windows-x86_64.zip"
-rm -f "$ZIP"
-# python3 rather than zip(1): zip is not installed everywhere and this needs no
-# extra package. -c takes the directory and stores it with its own name at the
-# archive root, which is what an extract-anywhere release wants.
-( cd "$STAGEDIR" && python3 -m zipfile -c "$ZIP" "NAMp-rations-${VERSION}" )
-
-echo ""
-echo "Packaged: $ZIP"
-echo ""
-echo "Contents:"
-python3 -m zipfile -l "$ZIP"
+PKGNAME="NAMp-${VERSION}${MARK}-windows-x86_64"
+mv "$PKGDIR" "$STAGEDIR/$PKGNAME"
+# The epoch makes the ZIP reproducible, not just the binaries in it -- see namp_dist_zip.
+namp_dist_zip "$STAGEDIR" "$PKGNAME" "$REPO/dist/${PKGNAME}.zip" "$(namp_dist_epoch "$REPO")"

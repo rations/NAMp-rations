@@ -1,0 +1,1298 @@
+# Rations — a four-channel Neural Amp Modeler amp head, a raw VST3 plug-in for Linux, Windows and
+# macOS (no framework).
+#
+# The DSP core is the MIT-licensed NeuralAmpModelerCore + AudioDSPTools by Steven Atkinson, with
+# Eigen (MPL2) as the linear-algebra backend. The editor is a Steinberg IPlugView embedded into
+# the host's own window and painted with Cairo/FreeType — no plug-in or GUI framework.
+#
+# TWO products on Linux, ONE on Windows and macOS. The VST3 bundle is the plug-in and is all those
+# two ship; Linux adds namp-rations-standalone, which hosts that same bundle on JACK so the amp can
+# be played without a DAW. standalone/ is X11, Linux::IRunLoop and JACK throughout, so a macOS or
+# Windows version of it would be a different program rather than the same one rebuilt.
+#
+# Nothing HERE hosts anyone else's plug-ins, scans for them or links LV2: the pedalboard is built
+# into the plug-in rather than hosting other people's pedals. That used to be the distinction from
+# the parent NAMp and is now the distinction from products/rack, which is the same amp with the
+# pedalboard removed and a plug-in host around it. The plug-in itself links neither JACK nor the
+# SDK's hosting layer -- only the standalone and the offline tools do.
+#
+# Built through the repository-root dispatcher, which is the only way in: `cmake -S . -B build`.
+# The four dependency variables below can still be pointed at external source trees, but the
+# defaults, the shared core and the SDK targets all reach this file from the root.
+
+cmake_minimum_required(VERSION 3.25.0)
+
+# macOS build shape -- CMAKE_OSX_DEPLOYMENT_TARGET and CMAKE_OSX_ARCHITECTURES -- is set by the
+# REPOSITORY ROOT CMakeLists, not here, and it has to be. Both are read during compiler detection
+# and by every try_compile the SDK's own checks run, so they must be set before the first
+# project() call in the whole configure, and that call is the root's. This file is reached by
+# add_subdirectory() and so cannot say "before project()" about anything. The reasoning, and the
+# 11.0 floor and the one-slice-per-configure rule, are written out at that site.
+
+project(smtg-rations
+    VERSION 0.3.0
+    DESCRIPTION "Rations four-channel neural amp head VST3"
+)
+
+# NAMP_PRODUCT_DIR, NAMP_REPO_ROOT and NAMP_CORE_DIR are set by the repository-root dispatcher and
+# are how this file names the three directories it cannot find on its own: itself, the root that
+# holds the four submodules, and the shared amp in core/. It had its own copy of the first of those
+# until stage 6, under a third name, which is why the check below is worth its five lines.
+#
+# Configuring this directory directly is what the header used to offer, and it has not worked since
+# the merge. Measured at the previous commit, it fails sixty lines down with "NAM_CORE_DIR does not
+# name a directory ('/NeuralAmpModelerCore')" and sends the reader to `git submodule update` --
+# the one remedy that cannot help, because the submodule is present and checked out and it is
+# NAMP_REPO_ROOT that is empty. Fail here instead, where the cause is still visible.
+if(NOT NAMP_REPO_ROOT OR NOT NAMP_PRODUCT_DIR)
+    message(FATAL_ERROR
+        "products/rations/CMakeLists.txt was configured directly, and it builds only as part of "
+        "the repository. Configure the repository root instead -- it dispatches to one product "
+        "per build directory:\n"
+        "    cmake -S . -B build      -G Ninja -DCMAKE_BUILD_TYPE=Release\n"
+        "    cmake -S . -B build-rack -G Ninja -DCMAKE_BUILD_TYPE=Release -DNAMP_PRODUCT=rack")
+endif()
+if(NOT NAMP_PRODUCT_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    message(FATAL_ERROR
+        "NAMP_PRODUCT_DIR is '${NAMP_PRODUCT_DIR}' but this file is in "
+        "'${CMAKE_CURRENT_SOURCE_DIR}'. The dispatcher added a different directory than the one "
+        "it named, and every path built from NAMP_PRODUCT_DIR below would point at the wrong "
+        "product.")
+endif()
+
+# NAMP_CORE_INCLUDES -- core/'s entries, appended below wherever this product's own src/ is
+# already on the include path -- is set by the repository-root dispatcher. Both products had
+# an identical copy of it until stage 6; the reasoning for each entry, and for the order, is
+# at that one site now.
+
+
+# Objective-C++, and it belongs HERE rather than in the platform split below,
+# which is where every other platform decision in this file lives. Three files
+# in this build are .mm: the editor's NSView, and the SDK's own module_mac.mm,
+# which the validator, moduleinfotool and the offline tools each compile into a
+# target of their own. Those targets are created by the SDK's add_subdirectory
+# sixty lines down, and enable_language sets its rules FORWARD ONLY -- enabling
+# it after that call leaves every one of them with no rule for a .mm file, and
+# generation then fails with eleven copies of "Missing variable is:
+# CMAKE_OBJCXX_COMPILE_OBJECT" after configure has already reported success.
+# Guarded so a Linux or Windows build never asks for a compiler it cannot use.
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
+# ---------------------------------------------------------------------------
+# Dependency source trees. Each defaults to the submodule path at the REPOSITORY
+# ROOT -- one copy shared by every product in this tree, at the pins both
+# products already agreed on -- and can be pointed at an external checkout
+# instead, which is how development against pristine reference trees works
+# without initialising submodules.
+# ---------------------------------------------------------------------------
+set(NAM_CORE_DIR "${NAMP_REPO_ROOT}/NeuralAmpModelerCore"
+    CACHE PATH "NeuralAmpModelerCore source tree (v0.5.5 or newer)")
+set(AUDIO_DSP_TOOLS_DIR "${NAMP_REPO_ROOT}/AudioDSPTools"
+    CACHE PATH "AudioDSPTools source tree")
+set(EIGEN_DIR "${NAMP_REPO_ROOT}/eigen"
+    CACHE PATH "Eigen source tree (the directory containing Eigen/)")
+
+# NAM_CORE_DIR must be v0.5.5+: submodels are built directly through the public
+# parse_model_config_json()/create_dsp() pair in NAM/model_config.h and the
+# channel switch reads DSP::GetPrewarmSamples(), neither of which is available
+# in v0.5.3.
+foreach(_dep NAM_CORE_DIR AUDIO_DSP_TOOLS_DIR EIGEN_DIR)
+    if(NOT IS_DIRECTORY "${${_dep}}")
+        message(FATAL_ERROR
+            "${_dep} does not name a directory ('${${_dep}}') - run "
+            "'git submodule update --init' or set -D${_dep}=<path>")
+    endif()
+endforeach()
+foreach(_probe "${NAM_CORE_DIR}/NAM/model_config.h"
+               "${AUDIO_DSP_TOOLS_DIR}/dsp/ImpulseResponse.h"
+               "${EIGEN_DIR}/Eigen/Core")
+    if(NOT EXISTS "${_probe}")
+        message(FATAL_ERROR "expected dependency header not found: ${_probe}")
+    endif()
+endforeach()
+
+# ---------------------------------------------------------------------------
+# VST 3 SDK
+# ---------------------------------------------------------------------------
+if(NOT TARGET sdk)
+    set(VST3_SDK_DIR "${NAMP_REPO_ROOT}/vst3sdk"
+        CACHE PATH "VST 3 SDK source tree")
+    if(NOT EXISTS ${VST3_SDK_DIR}/CMakeLists.txt)
+        message(FATAL_ERROR
+            "VST 3 SDK not found at '${VST3_SDK_DIR}' - run "
+            "'git submodule update --init' or set -DVST3_SDK_DIR=<path>")
+    endif()
+
+    # Headless SDK: core libraries plus the validator (part of the hosting
+    # examples), no VSTGUI (we draw the editor ourselves), no plug-in examples.
+    set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "editor is drawn directly" FORCE)
+    set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES ON CACHE BOOL "validator" FORCE)
+    set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "plug-in examples not needed" FORCE)
+    set(SMTG_RUN_VST_VALIDATOR OFF CACHE BOOL "run manually instead" FORCE)
+    set(SMTG_CREATE_PLUGIN_LINK OFF CACHE BOOL "install manually instead" FORCE)
+
+    # Defaults ON, and its Windows implementation runs a freshly built
+    # moduleinfotool.exe as a POST_BUILD step — which is a Windows binary when
+    # cross-compiling, so it cannot execute on the build host. The file is
+    # optional (Module::getModuleInfoPath returns an empty optional when it is
+    # absent, and the validator does not require it), and scripts/makedist-*.sh
+    # generate it under Wine instead, where the same binary does run.
+    if(CMAKE_CROSSCOMPILING)
+        set(SMTG_CREATE_MODULE_INFO OFF CACHE BOOL "generated under Wine instead" FORCE)
+    endif()
+
+    add_subdirectory(${VST3_SDK_DIR} vst3sdk)
+
+    # The SDK's plugin helper functions read these directory-scoped variables
+    # (smtg_target_add_library_main silently adds no module entry point without
+    # public_sdk_SOURCE_DIR); the SDK sets them only in its own scope.
+    set(public_sdk_SOURCE_DIR "${VST3_SDK_DIR}/public.sdk")
+    set(pluginterfaces_SOURCE_DIR "${VST3_SDK_DIR}/pluginterfaces")
+
+    # public.sdk/source/vst/utility/dataexchange.cpp does not compile with
+    # MinGW. It reaches alignedalloc.h, which picks its allocator on
+    # `#elif defined(_MSC_VER)` -> _aligned_malloc, `#else` -> std::aligned_alloc.
+    # MinGW is neither: it defines no _MSC_VER, and its msvcrt has no C11
+    # aligned_alloc (verified — the CRT offers _aligned_malloc and
+    # __mingw_aligned_malloc only), so the else branch fails to compile. The
+    # test is really "is this the Microsoft CRT", not "is this the Microsoft
+    # compiler", which is an upstream bug we must not fix in place: the SDK is a
+    # pinned submodule and a local edit would be silently reverted by the next
+    # `git submodule update`, leaving a fresh clone unable to build for Windows.
+    #
+    # Dropping the file instead is safe because Rations does not use the feature
+    # it implements: DataExchangeHandler is the plug-in side of VST 3.7.9's
+    # IDataExchangeHandler, nothing in src/ mentions it, and no other SDK source
+    # we compile references its symbols. vstinitiids.cpp still defines the IIDs,
+    # so the interface itself remains declared.
+    if(WIN32)
+        get_target_property(_sdk_sources sdk SOURCES)
+        list(FILTER _sdk_sources EXCLUDE REGEX "utility/dataexchange\\.cpp$")
+        set_target_properties(sdk PROPERTIES SOURCES "${_sdk_sources}")
+        message(STATUS "[Rations] dropped dataexchange.cpp from the SDK (unused, and MinGW has no std::aligned_alloc)")
+
+        # The SDK's Windows command-line tools define wmain, not main. MinGW
+        # only wires wmain up to the CRT entry point when -municode is on the
+        # LINK line; without it the linker falls back to libmingw32's
+        # crtexewin.o, whose main() calls WinMain, and the build dies on an
+        # undefined WinMain. MSVC needs none of this, which is why upstream
+        # does not set it.
+        foreach(_tool validator moduleinfotool)
+            if(TARGET ${_tool})
+                target_link_options(${_tool} PRIVATE -municode)
+            endif()
+        endforeach()
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Neutralise the SDK's Windows folder-icon step when cross-compiling.
+#
+# smtg_target_make_plugin_package() adds a POST_BUILD step that copies
+# PlugIn.ico and desktop.ini into the bundle and then runs "attrib +s" on all
+# three paths. attrib is a cmd.exe built-in, not a program, so it cannot exist
+# on a Linux build host and the step fails the build outright. The SDK offers no
+# switch for it: SMTG_PACKAGE_ICON_PATH is forced back to the bundled Steinberg
+# logo inside smtg_add_vst3plugin_with_pkgname() whenever it does not name an
+# existing file, so it cannot be pointed at nothing.
+#
+# Redefining the function here — before smtg_add_vst3plugin() is called, so this
+# is the definition that call resolves to — replaces it without touching the
+# pinned submodule. What is lost is only the Explorer folder icon, which is
+# cosmetic, is Steinberg's logo rather than ours, and does not survive a ZIP in
+# any case: the +s attribute is not carried by the archive format.
+# ---------------------------------------------------------------------------
+if(CMAKE_CROSSCOMPILING AND WIN32)
+    function(smtg_target_add_folder_icon target icon)
+        # Deliberately empty. See above.
+    endfunction()
+endif()
+
+# ---------------------------------------------------------------------------
+# Symbol visibility: hidden by default, for everything we compile.
+#
+# This is a correctness requirement, not an optimisation. GCC gives a function-
+# local static inside an inline function STB_GNU_UNIQUE binding, and glibc
+# resolves those through a table that is shared by the whole link-map namespace
+# — dlopen's RTLD_LOCAL does not scope it, and neither does anything else a host
+# can do. So a default-visibility NAM symbol exported from Rations.so is not
+# just visible to another plug-in built on the same DSP core; it IS that
+# plug-in's copy. NeuralAmpModelerCore's architecture registry is exactly that
+# shape (nam::ConfigParserRegistry::instance() in NAM/model_config.h), it
+# registers from file-scope static initialisers, and registering a name twice
+# throws. Loading a second NAM-based plug-in therefore threw out of an
+# .init_array entry during dlopen, where there is no frame that can catch it,
+# and the whole process aborted with "Config parser already registered for:
+# SlimmableContainer". This plug-in and its parent NAMp are both NAM-based, and
+# a guitarist may well have both in one project, so this is a live hazard here
+# and not a theoretical one.
+#
+# Hidden symbols are not in the dynamic table at all, so they cannot be unique
+# and cannot be interposed. Every NAM-based plug-in then gets its own registry,
+# whichever order they load in. The three functions a VST3 host actually needs
+# are re-exported by name through SMTG_EXPORT_SYMBOL — ModuleEntry, ModuleExit
+# and GetPluginFactory — so nothing about the bundle's contract changes.
+#
+# Set here rather than before the SDK's add_subdirectory: these variables apply
+# to targets defined after them, so this covers everything below and no target
+# in an imported upstream tree.
+# ---------------------------------------------------------------------------
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+# Objective-C++ is a fourth language as far as CMake is concerned, and the C and
+# C++ presets do not reach it: src/platform/macplugview.mm would otherwise be the
+# one translation unit in the bundle compiled at default visibility. Set even
+# where OBJCXX is not enabled, which costs nothing -- an unused variable.
+set(CMAKE_OBJCXX_VISIBILITY_PRESET hidden)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+
+# The presets above cannot reach the standard library, and on GCC 12 that is not
+# hypothetical: libstdc++ declares `namespace std` with _GLIBCXX_VISIBILITY(default),
+# an explicit attribute, and an explicit attribute beats -fvisibility=hidden. So
+# std::__detail::__to_chars_10_impl<T>::__digits - a function-local static in an
+# inline template, i.e. exactly the shape described above - reaches the dynamic
+# table with STB_GNU_UNIQUE binding no matter what the presets say, and the
+# packaging script's unique-symbol gate rejects the bundle.
+#
+# -fno-gnu-unique makes GCC emit STB_GLOBAL for those statics instead. That
+# removes the binding itself rather than hiding one instance of it, which is the
+# property that actually matters: a unique symbol is resolved through a table
+# dlopen's RTLD_LOCAL does not scope, and STB_GLOBAL in a bundle whose symbols
+# are otherwise hidden and --exclude-libs'd is not.
+#
+# Note that these two symbols are libstdc++'s, not NAM's - a shared digit table
+# is harmless in a way a shared architecture registry is not. The gate is a
+# blanket "no unique symbols", though, and it is right to be: the safe cases
+# cannot be told from the dangerous ones by name, and whitelisting the first one
+# is how the check stops catching the second.
+#
+# GCC 13 reworked __to_chars_10_impl and the statics went away, so a newer
+# toolchain never produces them; the flag is a no-op there rather than a
+# behaviour change, and is left unconditional on GCC for that reason. Clang
+# never emits STB_GNU_UNIQUE at all and does not take the flag.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-fno-gnu-unique)
+endif()
+
+# ---------------------------------------------------------------------------
+# Per-platform build settings. One product on all three platforms; the only
+# OS-specific code is the single window class in src/platform.
+#
+# NAMP_WINDOWS / NAMP_MACOS / NAMP_LINUX are set by the repository-root
+# dispatcher, which is also where the reason there are three of them and not
+# two is written down. This block is what each of them then implies HERE.
+# ---------------------------------------------------------------------------
+if(WIN32)
+
+    # Both, and not because it is tidy.
+    #
+    # UNICODE selects the wide variant of every TCHAR Win32 API; _UNICODE does
+    # the same for the CRT's. MSVC's tchar.h defines each from the other, so on
+    # that compiler the SDK's lone add_definitions(-D_UNICODE) gets both. MinGW
+    # reconciles nothing (verified by grepping its headers), and the SDK's
+    # if(MINGW) branch in SMTG_PlatformToolset.cmake sets neither.
+    #
+    # dllmain.cpp:87 is what that breaks. It calls the TCHAR-macro
+    # GetModuleFileName into gPath, a Steinberg::tchar (char16_t) buffer, with
+    # Steinberg::wscast papering over the pointer type, and then runs wcsrchr
+    # over the result to find the directory separator. Without UNICODE the
+    # macro resolves to GetModuleFileNameA, so ANSI bytes are written into a
+    # UTF-16 buffer and the plug-in's own path comes out as garbage. In C the
+    # compiler catches it -- "passing argument 2 of GetModuleFileNameA from
+    # incompatible pointer type" -- but the C++ cast hides it completely.
+    # NOMINMAX and WIN32_LEAN_AND_MEAN are defence and header weight, NOT a fix
+    # for anything that currently bites. deps/wdl/wdltypes.h includes the whole
+    # of <windows.h> under #ifdef _WIN32, and that reaches every translation
+    # unit that includes src/pedals/pedalchain.h -- rationsprocessor.cpp and
+    # tools/rations_pedalcheck.cpp, both of which use std::min/std::max freely.
+    # Under MinGW that is already harmless twice over (windows.h self-defines
+    # NOMINMAX under __cplusplus, and minwindef.h guards the min/max macros with
+    # #ifndef __cplusplus anyway), so nothing here changes today. It would bite
+    # under MSVC, it is exactly what NeuralAmpModelerCore's and AudioDSPTools'
+    # own CMakeLists set, and this project compiles those sources into NampDsp
+    # and so never picks their flags up. WIN32_LEAN_AND_MEAN additionally keeps
+    # winsock, RPC and OLE out of every pedal-including TU, which they have no
+    # use for.
+    add_compile_definitions(UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+elseif(APPLE)
+
+    # Objective-C++ is enabled immediately after project(), NOT here: it has to
+    # precede the SDK's add_subdirectory. See the comment at that site.
+
+    # Both defaults are set before project() -- see the comment there for why
+    # they cannot be set here. This is the check that the result is usable.
+    list(LENGTH CMAKE_OSX_ARCHITECTURES _rations_arch_count)
+    if(_rations_arch_count GREATER 1)
+        message(FATAL_ERROR
+            "[Rations] CMAKE_OSX_ARCHITECTURES names ${_rations_arch_count} architectures "
+            "(${CMAKE_OSX_ARCHITECTURES}). Configure one slice at a time and join them with "
+            "lipo -- see scripts/makedist-mac.sh. A fat build cannot run its own gates.")
+    endif()
+    message(STATUS "[Rations] macOS slice: ${CMAKE_OSX_ARCHITECTURES}, deployment target "
+                   "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+else()
+endif()
+
+# ---------------------------------------------------------------------------
+# Editor graphics stack: Cairo drawing, FreeType text, PNG layers and runtime
+# SVG rasterisation. Kept as its own library so the offline render tool can
+# exercise exactly the code the editor paints with, without X11 or VST3.
+# ---------------------------------------------------------------------------
+find_package(PkgConfig REQUIRED)
+if(NAMP_WINDOWS)
+    # fontconfig is deliberately absent: there is not one Fc* call in this tree
+    # (FontStack loads its two TTFs by path), and cairo makes fontconfig optional
+    # on Windows, so requiring it here would only add a dependency nothing calls.
+    # cairo-ft.h guards its fontconfig include behind CAIRO_HAS_FC_FONT.
+    #
+    # There is no cairo-xlib either. The Windows editor composes into the same
+    # offscreen image surface the X11 one does and blits it with GDI, so cairo
+    # needs only its image backend, its FreeType font backend and PNG.
+    #
+    # These come from scripts/build-win-deps.sh; Debian packages no MinGW build
+    # of any of them. cmake/toolchain-mingw-w64.cmake points pkg-config at that
+    # prefix through PKG_CONFIG_LIBDIR.
+    #
+    # --static is required, and not merely for completeness. Everything in that
+    # sysroot is a static archive, and GNU ld resolves archives left to right in
+    # one pass: pkg-config's shared Libs: line orders them "-lz -lpng16", which
+    # is backwards for static linking and fails with undefined references to
+    # crc32/inflate/deflate out of libpng16.a. The --static line repeats -lz
+    # after -lpng16, which is exactly what the one-pass resolver needs.
+    set(PKG_CONFIG_ARGN --static)
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2)
+
+    # cairo.h declares every entry point __declspec(dllimport) unless this is
+    # defined, and cairo's own .pc file does not carry it even for a static
+    # build - so without it every cairo call fails to link as "undefined
+    # reference to __imp_cairo_*". It belongs on the imported target rather than
+    # on our own, because it describes how cairo must be USED, and it has to
+    # reach every translation unit that includes a cairo header.
+    target_compile_definitions(PkgConfig::CAIRO INTERFACE CAIRO_WIN32_STATIC_BUILD)
+elseif(NAMP_MACOS)
+    # The same shape as the Windows branch above, and for the same reasons.
+    # No fontconfig: there is not one Fc* call in this tree. No cairo-xlib and
+    # no cairo-quartz either -- the mac editor composes into the same offscreen
+    # image surface the other two do and blits it through CoreGraphics, so cairo
+    # needs its image backend, its FreeType font backend and PNG, and nothing
+    # else.
+    #
+    # --static for the reason the Windows branch spells out at length: this
+    # points at scripts/build-mac-deps.sh's from-source sysroot, everything in
+    # which is a static archive, and the shared Libs: line orders -lz before
+    # -lpng16, which a one-pass resolver cannot satisfy. Homebrew is
+    # deliberately NOT used: it ships dylibs under /opt/homebrew, and a bundle
+    # that links those is loadable on the build machine and on no other.
+    set(PKG_CONFIG_ARGN --static)
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2)
+else()
+    pkg_check_modules(CAIRO REQUIRED IMPORTED_TARGET cairo cairo-ft freetype2 fontconfig)
+    # The editor embeds into the host's X11 window; cairo-xlib paints it.
+    pkg_check_modules(CAIROX11 REQUIRED IMPORTED_TARGET cairo-xlib x11)
+endif()
+
+# What the editor's window layer needs beyond Cairo itself. On Linux that is
+# cairo-xlib and Xlib; on Windows it is GDI, because the Win32 view blits its
+# offscreen image surface through a DIB section rather than drawing to an X
+# drawable. Named once so the plug-in and the render tool cannot disagree.
+if(NAMP_WINDOWS)
+    set(NAMP_PLATFORM_GUI_LIBS user32 gdi32 msimg32)
+elseif(NAMP_MACOS)
+    # Cocoa for the NSView and its event and timer plumbing, CoreGraphics for
+    # the one CGImage blit that puts the cairo surface on screen, and
+    # CoreFoundation because macmain.cpp's bundleEntry/bundleExit take a
+    # CFBundleRef. The SDK adds CoreFoundation itself in
+    # smtg_target_make_plugin_package(); naming it here as well costs nothing
+    # and keeps this list a complete statement of what the window layer needs.
+    set(NAMP_PLATFORM_GUI_LIBS
+        "-framework Cocoa" "-framework CoreGraphics" "-framework CoreFoundation")
+else()
+    set(NAMP_PLATFORM_GUI_LIBS PkgConfig::CAIROX11)
+endif()
+
+# The graphics stack, built by the shared recipe in cmake/nampcore.cmake. No extra sources: the
+# file browser is compiled into the plug-in and the LV2 modules here rather than into this library,
+# which is where the rack puts it, and that difference is why core/ is a source tree and not one
+# prebuilt library.
+namp_add_gfx(NampGfx CAIRO PkgConfig::CAIRO)
+
+
+# ---------------------------------------------------------------------------
+# The NAM DSP core as a static library, linked --whole-archive by the plug-in, plus the INTERFACE
+# library carrying what it takes to compile against its headers. Both are built by the shared
+# recipe in cmake/nampcore.cmake, which is where the reasons for each of its parts are written
+# down -- why there are two targets, why the mac arm of namp_link_whole_dsp() needs the second one,
+# and what NAM_ENABLE_A2_FAST is for.
+#
+# INCLUDE_DIRS is this product's own addition: deps/ holds the pedalboard's vendored DSP, reached
+# as "bbm/..." and "wdl/..." so the provenance of each block stays visible at every include site.
+# Both trees are header-only, so there is nothing to add to the source list.
+# ---------------------------------------------------------------------------
+namp_add_dsp(NampDsp NampDspHeaders INCLUDE_DIRS ${NAMP_PRODUCT_DIR}/deps)
+
+# ---------------------------------------------------------------------------
+# Art, fonts and captures, named once.
+#
+# The bundle copies all of these into Contents/Resources, and the offline panel
+# render audits the art list so a layer that is drawn can never be absent from
+# the build. Naming them in one place is what keeps those two from disagreeing.
+# ---------------------------------------------------------------------------
+set(NAMP_FONT_FILES
+    fonts/Michroma-Regular.ttf
+    fonts/Roboto-Regular.ttf
+)
+# The *-base.png files in resources/img are the untrimmed source exports that
+# gui/make_assets.sh reads; they are deliberately NOT in this list. What ships is
+# what the editor loads.
+set(NAMP_IMG_FILES
+    img/head.png
+    # The head's title badge, drawn above "Rations" — see kBadgeH in src/geometry.h.
+    img/namp-badge.png
+    img/cabinet.png
+    img/dial.png
+    img/led_on.png
+    img/led_off.png
+    img/switch_up_ring.png
+    img/switch_down_ring.png
+    img/meter_track.png
+    # The pedalboard. Five blank enclosures, each stored at the art's own trimmed
+    # size and downscaled at draw time (the cabinet's arrangement, not the head's),
+    # plus the chrome footswitch cap. The knob and the two LEDs are NOT repeated
+    # here: the pedals blit the very same dial.png / led_on.png / led_off.png the
+    # amp head does. Built by gui/make_pedals.sh from resources/img/pedals/, which
+    # holds the untrimmed exports and the design references and ships nothing.
+    img/pedal-boost.png
+    img/pedal-chorus.png
+    img/pedal-flanger.png
+    img/pedal-delay.png
+    img/pedal-reverb.png
+    img/pedal_switch.png
+    img/Folder.svg
+    img/File.svg
+    img/Gear.svg
+    img/SlimmableIcon.svg
+    img/Cross.svg
+    img/ArrowLeft.svg
+    img/ArrowRight.svg
+)
+# No badge: the "Rations" wordmark is drawn as text in Michroma at run time.
+
+set(NAMP_FONT_PATHS "")
+foreach(_res IN LISTS NAMP_FONT_FILES)
+    list(APPEND NAMP_FONT_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
+endforeach()
+set(NAMP_IMG_PATHS "")
+foreach(_res IN LISTS NAMP_IMG_FILES)
+    list(APPEND NAMP_IMG_PATHS "${NAMP_PRODUCT_DIR}/resources/${_res}")
+endforeach()
+
+# No captures are built into the bundle, and nothing here looks for any.
+#
+# They used to be: four banks were globbed out of a captures/ directory, installed
+# into Contents/Resources/captures/<channel>/, and a clone without them failed
+# configure outright. That made the plug-in an amp head that could only play one
+# person's amps, and made every build of it depend on files that are deliberately
+# not in this repository. Both are gone. The four banks are now whatever folder or
+# file the user picks on the settings page, remembered by absolute path in the
+# state blob, and an instance with nothing loaded outputs ramped silence rather
+# than failing to exist.
+#
+# The offline proofs still need captures to run against, and take a --captures
+# argument (or $RATIONS_TEST_CAPTURES) rather than reading them out of a bundle.
+
+# ---------------------------------------------------------------------------
+# The plug-in.
+#
+# The native window class is picked here the same way ${NAMP_CORE_DIR}/platform/plugview.h
+# picks the type it declares, so exactly one of the two is ever compiled: the
+# other one's headers do not exist on this platform.
+if(NAMP_WINDOWS)
+    set(NAMP_PLATFORM_VIEW_SOURCES
+        ${NAMP_CORE_DIR}/platform/win32plugview.h
+        ${NAMP_CORE_DIR}/platform/win32plugview.cpp
+    )
+elseif(NAMP_MACOS)
+    set(NAMP_PLATFORM_VIEW_SOURCES
+        src/platform/macplugview.h
+        src/platform/macplugview.mm
+    )
+else()
+    set(NAMP_PLATFORM_VIEW_SOURCES
+        ${NAMP_CORE_DIR}/platform/x11plugview.h
+        ${NAMP_CORE_DIR}/platform/x11plugview.cpp
+    )
+endif()
+
+#
+# The sources go straight into the bundle target rather than through an
+# intermediate static library. NAMp needed that library because its standalone
+# LINKS the plug-in's sources; namp-rations-standalone LOADS the built bundle instead
+# — as a module, the way a DAW does, so the editor resolves its art through
+# dladdr by the same route in both — and therefore compiles none of this. A
+# library would only be a second name for one thing.
+# ---------------------------------------------------------------------------
+set(NAMP_PLUGIN_SOURCES
+    src/rationsids.h
+    src/version.h
+    src/geometry.h
+    src/rationsprocessor.h
+    src/rationsprocessor.cpp
+    src/rationscontroller.h
+    src/rationscontroller.cpp
+    # The state blob's string reads, shared by the two functions above that decode one.
+    ${NAMP_CORE_DIR}/statestream.h
+    ${NAMP_CORE_DIR}/rationsfactory.cpp
+    ${NAMP_CORE_DIR}/engineconfig.h
+    ${NAMP_CORE_DIR}/spscqueue.h
+    ${NAMP_CORE_DIR}/bank.h
+    ${NAMP_CORE_DIR}/nativeresampler.h
+    ${NAMP_CORE_DIR}/capturesource.h
+    ${NAMP_CORE_DIR}/capturesource.cpp
+    ${NAMP_CORE_DIR}/modelbank.h
+    ${NAMP_CORE_DIR}/modelbank.cpp
+    ${NAMP_CORE_DIR}/crossfadeengine.h
+    ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/channelrack.h
+    ${NAMP_CORE_DIR}/channelrack.cpp
+    ${NAMP_CORE_DIR}/irblend.h
+    ${NAMP_CORE_DIR}/irblend.cpp
+    ${NAMP_CORE_DIR}/midilearn.h
+    src/midilearnrows.h
+    ${NAMP_CORE_DIR}/midilearn.cpp
+    # The pedalboard. Five pedals plus the two chains they sit in; the pedals themselves are
+    # header-only until the phase that gives each one a body, so only the chain has a .cpp.
+    src/pedals/finite.h
+    src/pedals/pedal.h
+    src/pedals/boost.h
+    src/pedals/chorus.h
+    src/pedals/flanger.h
+    src/pedals/delay.h
+    src/pedals/reverb.h
+    src/pedals/pedalchain.h
+    src/pedals/pedalchain.cpp
+    src/rationsview.h
+    src/rationsview.cpp
+    ${NAMP_CORE_DIR}/filebrowser.h
+    ${NAMP_CORE_DIR}/filebrowser.cpp
+    ${NAMP_CORE_DIR}/platform/plugview.h
+    ${NAMP_PLATFORM_VIEW_SOURCES}
+)
+
+# The TARGET stays "Rations" and the PACKAGE is what carries the product name, which is the
+# whole reason this is written with PACKAGE_NAME rather than by renaming the target. The target
+# name is threaded through every target_link_libraries, add_dependencies and get_target_property
+# in this file and through nothing a user ever sees; the package name is the bundle folder
+# NAMp-rations.vst3 and the binary inside it, which is all a user sees and none of what the build
+# refers to. SOURCES_LIST is mandatory once PACKAGE_NAME is given — without it the sources land in
+# PARAMS_UNPARSED_ARGUMENTS and the target is built with none
+# (vst3sdk/cmake/modules/SMTG_AddVST3Library.cmake).
+smtg_add_vst3plugin(Rations PACKAGE_NAME "NAMp-rations" SOURCES_LIST ${NAMP_PLUGIN_SOURCES})
+
+# macplugview.mm is Objective-C++ and is deliberately built WITHOUT -fobjc-arc,
+# unlike the SDK's module_mac.mm above. It owns its NSView the way its Win32
+# sibling owns its HWND -- an explicit create/destroy pair in a C++ object -- so
+# manual retain/release is what makes the two files read alike, and ARC would
+# additionally constrain how an Objective-C pointer may be held in a C++ member.
+# Stated here because the absence of a flag is not visible at the file itself.
+
+# ---------------------------------------------------------------------------
+# Put the Windows DLL inside its own bundle.
+#
+# smtg_target_make_plugin_package() places it with
+#     foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES}) ...
+#         set_target_properties(... LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} ...)
+# and CMAKE_CONFIGURATION_TYPES is EMPTY for every single-config generator, so
+# with -G Ninja the loop body never runs: the DLL lands at the top of the build
+# tree while Contents/Resources is created (and filled) inside the bundle. The
+# result looks like a successful build and is not loadable.
+#
+# The path is read back from the properties the SDK itself set rather than
+# spelled out, so this cannot drift from the layout the rest of the SDK — and
+# module_win32.cpp's loader — expects.
+#
+# NAME. module_win32.cpp's validateBundleStructure requires the inner DLL to be
+# named exactly like the bundle folder, i.e.
+# NAMp-rations.vst3/Contents/x86_64-win/NAMp-rations.vst3, which is what the SUFFIX/PREFIX
+# produce. A DLL called Rations.dll in the right folder does not load.
+if(NAMP_WINDOWS)
+    get_target_property(RATIONS_PKG_PATH Rations SMTG_PLUGIN_PACKAGE_PATH)
+    get_target_property(RATIONS_PKG_CONTENTS Rations SMTG_PLUGIN_PACKAGE_CONTENTS)
+    get_target_property(RATIONS_WIN_ARCH Rations SMTG_WIN_ARCHITECTURE_NAME)
+
+    # smtg_target_set_vst_win_architecture_name() derives this from
+    # CMAKE_GENERATOR_PLATFORM, a Visual Studio concept that is simply unset
+    # under Ninja + MinGW; it then falls into its else() and yields x86_64-win
+    # by accident rather than by decision. Asserted so a future SDK change
+    # cannot silently move the bundle out from under the resource path
+    # resolver, which walks up two levels from the loaded module.
+    if(NOT RATIONS_WIN_ARCH STREQUAL "x86_64-win")
+        message(FATAL_ERROR
+            "[Rations] the SDK chose architecture folder '${RATIONS_WIN_ARCH}', expected "
+            "'x86_64-win'. The bundle layout and the resource path resolver both assume the "
+            "latter.")
+    endif()
+
+    set_target_properties(Rations PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${RATIONS_PKG_PATH}/${RATIONS_PKG_CONTENTS}/${RATIONS_WIN_ARCH}")
+    message(STATUS "[Rations] bundle binary -> ${RATIONS_PKG_PATH}/${RATIONS_PKG_CONTENTS}/${RATIONS_WIN_ARCH}")
+endif()
+
+# ---------------------------------------------------------------------------
+# The macOS bundle's Info.plist.
+#
+# Written here because nothing else writes it. The SDK's smtg_target_set_bundle()
+# does its plist work entirely inside if(XCODE) branches, and this project builds
+# with Ninja, so under the SDK alone the bundle would carry whatever CMake's
+# default template produces -- which knows nothing about VST3 and, in
+# particular, nothing about CFBundlePackageType BNDL or NSHighResolutionCapable.
+#
+# configure_file() into the build tree rather than pointing
+# MACOSX_BUNDLE_INFO_PLIST straight at the template: that property's own
+# substitution only understands CMake's fixed MACOSX_BUNDLE_* variable names,
+# and half of what this plist needs has no such name. Configuring it ourselves
+# means every value comes from a variable named at its site.
+#
+# The two forms of the product name are D25's and the distinction is deliberate:
+# CFBundleExecutable is IDENTITY and must match the binary CMake puts in
+# Contents/MacOS, while CFBundleName is DISPLAY and is the string a user reads.
+# stringPluginName in src/version.h is the same display string the DAW's plug-in
+# list shows, so the two cannot disagree.
+# ---------------------------------------------------------------------------
+if(NAMP_MACOS)
+    set(RATIONS_BUNDLE_EXECUTABLE "NAMp-rations")
+    set(RATIONS_BUNDLE_DISPLAY_NAME "NAMp Rations")
+    set(RATIONS_BUNDLE_IDENTIFIER "com.rations.vst3.namp-rations")
+    set(RATIONS_BUNDLE_VERSION "${PROJECT_VERSION}")
+    set(RATIONS_BUNDLE_COPYRIGHT
+        "MIT licence; NAM DSP core (C) Steven Atkinson")
+    configure_file(
+        "${NAMP_PRODUCT_DIR}/packaging/mac/Info.plist.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/mac/Info.plist"
+        @ONLY)
+    set_target_properties(Rations PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/mac/Info.plist")
+endif()
+
+smtg_target_configure_version_file(Rations)
+
+# Title (Michroma) and body (Roboto) fonts, loaded straight out of the bundle by
+# FreeType — no system font installation needed.
+smtg_target_add_plugin_resources(Rations
+    RESOURCES ${NAMP_FONT_PATHS}
+    OUTPUT_SUBDIRECTORY fonts
+)
+
+# Panel art. Copied into the bundle rather than embedded, so it can be replaced
+# without a rebuild and so the resource resolver finds it the same way in the
+# bundle and in the offline render rig.
+smtg_target_add_plugin_resources(Rations
+    RESOURCES ${NAMP_IMG_PATHS}
+    OUTPUT_SUBDIRECTORY img
+)
+
+target_compile_features(Rations PUBLIC cxx_std_17)
+target_compile_options(Rations PRIVATE -ffast-math -Wall)
+if(NAMP_MACOS)
+    # target_compile_features' cxx_std_17 sets CXX_STANDARD and nothing else, so
+    # macplugview.mm would compile at whatever the compiler's default Objective-C++
+    # dialect happens to be. It uses C++17 (constexpr, nullptr-typed members,
+    # if-with-initialiser), and a toolchain whose default moved would either fail
+    # to build it or silently build it under different rules from the rest of the
+    # bundle.
+    set_target_properties(Rations PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+endif()
+target_include_directories(Rations PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
+
+target_link_libraries(Rations
+    PRIVATE
+        sdk
+        NampGfx
+        ${NAMP_PLATFORM_GUI_LIBS}
+)
+namp_link_whole_dsp(Rations)
+
+# The visibility preset above covers every object we compile; it cannot cover
+# the SDK's own archives, which are built in the SDK's scope at default
+# visibility and would still put ~800 Steinberg symbols into this bundle's
+# dynamic table. --exclude-libs binds every symbol coming out of a static
+# archive locally, whatever visibility it was compiled with, which leaves the
+# three entry points (compiled into this target, and individually marked
+# default) as the bundle's entire public surface. Two plug-ins built against
+# different SDK versions in one host is the same interposition hazard as the
+# NAM registry, one layer down. --whole-archive still applies: it decides which
+# objects are pulled in, and the DSP core's self-registering architectures are
+# registered from .init_array, which needs no exported symbol.
+#
+# ld64 has no --exclude-libs, and does not need one: it takes an explicit
+# allow-list instead, which is the stricter of the two forms -- a deny-all on
+# archives leaves anything compiled INTO the target exported if its visibility
+# says so, while an allow-list names the entire public surface outright. The
+# file used is the SDK's own macexport.exp, which holds exactly the three
+# entry points macmain.cpp defines (_GetPluginFactory, _bundleEntry,
+# _bundleExit), so the mac bundle's exports are the same three the Windows one
+# gates on and the Linux one asserts.
+if(NAMP_MACOS)
+    target_link_options(Rations PRIVATE
+        "-Wl,-exported_symbols_list,${VST3_SDK_DIR}/public.sdk/source/main/macexport.exp")
+else()
+    target_link_options(Rations PRIVATE -Wl,--exclude-libs,ALL)
+endif()
+
+# ---------------------------------------------------------------------------
+# panelrender — offline render of each editor page to a PNG, plus an audit of
+# every art asset and both fonts. Links NampGfx only: no X11, no host, no
+# VST3 objects, so the graphics stack and the layout can be checked long before
+# the editor exists, and a missing asset fails the build gate instead of
+# silently degrading to a flat rectangle at run time.
+#
+# On Windows this is the FIRST gate, and the reason it is worth having: it
+# proves cairo, FreeType, PNG decode, NanoSVG and the whole of src/gfx work in
+# the cross build before a single line of window code exists.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# rations_offline — headless host for the built bundle. Loads it the way a DAW
+# does and renders a signal through the whole chain, which is the only thing
+# that proves the BUNDLED bank resolves and the DSP is actually in circuit.
+# ---------------------------------------------------------------------------
+if(NAMP_WINDOWS)
+    set(RATIONS_MODULE_LOADER
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_win32.cpp)
+elseif(NAMP_MACOS)
+    # Objective-C++: it loads the bundle through CFBundle and reads
+    # moduleinfo.json with NSBundle. enable_language(OBJCXX) is done just after
+    # project(), and CMake picks the OBJCXX compiler off the .mm extension
+    # without any per-target property.
+    set(RATIONS_MODULE_LOADER
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_mac.mm)
+else()
+    set(RATIONS_MODULE_LOADER
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/module_linux.cpp)
+endif()
+
+# Two things module_mac.mm needs that its Linux and Windows siblings do not, both
+# taken from the SDK's own validator target rather than guessed
+# (public.sdk/samples/vst-hosting/validator/CMakeLists.txt:96-115, 135-141):
+#
+#   -fobjc-arc  the file is written for Automatic Reference Counting. Without the
+#               flag it compiles under manual retain/release, where its ARC-managed
+#               NSBundle and NSString locals are simply leaked rather than rejected
+#               — a silent miscompilation, not an error.
+#   Cocoa       the framework the SDK links for exactly this file when the generator
+#               is not Xcode, which is our case.
+#
+# set_source_files_properties is directory-scoped, so this one call covers every
+# tool below that names ${RATIONS_MODULE_LOADER}. RATIONS_MODULE_LOADER_LIBS is
+# empty on the other two platforms and disappears from their link lines.
+set(RATIONS_MODULE_LOADER_LIBS "")
+if(NAMP_MACOS)
+    set_source_files_properties(${RATIONS_MODULE_LOADER} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    find_library(RATIONS_COCOA_FRAMEWORK Cocoa REQUIRED)
+    set(RATIONS_MODULE_LOADER_LIBS ${RATIONS_COCOA_FRAMEWORK})
+endif()
+
+add_executable(rations_offline
+    ${NAMP_PRODUCT_DIR}/tools/rations_offline.cpp
+    ${RATIONS_MODULE_LOADER}
+    # For MemoryStream, which --save-state / --load-state need and which sdk_hosting
+    # does not carry. Same reason rations_ircheck names it.
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+)
+# The nlohmann header is here so the offline proof can read a capture's stated loudness straight
+# out of the .nam and assert that Normalized moves the output by exactly the amount that number
+# says it should. Header-only, and nothing else of the DSP is linked into this tool.
+target_include_directories(rations_offline PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES}
+    ${NAM_CORE_DIR}/Dependencies/nlohmann)
+target_link_libraries(rations_offline PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
+target_compile_features(rations_offline PRIVATE cxx_std_17)
+target_compile_options(rations_offline PRIVATE -Wall)
+add_dependencies(rations_offline Rations)
+
+# ---------------------------------------------------------------------------
+# rations_midicheck - the offline proof for the MIDI learn table and the channel
+# switching it drives. Drives the BUILT BUNDLE, because the three routes a
+# footswitch's messages take into a VST3 plug-in are not alike and only two of
+# them are MIDI-shaped by the time they arrive: a CC and a Program Change come
+# in as parameter changes, and only a Note On comes in as an event. Testing the
+# table in isolation would test the one part that was never in doubt.
+#
+# The phase's real gate is the author's own footswitch with the editor closed;
+# this covers everything between the pedal and the audio.
+# ---------------------------------------------------------------------------
+add_executable(rations_midicheck
+    ${NAMP_PRODUCT_DIR}/tools/rations_midicheck.cpp
+    ${RATIONS_MODULE_LOADER}
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+)
+target_include_directories(rations_midicheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
+target_link_libraries(rations_midicheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
+target_compile_features(rations_midicheck PRIVATE cxx_std_17)
+target_compile_options(rations_midicheck PRIVATE -Wall)
+add_dependencies(rations_midicheck Rations)
+
+# ---------------------------------------------------------------------------
+# rations_ircheck — the offline proof for the cabinet's two IR slots (D10).
+# Drives the BUILT BUNDLE, loading IRs through the same IConnectionPoint
+# messages the editor sends and turning the blend through the same parameter
+# queue a DAW uses, because the two promises being checked are about the
+# plug-in's behaviour and not about an expression: that a one-IR user gets
+# bit-identical audio whatever the dial does, and that the middle of the dial
+# neither bumps nor digs a hole. Which curve achieves the second depends on
+# how correlated the two files are, so it is measured rather than argued.
+# ---------------------------------------------------------------------------
+add_executable(rations_ircheck
+    ${NAMP_CORE_DIR}/tools/rations_ircheck.cpp
+    ${RATIONS_MODULE_LOADER}
+    # For MemoryStream, which the save/reload check needs and which sdk_hosting
+    # does not carry.
+    ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+)
+target_include_directories(rations_ircheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
+target_link_libraries(rations_ircheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
+target_compile_features(rations_ircheck PRIVATE cxx_std_17)
+target_compile_options(rations_ircheck PRIVATE -Wall)
+add_dependencies(rations_ircheck Rations)
+
+# ---------------------------------------------------------------------------
+# rations_fadecheck — the offline proof that the gain crossfade is exact rather
+# than merely smooth. Links the DSP core directly: no VST3, no plug-in, no
+# host, so what it measures is the arithmetic and nothing around it.
+# ---------------------------------------------------------------------------
+add_executable(rations_fadecheck
+    ${NAMP_PRODUCT_DIR}/tools/rations_fadecheck.cpp
+    ${NAMP_CORE_DIR}/capturesource.cpp
+)
+target_include_directories(rations_fadecheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES})
+# --whole-archive for the same reason the plug-in needs it: each network
+# architecture registers itself through a file-scope static initialiser, and the
+# linker drops those object files from a normal static link because nothing
+# references them by name. The symptom is a clean build that fails at run time
+# with "No config parser registered for architecture: WaveNet".
+namp_link_whole_dsp(rations_fadecheck)
+target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
+target_compile_options(rations_fadecheck PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
+# rations_jackcheck — the LIVE gate for the channel switch, and the measurement
+# that settles kCatchupRatio. Loads the built bundle the way a DAW does and
+# drives it from a real JACK process callback, stomping kChannelId through a
+# parameter-change queue. Linux only, and only when JACK's development headers
+# are present: it is a measurement rig, not part of the plug-in, and its absence
+# must not stop the plug-in from building.
+# ---------------------------------------------------------------------------
+# NAMP_LINUX rather than NOT NAMP_WINDOWS, which is what this said while
+# there were two platforms and which would now silently offer to build a JACK
+# client and an X11 standalone on macOS. JACK does exist there; it is not what a
+# mac user has, and standalone/ is X11 and Linux::IRunLoop throughout.
+if(NAMP_LINUX)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(NAMP_JACK QUIET jack)
+    endif()
+    if(NAMP_JACK_FOUND)
+        add_executable(rations_jackcheck
+            ${NAMP_PRODUCT_DIR}/tools/rations_jackcheck.cpp
+            ${RATIONS_MODULE_LOADER}
+            ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+            ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+        )
+        target_include_directories(rations_jackcheck
+            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_JACK_INCLUDE_DIRS})
+        target_link_libraries(rations_jackcheck PRIVATE sdk_hosting ${NAMP_JACK_LIBRARIES})
+        target_link_directories(rations_jackcheck PRIVATE ${NAMP_JACK_LIBRARY_DIRS})
+        target_compile_features(rations_jackcheck PRIVATE cxx_std_17)
+        target_compile_options(rations_jackcheck PRIVATE -Wall)
+        add_dependencies(rations_jackcheck Rations)
+
+        # -------------------------------------------------------------------
+        # namp-rations-standalone — the amp without a DAW: one X window, the plug-in's
+        # own editor embedded in it, a Linux::IRunLoop the editor registers with,
+        # and a JACK client driving the processor. A footswitch reaches it on a
+        # JACK MIDI port, and what the session was playing is kept in
+        # ~/.config/Rations/standalone.state.
+        #
+        # It is a HOST: the bundle is loaded as a module rather than linked in, so
+        # the editor's dladdr-based resource lookup (core/platform/respath.cpp)
+        # resolves Contents/Resources exactly as it does inside a DAW, and there is
+        # no second compilation of the plug-in to keep in step with the first.
+        # Nothing of src/ is compiled here; the include path is for rationsids.h's
+        # parameter IDs alone.
+        #
+        # It shares the JACK probe above deliberately - one answer to "is JACK
+        # here", not two - and, like the gate, its absence must never stop the
+        # plug-in from building.
+        # -------------------------------------------------------------------
+        add_executable(namp-rations-standalone
+            ${NAMP_PRODUCT_DIR}/standalone/main.cpp
+            ${NAMP_PRODUCT_DIR}/standalone/runloop.h
+            ${NAMP_PRODUCT_DIR}/standalone/runloop.cpp
+            ${NAMP_PRODUCT_DIR}/standalone/jackclient.h
+            ${NAMP_PRODUCT_DIR}/standalone/jackclient.cpp
+            ${NAMP_CORE_DIR}/standalone/midiroute.h
+            ${NAMP_PRODUCT_DIR}/standalone/midiroute.cpp
+            ${RATIONS_MODULE_LOADER}
+            ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+            # The event list carries Note On to the plug-in - the one of the three
+            # footswitch messages that is still MIDI when it arrives. MemoryStream
+            # is what the settings file is read and written through. Neither is in
+            # sdk_hosting, which is why rations_midicheck names them both too.
+            ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+            ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+            ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
+        )
+        target_include_directories(namp-rations-standalone
+            PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_JACK_INCLUDE_DIRS})
+        target_link_libraries(namp-rations-standalone
+            PRIVATE sdk_hosting ${NAMP_JACK_LIBRARIES} ${NAMP_PLATFORM_GUI_LIBS})
+        target_link_directories(namp-rations-standalone PRIVATE ${NAMP_JACK_LIBRARY_DIRS})
+        target_compile_features(namp-rations-standalone PRIVATE cxx_std_17)
+        target_compile_options(namp-rations-standalone PRIVATE -Wall)
+        add_dependencies(namp-rations-standalone Rations)
+    else()
+        message(STATUS "jack not found - rations_jackcheck (the live switch gate) and "
+                       "namp-rations-standalone will not be built")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# rations_switchcheck — the offline proof that a CHANNEL change is exact rather
+# than merely smooth. The crossfade proof next door covers a knob turn, where
+# the incoming capture is already running at zero weight before it is needed;
+# this one covers a footswitch stomp, where it is not, and where the whole
+# design rests on replaying the input ring into a model that has no history at
+# all. Drives the shipped ChannelRack, not a paraphrase of it.
+# ---------------------------------------------------------------------------
+add_executable(rations_switchcheck
+    ${NAMP_CORE_DIR}/tools/rations_switchcheck.cpp
+    ${NAMP_CORE_DIR}/capturesource.cpp
+    ${NAMP_CORE_DIR}/modelbank.cpp
+    ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/channelrack.cpp
+    # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
+    # from throwing out of the worker thread.
+    ${NAMP_CORE_DIR}/platform/respath.cpp
+    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
+)
+target_include_directories(rations_switchcheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
+namp_link_whole_dsp(rations_switchcheck)
+target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
+target_compile_options(rations_switchcheck PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
+# rations_racecheck - the ThreadSanitizer gate for the prime worker.
+#
+# Background priming is the first genuine concurrent access to the DSP objects
+# in this tree, and the handover is proved by a sanitizer rather than by
+# reading, which is the rule this project holds to for every concurrent claim
+# it makes. Built normally it is a useful stress test; built with
+# -DRATIONS_ENABLE_TSAN=ON in its own build directory it is the gate.
+#
+# TSan instruments the whole program, so this cannot share a build directory
+# with anything else, and it is deliberately built at -O1 rather than -Ofast:
+# TSan needs the accesses it is watching to actually happen.
+# ---------------------------------------------------------------------------
+option(NAMP_ENABLE_TSAN "Build rations_racecheck with ThreadSanitizer" OFF)
+
+add_executable(rations_racecheck
+    ${NAMP_CORE_DIR}/tools/rations_racecheck.cpp
+    ${NAMP_CORE_DIR}/capturesource.cpp
+    ${NAMP_CORE_DIR}/modelbank.cpp
+    ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/channelrack.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
+    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
+)
+target_include_directories(rations_racecheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
+namp_link_whole_dsp(rations_racecheck)
+target_compile_features(rations_racecheck PRIVATE cxx_std_20)
+target_compile_options(rations_racecheck PRIVATE -Wall)
+# TSan is a Linux gate and always was. MinGW ships no ThreadSanitizer runtime,
+# so asking for it in a cross build fails at link with an unresolved
+# __tsan_init rather than saying what is wrong. Refuse it here instead, and say
+# so, rather than letting the option look as though it did something.
+if(NAMP_ENABLE_TSAN AND NAMP_WINDOWS)
+    message(WARNING
+        "[Rations] NAMP_ENABLE_TSAN is ignored for the Windows cross build: MinGW has no "
+        "ThreadSanitizer runtime. Run the race gate natively on Linux.")
+elseif(NAMP_ENABLE_TSAN)
+    target_compile_options(rations_racecheck PRIVATE -fsanitize=thread -g -O1)
+    target_link_options(rations_racecheck PRIVATE -fsanitize=thread)
+endif()
+
+# ---------------------------------------------------------------------------
+# rations_rtcheck — counts allocations on the audio path using the DSP core's
+# own malloc/free interception harness. Built without optimisation and with
+# assertions live, as that harness requires.
+#
+# LINUX ONLY, and it has to be. The harness intercepts allocation by resolving
+# the real malloc through dlsym(RTLD_NEXT, ...) — see the DSP core's
+# tools/test/allocation_tracking.h — which is an ELF/glibc mechanism with no PE
+# equivalent, and that file is in a read-only upstream tree we do not patch. So
+# the no-allocation-on-the-RT-path gate is proved on Linux and inherited by the
+# other two: the audio path is the same source, and the platform layer adds
+# nothing to it.
+#
+# macOS is excluded for the same reason Windows is, and had to be named rather
+# than left to fall through the old NOT NAMP_WINDOWS: dlsym(RTLD_NEXT, ...)
+# compiles and links on Darwin, so mac would have built this target and run a
+# harness that does not intercept anything there -- dyld interposition is
+# DYLD_INSERT_LIBRARIES plus a __DATA,__interpose section, which that upstream
+# file does not implement. A gate that passes because it measured nothing is
+# worse than one that is absent.
+# ---------------------------------------------------------------------------
+if(NAMP_LINUX)
+add_executable(rations_rtcheck
+    ${NAMP_PRODUCT_DIR}/tools/rations_rtcheck.cpp
+    ${NAMP_CORE_DIR}/irblend.cpp
+    ${NAMP_CORE_DIR}/midilearn.cpp
+    ${NAMP_CORE_DIR}/capturesource.cpp
+    ${NAMP_CORE_DIR}/modelbank.cpp
+    ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/channelrack.cpp
+    ${NAMP_PRODUCT_DIR}/src/pedals/pedalchain.cpp
+    # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
+    # from throwing out of the worker thread. Linked in rather than taken from
+    # NampGfx because this target deliberately links no graphics at all — it
+    # is measuring allocations on the audio path.
+    ${NAMP_CORE_DIR}/platform/respath.cpp
+    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
+    ${NAM_CORE_DIR}/tools/test/allocation_tracking.cpp
+)
+# The SDK is on the include path here for headers only - nothing from it is
+# linked and no VST3 object is created. midilearn.h names ParamID, because what
+# a learned pedal performs is a parameter, and a counted path that could not see
+# that header would be counting a copy of the matcher rather than the one that
+# ships.
+target_include_directories(rations_rtcheck
+    PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAM_CORE_DIR}/tools ${VST3_SDK_DIR})
+namp_link_whole_dsp(rations_rtcheck)
+target_compile_features(rations_rtcheck PRIVATE cxx_std_20)
+# The interception harness needs real calls to operator new, so the optimiser
+# must not be allowed to elide them, and NDEBUG must not disable the checks.
+target_compile_options(rations_rtcheck PRIVATE -Wall -O0 -UNDEBUG)
+endif()
+
+# ---------------------------------------------------------------------------
+# rations_pedalcheck — measures the pedalboard's DSP against the circuit it
+# claims to model. Links the pedal sources directly rather than driving the
+# bundle: the PRE chain is upstream of the amp models, so anything measured at
+# the plug-in's output has four neural captures and a cabinet in front of it.
+# ---------------------------------------------------------------------------
+add_executable(rations_pedalcheck ${NAMP_PRODUCT_DIR}/tools/rations_pedalcheck.cpp)
+target_include_directories(rations_pedalcheck
+    PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_PRODUCT_DIR}/deps ${AUDIO_DSP_TOOLS_DIR} ${VST3_SDK_DIR})
+target_compile_features(rations_pedalcheck PRIVATE cxx_std_17)
+target_compile_options(rations_pedalcheck PRIVATE -Wall -Wextra -O2)
+
+# midilearn.cpp comes along because the settings page's text is not decoration:
+# what a binding reads as is what the audit has to measure, so the tool formats
+# it with the same function the panel does rather than with a mock string.
+add_executable(panelrender ${NAMP_PRODUCT_DIR}/tools/panelrender.cpp
+                           ${NAMP_CORE_DIR}/midilearn.cpp)
+target_link_libraries(panelrender PRIVATE NampGfx)
+target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
+target_compile_options(panelrender PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
+# The LV2 build: rations.lv2, a second FORMAT rather than a second plug-in.
+#
+# Both shared objects host the very same C++ objects a VST3 DAW loads -- one a
+# RationsProcessor driven through IAudioProcessor, the other a RationsController
+# and a RationsEditorView driven through IPlugView -- so there is one DSP path,
+# one editor, and one state format, and everything this project has measured
+# about them is a statement about this build too. lv2/rationslv2.h carries the
+# reasoning; lv2/rations_lv2_ui.cpp carries the run-loop half of it.
+#
+# Linux only, because the editor half is X11: ui:X11UI is the only UI type
+# declared, and ${NAMP_CORE_DIR}/platform/x11plugview.cpp is the window underneath it. The
+# other two platforms ship the VST3 bundle and nothing else, as they already do.
+# ---------------------------------------------------------------------------
+if(NAMP_LINUX)
+    pkg_check_modules(RATIONS_LV2 QUIET lv2)
+    # lilv is the reference discovery library and is what rations_lv2check asks.
+    # It is a TEST dependency only: nothing in the bundle links it.
+    pkg_check_modules(RATIONS_LILV QUIET lilv-0)
+endif()
+
+if(NAMP_LINUX AND RATIONS_LV2_FOUND)
+    # Reported rather than assumed: any version-sensitive fact has to record the
+    # version it was checked against, and the system package and the pristine
+    # reference checkout under ~/third_party/source-lv2 are not the same release.
+    message(STATUS "LV2 ${RATIONS_LV2_VERSION} found - building rations.lv2")
+
+    set(RATIONS_LV2_BUNDLE "${CMAKE_BINARY_DIR}/lv2/rations.lv2")
+
+    # --- the TTL generator -------------------------------------------------
+    # Not a hand-written pair of .ttl files: an LV2 bundle states every
+    # parameter's range, default, step count and name, and those already exist
+    # once in the controller. This links the real controller, asks it, and
+    # refuses to write anything when the port table disagrees with it.
+    add_executable(rations_ttlgen ${NAMP_PRODUCT_DIR}/tools/rations_ttlgen.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationscontroller.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationsview.cpp
+        ${NAMP_CORE_DIR}/filebrowser.cpp
+        ${NAMP_CORE_DIR}/midilearn.cpp
+        ${NAMP_PLATFORM_VIEW_SOURCES}
+    )
+    target_include_directories(rations_ttlgen
+        PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
+    target_link_libraries(rations_ttlgen
+        PRIVATE sdk NampGfx ${NAMP_PLATFORM_GUI_LIBS})
+    namp_link_whole_dsp(rations_ttlgen)
+    target_compile_features(rations_ttlgen PRIVATE cxx_std_17)
+    target_compile_options(rations_ttlgen PRIVATE -Wall)
+
+    # --- the DSP half ------------------------------------------------------
+    # The same sources the VST3 bundle compiles, minus the editor and minus the
+    # factory: an LV2 plug-in has one entry point and it is not GetPluginFactory.
+    add_library(rations_lv2 MODULE
+        ${NAMP_PRODUCT_DIR}/lv2/rations_lv2.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/lv2message.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/lv2message.h
+        ${NAMP_PRODUCT_DIR}/lv2/rationslv2.h
+        ${NAMP_PRODUCT_DIR}/src/rationsprocessor.cpp
+        ${NAMP_CORE_DIR}/capturesource.cpp
+        ${NAMP_CORE_DIR}/modelbank.cpp
+        ${NAMP_CORE_DIR}/crossfadeengine.cpp
+        ${NAMP_CORE_DIR}/channelrack.cpp
+        ${NAMP_CORE_DIR}/irblend.cpp
+        ${NAMP_CORE_DIR}/midilearn.cpp
+        ${NAMP_PRODUCT_DIR}/src/pedals/pedalchain.cpp
+        ${NAMP_CORE_DIR}/platform/respath.cpp
+        ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
+        # The three SDK helpers a HOST needs and a plug-in does not, which is why
+        # the `sdk` target does not carry them: the pre-allocated parameter and
+        # event queues run() fills, and the memory stream getState/setState are
+        # handed. The JACK standalone gets the same three from sdk_hosting; this
+        # takes the files, because sdk_hosting also brings a module loader and a
+        # plug-in provider that an LV2 bundle has no use for.
+        ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/parameterchanges.cpp
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/eventlist.cpp
+    )
+    target_include_directories(rations_lv2
+        PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
+    target_link_libraries(rations_lv2 PRIVATE sdk)
+    namp_link_whole_dsp(rations_lv2)
+    target_compile_features(rations_lv2 PRIVATE cxx_std_17)
+    # -ffast-math to match the VST3 bundle exactly. The pedals' behaviour was
+    # measured under it (D26), and a second build of the same DSP at a different
+    # floating-point contract would be a second set of numbers.
+    target_compile_options(rations_lv2 PRIVATE -ffast-math -Wall)
+
+    # --- the UI half -------------------------------------------------------
+    add_library(rations_lv2_ui MODULE
+        ${NAMP_PRODUCT_DIR}/lv2/rations_lv2_ui.cpp
+        ${NAMP_PRODUCT_DIR}/lv2/lv2message.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationscontroller.cpp
+        ${NAMP_PRODUCT_DIR}/src/rationsview.cpp
+        ${NAMP_CORE_DIR}/filebrowser.cpp
+        ${NAMP_CORE_DIR}/midilearn.cpp
+        ${NAMP_PLATFORM_VIEW_SOURCES}
+        # setComponentState takes an IBStream, and the state blob arrives from the
+        # DSP half as bytes; MemoryStream is what turns one into the other.
+        ${VST3_SDK_DIR}/public.sdk/source/common/memorystream.cpp
+    )
+    target_include_directories(rations_lv2_ui
+        PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${RATIONS_LV2_INCLUDE_DIRS})
+    target_link_libraries(rations_lv2_ui
+        PRIVATE sdk NampGfx ${NAMP_PLATFORM_GUI_LIBS})
+    target_compile_features(rations_lv2_ui PRIVATE cxx_std_17)
+    target_compile_options(rations_lv2_ui PRIVATE -ffast-math -Wall)
+
+    # The bundle's file names are fixed by the TTL the generator writes, so the
+    # usual lib<name>.so would leave a manifest naming a binary that is not
+    # there.
+    foreach(_lv2_target rations_lv2 rations_lv2_ui)
+        string(REPLACE "rations_lv2_ui" "rations_ui" _lv2_name "${_lv2_target}")
+        string(REPLACE "rations_lv2" "rations" _lv2_name "${_lv2_name}")
+        set_target_properties(${_lv2_target} PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "${_lv2_name}"
+            LIBRARY_OUTPUT_DIRECTORY "${RATIONS_LV2_BUNDLE}"
+            POSITION_INDEPENDENT_CODE ON
+            # Two plug-ins in one host process that both export the same inline
+            # or template symbol can be merged by the dynamic linker through
+            # STB_GNU_UNIQUE, leaving one of them running the other's code. This
+            # tree will ship the VST3 and the LV2 of the SAME plug-in on Linux,
+            # so a host with both installed is the collision path -- and the NAM
+            # architecture registry is a file-scope static initialiser, which is
+            # exactly the kind of symbol involved. Hidden by default, and the
+            # archives bound locally below, leaves lv2_descriptor and
+            # lv2ui_descriptor (which carry LV2_SYMBOL_EXPORT) as the entire
+            # public surface. scripts/lv2-gate.sh measures that rather than
+            # trusting it.
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON
+        )
+        target_link_options(${_lv2_target} PRIVATE -Wl,--exclude-libs,ALL)
+    endforeach()
+
+    # --- the bundle --------------------------------------------------------
+    # Art and fonts go in beside the binaries, which is the LV2 layout, and the
+    # UI is handed that directory as instantiate()'s bundle_path. A VST3 bundle
+    # keeps them two levels up under Contents/Resources instead, which is why
+    # respath.cpp grew an explicit override rather than a second layout rule.
+    set(RATIONS_LV2_STAMPS "")
+    foreach(_res IN LISTS NAMP_FONT_FILES NAMP_IMG_FILES)
+        set(_out "${RATIONS_LV2_BUNDLE}/${_res}")
+        add_custom_command(OUTPUT "${_out}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${NAMP_PRODUCT_DIR}/resources/${_res}" "${_out}"
+            DEPENDS "${NAMP_PRODUCT_DIR}/resources/${_res}"
+            COMMENT "lv2 bundle: ${_res}")
+        list(APPEND RATIONS_LV2_STAMPS "${_out}")
+    endforeach()
+
+    add_custom_command(
+        OUTPUT "${RATIONS_LV2_BUNDLE}/manifest.ttl" "${RATIONS_LV2_BUNDLE}/rations.ttl"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RATIONS_LV2_BUNDLE}"
+        COMMAND rations_ttlgen "${RATIONS_LV2_BUNDLE}"
+        DEPENDS rations_ttlgen
+        COMMENT "lv2 bundle: manifest.ttl and rations.ttl (checked against the controller)")
+
+    add_custom_target(rations_lv2_bundle ALL
+        DEPENDS "${RATIONS_LV2_BUNDLE}/manifest.ttl" "${RATIONS_LV2_BUNDLE}/rations.ttl"
+                ${RATIONS_LV2_STAMPS} rations_lv2 rations_lv2_ui)
+
+    # --- the bundle's own gate ---------------------------------------------
+    # What a host actually sees, asked of lilv rather than of the source tree.
+    # rations_ttlgen checks the code against the controller; this checks the
+    # BUNDLE against the code, loads the binary, runs it and round-trips its
+    # state — none of which the ordinary build can say anything about, and all
+    # of which fail silently at runtime rather than at build time.
+    if(RATIONS_LILV_FOUND)
+        # lv2message.cpp comes along rather than being restated: the capture test
+        # writes a message with the plug-in's OWN codec, so what it exercises is
+        # the wire format the two halves use and not a second description of it.
+        # vstinitiids.cpp is where the VST3 interface IIDs are DEFINED rather than
+        # declared; a host-side translation unit that uses IMessage and
+        # IAttributeList needs it, and the SDK expects each host to name it.
+        add_executable(rations_lv2check ${NAMP_PRODUCT_DIR}/tools/rations_lv2check.cpp
+            ${NAMP_PRODUCT_DIR}/lv2/lv2message.cpp
+            ${VST3_SDK_DIR}/public.sdk/source/vst/vstinitiids.cpp
+            ${VST3_SDK_DIR}/pluginterfaces/base/coreiids.cpp
+            ${VST3_SDK_DIR}/pluginterfaces/base/funknown.cpp)
+        target_include_directories(rations_lv2check
+            PRIVATE ${NAMP_PRODUCT_DIR} ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES}
+            ${VST3_SDK_DIR}
+                    ${RATIONS_LV2_INCLUDE_DIRS} ${RATIONS_LILV_INCLUDE_DIRS})
+        target_link_libraries(rations_lv2check
+            PRIVATE base ${RATIONS_LILV_LIBRARIES} PkgConfig::CAIROX11 ${CMAKE_DL_LIBS})
+        target_link_directories(rations_lv2check PRIVATE ${RATIONS_LILV_LIBRARY_DIRS})
+        target_compile_features(rations_lv2check PRIVATE cxx_std_17)
+        target_compile_options(rations_lv2check PRIVATE -Wall)
+    else()
+        message(STATUS "lilv not found - skipping rations_lv2check")
+    endif()
+elseif(NAMP_LINUX)
+    message(STATUS "LV2 headers not found (lv2.pc) - skipping rations.lv2")
+endif()

@@ -4,20 +4,66 @@ CLAUDE.md
 RULES.md
 task.md
 PLAN.md
-PLAN-calibration-lv2.md
+PLAN-*.md
 .claude/
 
 # A local set of captures for the offline proofs to run against. These are NOT
 # this project's to publish: a capture is a recording made by whoever trained
-# it, under their own terms, and the code's MIT grant does not reach it. The
-# plug-in ships none and resolves no bank by a tracked path — the four banks are
-# whatever the user loaded — so nothing here depends on this directory existing.
-# The proofs find it through --captures or $RATIONS_TEST_CAPTURES.
+# it, under their own terms, and the code's MIT grant does not reach it. Neither
+# product ships any and neither resolves a bank by a tracked path — the four
+# banks are whatever the user loaded — so nothing here depends on this directory
+# existing. The proofs find it through --captures or $RATIONS_TEST_CAPTURES.
 #
 # Keep it that way: a capture committed here is a capture republished to
 # everyone who clones, and deleting it later does not take it back out of the
 # history.
 captures/
+
+# The ASIO SDK, which must NEVER be committed here, in whole or in part.
+#
+# WHY THIS RULE OUTLIVED ITS ORIGINAL REASON. It began as a licence condition: under the
+# proprietary arm of the SDK's dual licence, Steinberg's agreement forbids the licensee to "sell,
+# license, give-away and/or distribute the SDK or parts of it for the use as software developer kit
+# in any way, for example, integrated in any framework application, on any medium, including the
+# Internet", so a committed copy was a breach that a later deletion did not undo.
+#
+# This project now takes the SDK's GPLv3 arm instead, and under GPLv3 redistributing its source is
+# not merely permitted but REQUIRED of anyone shipping the binary -- as Corresponding Source. The
+# prohibition is gone. The rule stays, for two reasons that are still good:
+#
+#   1. The tree stays free of a dependency it does not own. The SDK reaches the compiler from the
+#      untracked sysroot, pinned by SHA-256, and reaches users through the Corresponding Source
+#      tarball that scripts/corresponding-source.sh assembles at release time. Both are build
+#      output. Neither is a checked-in copy that quietly drifts from what upstream ships.
+#   2. It keeps the proprietary arm available. Committing the SDK is the one act that would close
+#      that door permanently, and a licence election is worth being able to reverse.
+#
+# (The reference implementations still get this wrong: RtAudio vendors an ASIO snapshot
+# in-repository and iPlug2 inherits it. It is not a precedent to follow.)
+#
+# The SDK reaches the Windows build through scripts/build-win-deps.sh -- one script, shared by both
+# products since stage 7 -- and the untracked dependency sysroot, and through nothing else. These
+# names are guarded so a stray copy cannot be staged by accident; the phase gate sweeps for the same
+# names, because the ignore rule stops a copy arriving and the sweep catches one that arrived
+# another way.
+#
+# AT THE ROOT AND UNANCHORED, deliberately. Only one product builds for ASIO today, but a stray
+# copy can land anywhere in a tree this size, and a rule that only guarded products/rack/ would
+# not have been watching the place the accident happened.
+#
+# Our own backend is asiobackend.{h,cpp}, which none of these patterns matches.
+asio.h
+asio.cpp
+asiosys.h
+iasiodrv.h
+asiodrvr.h
+asiodrvr.cpp
+asiodrivers.h
+asiodrivers.cpp
+asiolist.h
+asiolist.cpp
+ASIOConvertSamples.h
+ASIOConvertSamples.cpp
 
 # Personal CMake configure presets (local reference-tree paths).
 CMakeUserPresets.json
@@ -35,11 +81,21 @@ Makefile
 *.cmake
 !CMakeLists.txt
 # ...but cmake/ holds SOURCE scripts, not generated ones — the MinGW toolchain
-# file lives there and is named on the configure command line, so without this
-# negation the blanket *.cmake above would keep it out of a fresh clone and the
-# Windows build would be unreproducible. Generated .cmake files all live under
-# the build directories already ignored above.
+# file and the resource-embed script both live there, and both are named on a
+# command line rather than being generated. Without this negation the blanket
+# *.cmake above keeps them out of a fresh clone, and the Windows build and the
+# self-contained standalone are each unreproducible. Both parent projects had to
+# fix exactly this. Generated .cmake files all live under the build directories
+# already ignored above.
+#
+# TWO forms, and the second is what this repository's shape costs. A gitignore
+# pattern containing a slash is anchored to the directory holding the .gitignore,
+# so "!cmake/*.cmake" negates the root cmake/ and NOTHING ELSE — the moment the
+# products' own cmake/ directories moved under products/, a new file in either
+# of them became silently invisible to git add. Measured with git check-ignore,
+# not assumed. The "**/" form is what reaches them at any depth.
 !cmake/*.cmake
+!**/cmake/*.cmake
 
 # Compiled output
 *.o
@@ -48,8 +104,8 @@ Makefile
 *.so.*
 *.vst3
 
-# Release archives produced by scripts/makedist-linux.sh — these are attached
-# to GitHub releases, not committed.
+# Release archives produced by the makedist scripts — these are attached to
+# GitHub releases, not committed.
 dist/
 *.tar.gz
 *.tar.xz
@@ -58,6 +114,19 @@ dist/
 # Debug info
 *.pdb
 *.dSYM/
+
+# Renders written by the offline audit tools into whatever directory they are run from.
+#
+# panelrender and rackrender take an output PREFIX as their first argument and default to writing
+# beside the working directory, so running one from the top of the tree drops a dozen PNGs into it.
+# They are build output in the same sense an object file is: regenerated by the gate on every run,
+# different after any layout change, and reviewed by looking at them rather than by diffing them.
+# Eleven of them were tracked for a while and every UI change then showed up as a binary diff
+# nobody could read.
+#
+# Anchored to the top level, so the real art under products/*/resources/ and products/*/gui/ is
+# untouched. Each product carries the same rule for its own directory.
+/*.png
 
 # Editor / IDE
 .vscode/
