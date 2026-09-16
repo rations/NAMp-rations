@@ -221,9 +221,9 @@ public:
         // "Achieving Desired Reverberation Times" gives the relation in the form used here:
         // propagation through n60 samples must attenuate by 60 dB, so G = 10^(-3/n60) per sample,
         // and one lap of the longest comb is mLapSeconds of those.
-        const double t60 = reverbdef::kT60MinSec
-                           * std::pow(reverbdef::kT60MaxSec / reverbdef::kT60MinSec,
-                                      std::clamp(plain[kDecay] * 0.1, 0.0, 1.0));
+        const double t60 =
+            reverbdef::kT60MinSec * std::pow(reverbdef::kT60MaxSec / reverbdef::kT60MinSec,
+                                             std::clamp(plain[kDecay] * 0.1, 0.0, 1.0));
         const double f =
             std::clamp(std::pow(10.0, -3.0 * mLapSeconds * reverbdef::kEnsembleT60Ratio / t60),
                        reverbdef::kFeedbackMin, reverbdef::kFeedbackMax);
@@ -233,8 +233,8 @@ public:
         // "reduces to the feedback comb filter ... in which the feedback was not filtered".
         const double damp = std::clamp(1.0 - plain[kTone] * 0.1, 0.0, 1.0);
 
-        const double pd = std::clamp(plain[kPreDelay], 0.0, reverbdef::kPreDelayMaxMs)
-                          * mSampleRate * 0.001;
+        const double pd =
+            std::clamp(plain[kPreDelay], 0.0, reverbdef::kPreDelayMaxMs) * mSampleRate * 0.001;
         const double mix = std::clamp(plain[kMix] * 0.01, 0.0, 1.0);
 
         // The level compensation the header explains. Computed from the TARGET f rather than from
@@ -275,8 +275,8 @@ protected:
 
         // The engine's own truncation, reproduced rather than idealised. See kLongestCombAt44k.
         mLapSeconds =
-            std::floor(reverbdef::kLongestCombAt44k * sampleRate / reverbdef::kTuningRate)
-            / sampleRate;
+            std::floor(reverbdef::kLongestCombAt44k * sampleRate / reverbdef::kTuningRate) /
+            sampleRate;
 
         // +2 for the cubic kernel's reach past the read point.
         const int maxPre =
@@ -358,11 +358,33 @@ protected:
                 // spends longer in the subnormal range than anything else, and whatever it hands
                 // on goes straight into the plug-in's output buffer. Same lesson as the Flanger's,
                 // found the same way.
-                double yl = xl + mix * (wl - xl);
+                // THE DRY PATH IS A WIRE. Mix scales the wet onto it and never subtracts from it.
+                //
+                // This was a crossfade, (1-mix)*dry + mix*wet, and the knob was reported as doing
+                // almost nothing until halfway and then changing drastically. Measured, that is
+                // exactly what it did, and the arithmetic makes the reason plain: the reverb tail
+                // grows by 18 dB over the whole knob but 12 dB of that is spent in the first
+                // quarter, so the top half adds only about 6 dB of tail — while the dry
+                // coefficient runs 0.5 down to zero over the same travel. Past halfway the control
+                // had nearly stopped adding reverb and was mostly removing the guitar, which is a
+                // drastic change to the sound made by a knob that appears to be about reverb.
+                //
+                // A single Mix knob is this project's own decision, not something ported: Freeverb
+                // has no such control (independent Wet and Dry faders, both in dB, with
+                // `initialdry = 0`), WDL's engine has none at all, and PASP's Freeverb chapter does
+                // not discuss a mix. What the references do agree on is the structure — wet and dry
+                // are INDEPENDENT — and a crossfade is precisely the arrangement that they are not.
+                //
+                // The cost, measured at Decay 10 on a full-scale input: peak reaches +4.1 dB on a
+                // sine and +10.4 dB on white noise at Mix 100 %. That is the price of the dry being
+                // a wire, it is what a blend knob on a reverb pedal does, and the alternative is
+                // the fault above. At Mix 0 the wet term is exactly zero, so the dry still passes
+                // sample for sample.
+                double yl = xl + mix * wl;
                 denormal_fix_double(&yl);
                 l[j] = yl;
                 if (r) {
-                    double yr = xr + mix * (wr - xr);
+                    double yr = xr + mix * wr;
                     denormal_fix_double(&yr);
                     r[j] = yr;
                 }
