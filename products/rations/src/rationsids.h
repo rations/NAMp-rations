@@ -363,6 +363,13 @@ struct PedalParamSpec {
     PedalParamKind kind;
     double min, max, def;
     int precision;
+
+    // Range controls only: map the dial EXPONENTIALLY rather than linearly, so that equal
+    // fractions of the dial are equal RATIOS of the value. A rate, a frequency and a time are all
+    // heard that way — a knob that spends half its travel between 5 and 10 Hz is a knob whose
+    // useful half is the first inch of it. A trailing member with a default, so every existing
+    // row below initialises unchanged.
+    bool log = false;
 };
 
 // Delay sync divisions. "Free" is a VALUE here rather than a separate toggle, so a host cannot
@@ -390,7 +397,16 @@ inline constexpr PedalParamSpec kPedalParams[] = {
     {kBoostLevelId, kPedalBoost, "Boost Level", "Level", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
 
     {kChorusOnId, kPedalChorus, "Chorus", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
-    {kChorusRateId, kPedalChorus, "Chorus Rate", "Rate", "Hz", PedalParamKind::Range, 0.1, 10.0, 0.8, 2},
+    // Rate is LOGARITHMIC and stops at 3 Hz, and both halves of that are answers to the same
+    // fault. Linear over 0.1-10 Hz put the 0.8 Hz default at 7 % of the dial, so the whole useful
+    // region was the first inch of travel and a barely visible move doubled the rate. And because
+    // delay modulation shifts pitch by the DERIVATIVE of the delay, rate is also what sets how far
+    // the pitch moves: measured at Depth 50 %, the old dial reached +-56 cents at a quarter turn
+    // and +-205 cents at the end, against +-17 at the default. Above 3 Hz a chorus is a warble
+    // whatever the excursion, so the range stops there; Chorus::processImpl caps the excursion so
+    // that the rest of the range stays usable too.
+    {kChorusRateId, kPedalChorus, "Chorus Rate", "Rate", "Hz", PedalParamKind::Range, 0.1, 3.0, 0.8,
+     2, true},
     {kChorusDepthId, kPedalChorus, "Chorus Depth", "Depth", "%", PedalParamKind::Range, 0, 100, 50, 0},
     {kChorusMixId, kPedalChorus, "Chorus Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 50, 0},
 
@@ -571,6 +587,9 @@ inline double pedalPlain(const PedalParamSpec &spec, double norm)
     norm = norm < 0.0 ? 0.0 : (norm > 1.0 ? 1.0 : norm);
     if (spec.kind == PedalParamKind::List)
         return std::floor(norm * (spec.max - spec.min) + 0.5) + spec.min;
+    // Equal fractions of the dial are equal RATIOS of the value, so the minimum must be positive.
+    if (spec.log)
+        return spec.min * std::pow(spec.max / spec.min, norm);
     return spec.min + norm * (spec.max - spec.min);
 }
 inline double pedalNorm(const PedalParamSpec &spec, double plain)
@@ -578,6 +597,14 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
     const double span = spec.max - spec.min;
     if (span <= 0.0)
         return 0.0;
+    if (spec.log) {
+        // The inverse of pedalPlain's ratio map. Guarded rather than trusted: `plain` reaches here
+        // from a host and from state, and log() of a non-positive number is not a number.
+        if (!(plain > 0.0))
+            return 0.0;
+        const double l = std::log(plain / spec.min) / std::log(spec.max / spec.min);
+        return l < 0.0 ? 0.0 : (l > 1.0 ? 1.0 : l);
+    }
     const double n = (plain - spec.min) / span;
     return n < 0.0 ? 0.0 : (n > 1.0 ? 1.0 : n);
 }

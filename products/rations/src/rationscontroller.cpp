@@ -19,6 +19,53 @@ using namespace Steinberg;
 
 namespace Rations
 {
+namespace
+{
+
+//------------------------------------------------------------------------
+// A RangeParameter whose dial is a RATIO rather than a sum — the Chorus's Rate, and anything else
+// whose table row sets `log`.
+//
+// Vst::RangeParameter is linear in toPlain/toNormalized and has no hook for a curve, so the two
+// conversions are overridden. They are overridden by CALLING pedalPlain/pedalNorm rather than by
+// repeating the formula, which is the same reason those two functions exist at all: the processor
+// converts with them on the audio side, and a second spelling here is a second thing to keep in
+// step. toString is not overridden because RangeParameter's already routes through toPlain, so
+// the host's readout and `precision` follow for free.
+class LogRangeParameter : public Vst::RangeParameter
+{
+public:
+    LogRangeParameter(const Vst::TChar *title, Vst::ParamID id, const Vst::TChar *units,
+                      const PedalParamSpec &spec, Vst::UnitID unitId)
+        : Vst::RangeParameter(title, id, units, spec.min, spec.max, spec.def, 0,
+                              Vst::ParameterInfo::kCanAutomate, unitId),
+          mSpec(spec)
+    {
+        // RangeParameter's constructor normalized the default LINEARLY, so both the current
+        // value and the DECLARED default are sitting at the wrong place on this curve. Both have
+        // to move: info.defaultNormalizedValue is what a host resets the control to, so leaving
+        // it would make "reset to default" land on 0.23 Hz where the table says 0.8. The LV2
+        // ttlgen below cross-checks exactly this, and it is what caught it.
+        info.defaultNormalizedValue = pedalNorm(spec, spec.def);
+        setNormalized(info.defaultNormalizedValue);
+    }
+
+    Vst::ParamValue toPlain(Vst::ParamValue norm) const SMTG_OVERRIDE
+    {
+        return pedalPlain(mSpec, norm);
+    }
+    Vst::ParamValue toNormalized(Vst::ParamValue plain) const SMTG_OVERRIDE
+    {
+        return pedalNorm(mSpec, plain);
+    }
+
+private:
+    // A reference into the pedal table, which has static storage duration and outlives every
+    // controller. Not a copy: there is one table and it is the single truth.
+    const PedalParamSpec &mSpec;
+};
+
+} // namespace
 
 //------------------------------------------------------------------------
 tresult PLUGIN_API RationsController::initialize(FUnknown *context)
@@ -254,9 +301,12 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
                 break;
             }
             case PedalParamKind::Range: {
-                auto *range =
-                    new Vst::RangeParameter(title, spec.id, units, spec.min, spec.max, spec.def, 0,
-                                            Vst::ParameterInfo::kCanAutomate, kPedalUnitId);
+                Vst::RangeParameter *range =
+                    spec.log
+                        ? new LogRangeParameter(title, spec.id, units, spec, kPedalUnitId)
+                        : new Vst::RangeParameter(title, spec.id, units, spec.min, spec.max,
+                                                  spec.def, 0, Vst::ParameterInfo::kCanAutomate,
+                                                  kPedalUnitId);
                 range->setPrecision(spec.precision);
                 parameters.addParameter(range);
                 break;

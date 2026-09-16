@@ -51,6 +51,32 @@ inline constexpr double kTap1Ms = 18.0;
 // the closest they ever come is 2.34 ms, which is a comb notch at 214 Hz and not a collision.
 inline constexpr double kSweepMs = 4.0;
 
+// THE CEILING ON HOW FAR THE PITCH MAY MOVE, either side, at Depth 100 %.
+//
+// Delay modulation shifts pitch by the DERIVATIVE of the delay, so peak detune is 2*pi*f*A — it
+// depends on the RATE as much as on the excursion. With A fixed by Depth alone, turning Rate up
+// therefore turned the pitch wobble up too, without limit: measured at Depth 50 %, the Rate knob
+// reached +-56 cents a quarter of the way round and +-205 cents at the end, against +-17 cents at
+// its default. That is a seasick warble, not a chorus, and it made most of the Rate knob unusable.
+// It was heard on a guitar before it was measured; the arithmetic was never at fault (THD sits at
+// the double-precision floor, and the read head's error is flat across the whole rate range).
+//
+// So the excursion is bounded by what it does to the pitch rather than only by what Depth asks
+// for, which is the arrangement PASP describes for the effect: "The tap modulation frequency may
+// be set to achieve a prescribed frequency-shift via the Doppler effect."
+// https://ccrma.stanford.edu/~jos/pasp/Chorus_Effect.html. Signalsmith's chorus is built the same
+// way round: its control is a detune in CENTS and the rate follows from it, over a range of 1 to
+// 50 cents with a default of 8.
+//
+// 35 IS A CHOICE INSIDE THAT RANGE, not a measured constant, and it is the one number here to
+// move by ear. What the cap buys is that Rate now changes how FAST the wobble is and not how DEEP
+// — which is Depth's job — so the whole of the knob is usable.
+inline constexpr double kMaxDetuneCents = 35.0;
+
+// The same ceiling as a read-head speed: a pitch ratio of 2^(cents/1200), less the 1.0 it is
+// measured from. 0.020423 at 35 cents, i.e. the read head may run at most 2 % fast or slow.
+inline constexpr double kMaxSlew = 0.020422891875345;
+
 // The second tap's LFO offset, in turns. Quadrature.
 inline constexpr double kTap1Phase = 0.25;
 
@@ -69,6 +95,10 @@ static_assert(kTap1Ms - kTap0Ms > kSweepMs * 1.4143,
               "in quadrature the taps' spacing is (kTap1Ms - kTap0Ms) +- kSweepMs*sqrt(2); this "
               "sweep lets them cross, which sums two identical voices to +6 dB once per cycle");
 static_assert(kTap1Phase > 0.0 && kTap1Phase < 1.0, "the second tap's offset is a phase in turns");
+// kMaxSlew is kMaxDetuneCents written as a ratio, and a literal that drifted from the cents it is
+// derived from would cap the pitch somewhere nobody chose. std::pow is not constexpr.
+static_assert(kMaxSlew > 0.02042 && kMaxSlew < 0.02043,
+              "kMaxSlew must stay 2^(kMaxDetuneCents/1200) - 1");
 } // namespace chorusdef
 
 class Chorus final : public Pedal
@@ -107,6 +137,11 @@ protected:
         mTap0 = chorusdef::kTap0Ms * msToSamples;
         mTap1 = chorusdef::kTap1Ms * msToSamples;
         mSweep = chorusdef::kSweepMs * msToSamples;
+        // The detune ceiling as an excursion, before the rate is divided out of it: peak slew is
+        // A*2*pi*f/fs, so the largest A that still meets kMaxSlew is this over the rate in Hz.
+        // 156.05 samples at 48 kHz. Computed here because it is fixed for the session, leaving
+        // one divide per sample in process().
+        mCapNumerator = chorusdef::kMaxSlew * sampleRate / kTwoPi;
 
         mLine.prepare(static_cast<int>(std::ceil(mTap1 + mSweep)) + 4);
         mLfo.prepare(sampleRate);
@@ -135,8 +170,22 @@ protected:
             const double x = l[i];
             mLine.write(x);
 
-            mLfo.setRate(mRateHz.next());
-            const double sweep = mSweep * mDepth.next();
+            const double rateHz = mRateHz.next();
+            mLfo.setRate(rateHz);
+
+            // EXCURSION IS THE SMALLER of what Depth asks for and what the pitch ceiling allows.
+            //
+            // Scaling the whole min() by Depth, rather than clamping after it, is what keeps the
+            // Depth knob live at every rate: a bare clamp would make Depth 50 % and Depth 100 %
+            // identical everywhere above the crossover, and Depth would stop doing anything on
+            // half the panel. It also puts the crossover at one rate (0.81 Hz) instead of a
+            // different one per Depth, so Depth stays a clean scalar on the result.
+            //
+            // The divide is guarded because Rate is smoothed and a host may have asked for
+            // something at or below zero; the table's minimum is 0.1 Hz, so the guard is for the
+            // path and not for the knob.
+            const double cap = rateHz > 1.0e-6 ? mCapNumerator / rateHz : mSweep;
+            const double sweep = mDepth.next() * (mSweep < cap ? mSweep : cap);
             const double a = mLine.read(mTap0 + sweep * mLfo.sineAt(0.0));
             const double b = mLine.read(mTap1 + sweep * mLfo.sineAt(chorusdef::kTap1Phase));
             mLfo.advance();
@@ -154,6 +203,7 @@ private:
     Lfo mLfo;
     Smoothed mRateHz, mDepth, mMix;
     double mTap0 = 0.0, mTap1 = 0.0, mSweep = 0.0;
+    double mCapNumerator = 0.0;
     bool mPrimed = false;
 };
 
