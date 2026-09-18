@@ -18,7 +18,7 @@
 cmake_minimum_required(VERSION 3.25.0)
 
 project(namp-rack
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "NAMp-Rack — plug-in host with a four-channel NAM amp head"
     LANGUAGES C CXX
 )
