@@ -112,7 +112,10 @@ public:
         run(quiet);
     }
 
-    double rate() const { return mRate; }
+    double rate() const
+    {
+        return mRate;
+    }
 
 private:
     double mP[4] = {0, 0, 0, 0};
@@ -148,8 +151,7 @@ Response responseAt(Rig &rig, double freqHz, double ampVolts)
     }
     const double norm = 2.0 / static_cast<double>(measure);
     const std::complex<double> h(re * norm, im * norm);
-    return {20.0 * std::log10(std::max(1e-30, std::abs(h) / ampVolts)),
-            std::arg(h) * 180.0 / kPi};
+    return {20.0 * std::log10(std::max(1e-30, std::abs(h) / ampVolts)), std::arg(h) * 180.0 / kPi};
 }
 
 //------------------------------------------------------------------------------------------------
@@ -180,8 +182,7 @@ double clipStageDb(double drivePlain, double freqHz)
     const std::complex<double> s(0.0, 2.0 * kPi * freqHz);
     const double wz = 1.0 / (ts9::kR1 * ts9::kCz);
     const double wp = 1.0 / (r2 * ts9::kCc);
-    return 20.0 * std::log10(
-        std::abs(1.0 + (r2 / ts9::kR1) * (s / (s + wz)) * (wp / (s + wp))));
+    return 20.0 * std::log10(std::abs(1.0 + (r2 / ts9::kR1) * (s / (s + wz)) * (wp / (s + wp))));
 }
 
 // Fig. 2.26's output divider, which is a constant and is in every measurement.
@@ -209,8 +210,7 @@ double toneAnalogDb(double t, double freqHz)
     const std::complex<double> s(0.0, 2.0 * kPi * freqHz);
     const std::complex<double> rf = rl * ts9::kToneRf + y;
     const std::complex<double> num = rf * (s + (y / rf) * wz);
-    const std::complex<double> den =
-        y * ts9::kToneRs * ts9::kToneCs * (s + wp) * (s + wz) + x * s;
+    const std::complex<double> den = y * ts9::kToneRs * ts9::kToneCs * (s + wp) * (s + wz) + x * s;
     return 20.0 * std::log10(std::abs(num / den));
 }
 
@@ -323,8 +323,7 @@ Spectrum analyse(Rig &rig, int n, int p, double ampVolts, int maxHarmonic)
 // A pedal driven exactly as the chain drives it: parameters in kPedalParams order, engaged, fed in
 // blocks of the size the processor uses. One template rather than a Rig per pedal, because what
 // differs between them is the length of the slice and nothing else.
-template <typename P, int NParams>
-class Board
+template <typename P, int NParams> class Board
 {
 public:
     explicit Board(double rate = kRate) : mRate(rate)
@@ -334,7 +333,10 @@ public:
         mPedal.setEngaged(true);
     }
 
-    void set(int idx, double v) { mP[idx] = v; }
+    void set(int idx, double v)
+    {
+        mP[idx] = v;
+    }
 
     // Clears the DSP and lands the smoothers on the current knob positions, so what follows is the
     // pedal at those settings rather than the pedal on its way to them.
@@ -353,7 +355,10 @@ public:
         }
     }
 
-    void run(std::vector<double> &l) { run(l.data(), nullptr, l.size()); }
+    void run(std::vector<double> &l)
+    {
+        run(l.data(), nullptr, l.size());
+    }
 
     void silence(size_t n)
     {
@@ -361,8 +366,14 @@ public:
         run(q);
     }
 
-    double rate() const { return mRate; }
-    P &pedal() { return mPedal; }
+    double rate() const
+    {
+        return mRate;
+    }
+    P &pedal()
+    {
+        return mPedal;
+    }
 
 private:
     double mP[NParams] = {0};
@@ -533,9 +544,8 @@ double sincRead(const std::vector<double> &x, double t, int halfTaps = 16)
         const double d = static_cast<double>(k) - f;
         const double s = (std::fabs(d) < 1e-12) ? 1.0 : std::sin(kPi * d) / (kPi * d);
         // Blackman window over the 2*halfTaps span.
-        const double w = 0.42
-                         - 0.5 * std::cos(kPi * (d + halfTaps) / halfTaps)
-                         + 0.08 * std::cos(2.0 * kPi * (d + halfTaps) / halfTaps);
+        const double w = 0.42 - 0.5 * std::cos(kPi * (d + halfTaps) / halfTaps) +
+                         0.08 * std::cos(2.0 * kPi * (d + halfTaps) / halfTaps);
         acc += x[static_cast<size_t>(idx)] * s * w;
     }
     return acc;
@@ -593,8 +603,8 @@ constexpr double kExpT60MaxSec = 6.0;
 
 double expectedT60(double decayPlain)
 {
-    return kExpT60MinSec
-           * std::pow(kExpT60MaxSec / kExpT60MinSec, std::clamp(decayPlain * 0.1, 0.0, 1.0));
+    return kExpT60MinSec *
+           std::pow(kExpT60MaxSec / kExpT60MinSec, std::clamp(decayPlain * 0.1, 0.0, 1.0));
 }
 
 // The engine's comb lengths at a given rate, reproducing its own `(int)(tuning * srate/44100)`.
@@ -711,8 +721,8 @@ double ensembleT60Ratio(double rate)
 double predictedRawWetGain()
 {
     const double perAllpass = 1.0 + 1.0 / (1.0 - kVerbAllpassG * kVerbAllpassG);
-    return kVerbFixedGain * std::sqrt(static_cast<double>(kVerbCombCount))
-           * std::pow(perAllpass, 0.5 * static_cast<double>(kVerbAllpassCount));
+    return kVerbFixedGain * std::sqrt(static_cast<double>(kVerbCombCount)) *
+           std::pow(perAllpass, 0.5 * static_cast<double>(kVerbAllpassCount));
 }
 
 // The wet impulse response of one channel, at Mix 100 %.
@@ -856,8 +866,10 @@ int main(int argc, char **argv)
                                           std::max(s.harmonicDb[6], s.harmonicDb[8]));
         const double oddBest = std::max(s.harmonicDb[3], s.harmonicDb[5]);
         if (oddBest < -60.0) {
-            fprintf(stderr, "pedalcheck: no odd-harmonic distortion at Yeh's own test point "
-                            "(H3 %.1f dB) - the diodes are not conducting\n", s.harmonicDb[3]);
+            fprintf(stderr,
+                    "pedalcheck: no odd-harmonic distortion at Yeh's own test point "
+                    "(H3 %.1f dB) - the diodes are not conducting\n",
+                    s.harmonicDb[3]);
             ++gFailures;
         }
         // A MINIMUM, not a target, and it is a floor for a BROKEN symmetry rather than a bound on
@@ -880,8 +892,10 @@ int main(int argc, char **argv)
         else
             printf("    odd-to-even separation %.1f dB\n", sep);
         if (sep < 40.0) {
-            fprintf(stderr, "pedalcheck: even harmonics are only %.1f dB below the odd ones; the "
-                            "diode pair has lost its symmetry\n", sep);
+            fprintf(stderr,
+                    "pedalcheck: even harmonics are only %.1f dB below the odd ones; the "
+                    "diode pair has lost its symmetry\n",
+                    sep);
             ++gFailures;
         }
     }
@@ -1038,9 +1052,8 @@ int main(int argc, char **argv)
             for (int d : {1, 7, 64, 511}) {
                 if (i < d)
                     continue;
-                worstInt = std::max(worstInt,
-                                    std::fabs(line.read(static_cast<double>(d))
-                                              - hist[static_cast<size_t>(i - d)]));
+                worstInt = std::max(worstInt, std::fabs(line.read(static_cast<double>(d)) -
+                                                        hist[static_cast<size_t>(i - d)]));
             }
         }
         check("integer delay, error vs the stored sample", worstInt, 0.0, 0.0, "");
@@ -1093,16 +1106,15 @@ int main(int argc, char **argv)
         // the excursion and modulation rate read off its own constants.
         struct Case {
             const char *what;
-            double f0;     // signal frequency
-            double fm;     // modulation rate, Hz
-            double d0;     // centre delay, samples
-            double amp;    // excursion, samples
+            double f0;  // signal frequency
+            double fm;  // modulation rate, Hz
+            double d0;  // centre delay, samples
+            double amp; // excursion, samples
         };
         const double ms = kRate * 0.001;
         const double flangerMax = flangerdef::kMaxMs * ms;
-        const double flangerDef = (flangerdef::kMinMs
-                                   + (flangerdef::kMaxMs - flangerdef::kMinMs) * 0.30)
-                                  * ms;
+        const double flangerDef =
+            (flangerdef::kMinMs + (flangerdef::kMaxMs - flangerdef::kMinMs) * 0.30) * ms;
         const Case cases[] = {
             {"Chorus, defaults (0.8 Hz, Depth 50)", 1000.0, 0.8, chorusdef::kTap1Ms * ms,
              0.50 * chorusdef::kSweepMs * ms},
@@ -1175,24 +1187,27 @@ int main(int argc, char **argv)
         // the Flanger's most extreme setting the sweep costs about a decibel over standing still,
         // and at every ordinary setting the error is 90 dB down.
         if (worstCubic - worstStill > 3.0) {
-            fprintf(stderr, "pedalcheck: sweeping the read head costs %.2f dB over the same read "
-                            "standing still, so the interpolator IS being strained by the "
-                            "modulation — signalsmith-dsp's windowed-sinc interpolators are the "
-                            "documented upgrade\n",
+            fprintf(stderr,
+                    "pedalcheck: sweeping the read head costs %.2f dB over the same read "
+                    "standing still, so the interpolator IS being strained by the "
+                    "modulation — signalsmith-dsp's windowed-sinc interpolators are the "
+                    "documented upgrade\n",
                     worstCubic - worstStill);
             ++gFailures;
         }
         // A backstop above the measured worst, on the alias gate's rule: it reports a regression,
         // not the noise floor of whichever case happens to be worst today.
         if (worstCubic > kInterpGateDb) {
-            fprintf(stderr, "pedalcheck: cubic interpolation error %.2f dB is above the %.0f dB "
-                            "gate\n",
+            fprintf(stderr,
+                    "pedalcheck: cubic interpolation error %.2f dB is above the %.0f dB "
+                    "gate\n",
                     worstCubic, kInterpGateDb);
             ++gFailures;
         }
         if (worstLinear - worstCubic < 6.0) {
-            fprintf(stderr, "pedalcheck: cubic is only %.1f dB better than linear, so this is "
-                            "measuring the reference's own floor rather than the interpolators\n",
+            fprintf(stderr,
+                    "pedalcheck: cubic is only %.1f dB better than linear, so this is "
+                    "measuring the reference's own floor rather than the interpolators\n",
                     worstLinear - worstCubic);
             ++gFailures;
         }
@@ -1237,10 +1252,9 @@ int main(int argc, char **argv)
                 const double fBin = static_cast<double>(bin) * kRate / n;
                 const double w = 2.0 * kPi * fBin / kRate;
                 const std::complex<double> h =
-                    (1.0 - mix)
-                    + mix * 0.5
-                          * (std::exp(std::complex<double>(0.0, -w * d0))
-                             + std::exp(std::complex<double>(0.0, -w * d1)));
+                    (1.0 - mix) + mix * 0.5 *
+                                      (std::exp(std::complex<double>(0.0, -w * d0)) +
+                                       std::exp(std::complex<double>(0.0, -w * d1)));
                 const double gotDb = 20.0 * std::log10(std::max(1e-300, mag[bin]));
                 const double wantDb = 20.0 * std::log10(std::max(1e-300, std::abs(h)));
                 worst = std::max(worst, std::fabs(gotDb - wantDb));
@@ -1280,8 +1294,9 @@ int main(int argc, char **argv)
             if (std::fabs(ir[i]) > 0.25) // each tap arrives at exactly 0.5
                 hits.push_back(i);
         if (hits.size() != 2) {
-            fprintf(stderr, "pedalcheck: expected two taps in the frozen impulse response, found "
-                            "%zu\n",
+            fprintf(stderr,
+                    "pedalcheck: expected two taps in the frozen impulse response, found "
+                    "%zu\n",
                     hits.size());
             ++gFailures;
         } else {
@@ -1406,9 +1421,9 @@ int main(int argc, char **argv)
     printf("delay trajectory vs M0*[1 + A*tri(phase)] — Rate, Depth and Manual at once\n");
     {
         const double depthPct = 100.0, manualPct = 50.0;
-        const double m0 = (flangerdef::kMinMs
-                           + (flangerdef::kMaxMs - flangerdef::kMinMs) * manualPct * 0.01)
-                          * kRate * 0.001;
+        const double m0 =
+            (flangerdef::kMinMs + (flangerdef::kMaxMs - flangerdef::kMinMs) * manualPct * 0.01) *
+            kRate * 0.001;
         const double a = depthPct * 0.01 * flangerdef::kMaxExcursion;
         printf("    M0 = %.1f samples, excursion +-%.1f samples (Depth 100 %% = A %.2f)\n", m0,
                a * m0, a);
@@ -1497,8 +1512,9 @@ int main(int argc, char **argv)
         printf("    peak gain: regen 0 %% %6.2f dB, +90 %% %6.2f dB, -90 %% %6.2f dB\n", peakDb(m0),
                peakDb(mp), peakDb(mn));
         if (peakDb(mp) <= peakDb(m0) + 6.0) {
-            fprintf(stderr, "pedalcheck: +90 %% regen only raises the peak from %.2f to %.2f dB; "
-                            "the feedback comb is not in circuit\n",
+            fprintf(stderr,
+                    "pedalcheck: +90 %% regen only raises the peak from %.2f to %.2f dB; "
+                    "the feedback comb is not in circuit\n",
                     peakDb(m0), peakDb(mp));
             ++gFailures;
         }
@@ -1574,8 +1590,8 @@ int main(int argc, char **argv)
             const size_t n = static_cast<size_t>(kRate * 2.0);
             std::vector<double> l(n), r(n);
             for (size_t i = 0; i < n; ++i)
-                l[i] = r[i] = std::sin(2.0 * kPi * 330.0 * i / kRate)
-                              + 0.5 * std::sin(2.0 * kPi * 1750.0 * i / kRate);
+                l[i] = r[i] = std::sin(2.0 * kPi * 330.0 * i / kRate) +
+                              0.5 * std::sin(2.0 * kPi * 1750.0 * i / kRate);
             b.run(l.data(), r.data(), n);
             double d = 0.0;
             for (size_t i = 0; i < n; ++i)
@@ -1588,8 +1604,9 @@ int main(int argc, char **argv)
         check("depth 0 %: L minus R", still, 0.0, 0.0, "");
         printf("    depth 100 %%: peak |L - R| = %.4f\n", moving);
         if (moving < 0.05) {
-            fprintf(stderr, "pedalcheck: the two channels differ by only %.4f with the LFO "
-                            "running — the antiphase is not reaching the delay\n",
+            fprintf(stderr,
+                    "pedalcheck: the two channels differ by only %.4f with the LFO "
+                    "running — the antiphase is not reaching the delay\n",
                     moving);
             ++gFailures;
         }
@@ -1636,8 +1653,9 @@ int main(int argc, char **argv)
             printf("    dragging %-7s: worst step at a boundary %.5f, inside a block %.5f\n", name,
                    boundary, inside);
             if (boundary > inside * 1.5) {
-                fprintf(stderr, "pedalcheck: dragging %s steps %.2fx harder at block boundaries "
-                                "than inside a block — the control is not smoothed per sample\n",
+                fprintf(stderr,
+                        "pedalcheck: dragging %s steps %.2fx harder at block boundaries "
+                        "than inside a block — the control is not smoothed per sample\n",
                         name, boundary / std::max(1e-12, inside));
                 ++gFailures;
             }
@@ -1754,8 +1772,8 @@ int main(int argc, char **argv)
             const std::vector<double> mag = magnitudeOf(delayWetIr(b, size_t(n)), n);
 
             double worst = 0.0, worstHz = 0.0;
-            for (double f : {30.0, 60.0, 120.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0,
-                             16000.0}) {
+            for (double f :
+                 {30.0, 60.0, 120.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0}) {
                 const int k = int(f * n / kRate + 0.5);
                 const double fBin = double(k) * kRate / n;
                 const double w = 2.0 * kPi * fBin / kRate;
@@ -1819,8 +1837,9 @@ int main(int argc, char **argv)
         }
         printf("    worst repeat-to-repeat change over eight repeats: %+.3f dB\n", worstRatioDb);
         if (worstRatioDb > 0.0) {
-            fprintf(stderr, "pedalcheck: a repeat was %+.3f dB LOUDER than the one before it — the "
-                            "loop is not decaying\n",
+            fprintf(stderr,
+                    "pedalcheck: a repeat was %+.3f dB LOUDER than the one before it — the "
+                    "loop is not decaying\n",
                     worstRatioDb);
             ++gFailures;
         }
@@ -1907,8 +1926,8 @@ int main(int argc, char **argv)
             const int k = int(f * m / kRate + 0.5);
             const double fBin = double(k) * kRate / m;
             const double want =
-                20.0 * std::log10(fbPct * 0.01
-                                  * std::abs(loopFilterH(5.0, 2.0 * kPi * fBin / kRate)));
+                20.0 *
+                std::log10(fbPct * 0.01 * std::abs(loopFilterH(5.0, 2.0 * kPi * fBin / kRate)));
             char label[64];
             snprintf(label, sizeof(label), "repeat 2/1 at %.0f Hz", fBin);
             check(label, 20.0 * std::log10(s2[size_t(k)] / s1[size_t(k)]), want, 0.02);
@@ -1945,8 +1964,9 @@ int main(int argc, char **argv)
             worstSep = std::min(worstSep, sep);
         }
         if (worstSep < 40.0) {
-            fprintf(stderr, "pedalcheck: a ping-pong repeat is only %.1f dB louder on the channel "
-                            "it belongs to than on the other one\n",
+            fprintf(stderr,
+                    "pedalcheck: a ping-pong repeat is only %.1f dB louder on the channel "
+                    "it belongs to than on the other one\n",
                     worstSep);
             ++gFailures;
         }
@@ -2013,9 +2033,7 @@ int main(int argc, char **argv)
             // straight onto amplitude.
             const bool antiphase = (which == Delay::kMix);
             const double baseMs = antiphase ? 20.0 : 200.0;
-            const double stimHz = antiphase                  ? 75.0
-                                  : (which == Delay::kTime)  ? 200.0
-                                                             : 100.0;
+            const double stimHz = antiphase ? 75.0 : (which == Delay::kTime) ? 200.0 : 100.0;
             // FEEDBACK IS DRAGGED DOWNWARDS FROM ITS MAXIMUM, and with Tone wide open, and both
             // are what give that one teeth. A step in feedback is a step of dfb times whatever is
             // ALREADY GOING ROUND, so dragging up from zero measures it against an echo that is
@@ -2062,9 +2080,8 @@ int main(int argc, char **argv)
             // is exactly 75 blocks, so a step written at a block boundary still arrives at one; at
             // a delay that was not a whole number of blocks the step would land somewhere inside a
             // block and inflate the very figure it is being compared against.
-            const size_t sweepFrom = (which == Delay::kFeedback)
-                                         ? from - size_t(baseMs * kRate * 0.001)
-                                         : from;
+            const size_t sweepFrom =
+                (which == Delay::kFeedback) ? from - size_t(baseMs * kRate * 0.001) : from;
             std::vector<double> l(n), r(n);
             for (size_t i = 0; i < n; ++i)
                 l[i] = r[i] = std::sin(2.0 * kPi * stimHz * double(i) / kRate);
@@ -2090,8 +2107,9 @@ int main(int argc, char **argv)
             printf("    dragging %-7s: worst step at a boundary %.6f, inside a block %.6f\n", name,
                    boundary, inside);
             if (boundary > inside * 1.5) {
-                fprintf(stderr, "pedalcheck: dragging %s steps %.2fx harder at block boundaries "
-                                "than inside a block — the control is not smoothed per sample\n",
+                fprintf(stderr,
+                        "pedalcheck: dragging %s steps %.2fx harder at block boundaries "
+                        "than inside a block — the control is not smoothed per sample\n",
                         name, boundary / std::max(1e-12, inside));
                 ++gFailures;
             }
@@ -2136,8 +2154,9 @@ int main(int argc, char **argv)
         printf("    worst step before the stomp %.5f, in the two delays after it %.5f\n", before,
                after);
         if (after > before * 1.5) {
-            fprintf(stderr, "pedalcheck: stomping ping-pong steps %.2fx harder than the signal's "
-                            "own slope — the routing is switched rather than crossfaded\n",
+            fprintf(stderr,
+                    "pedalcheck: stomping ping-pong steps %.2fx harder than the signal's "
+                    "own slope — the routing is switched rather than crossfaded\n",
                     after / std::max(1e-12, before));
             ++gFailures;
         }
@@ -2193,15 +2212,17 @@ int main(int argc, char **argv)
         // snapped coefficient rises only as fast as the filter behind it settles, which is a
         // handful of samples.
         if (rise < 10.0) {
-            fprintf(stderr, "pedalcheck: Tone went from 10 %% to 90 %% of its change in %.1f ms — "
-                            "that is the filter settling and not a smoother, so the coefficient is "
-                            "being applied per block\n",
+            fprintf(stderr,
+                    "pedalcheck: Tone went from 10 %% to 90 %% of its change in %.1f ms — "
+                    "that is the filter settling and not a smoother, so the coefficient is "
+                    "being applied per block\n",
                     rise);
             ++gFailures;
         }
         if (rise > 150.0) {
-            fprintf(stderr, "pedalcheck: Tone took %.1f ms to cross its own change, which is a "
-                            "knob that lags the hand turning it\n",
+            fprintf(stderr,
+                    "pedalcheck: Tone took %.1f ms to cross its own change, which is a "
+                    "knob that lags the hand turning it\n",
                     rise);
             ++gFailures;
         }
@@ -2277,15 +2298,15 @@ int main(int argc, char **argv)
         ReverbBoard b;
         reverbAt(b, 0.0, 10.0, 0.0, 100.0); // restarted at the SHORT end
         b.silence(size_t(kRate * 0.5));
-        b.set(Reverb::kDecay, 10.0); // and moved to the long end with no restart at all
+        b.set(Reverb::kDecay, 10.0);    // and moved to the long end with no restart at all
         b.silence(size_t(kRate * 0.5)); // long enough for the smoother to land
         std::vector<double> l(size_t(kRate * 16.0), 0.0), r(l.size(), 0.0);
         l[0] = r[0] = 1.0;
         b.run(l.data(), r.data(), l.size());
         const double got = t60Of(l, kRate);
         printf("    Decay driven 0 -> 10 without a reset: T60 %.3f s\n", got);
-        check("T60 after a mid-run Decay change", got, expectedT60(10.0),
-              0.03 * expectedT60(10.0), "s");
+        check("T60 after a mid-run Decay change", got, expectedT60(10.0), 0.03 * expectedT60(10.0),
+              "s");
     }
 
     // T60 must not follow the sample rate. The engine scales its own tuning table by srate/44100
@@ -2330,16 +2351,18 @@ int main(int argc, char **argv)
         const double shortenPct = 100.0 * (1.0 - highAt[0] / std::max(1e-9, highAt[2]));
         printf("    full damping shortens the 4-9 kHz tail by %.1f %%\n", shortenPct);
         if (shortenPct < 15.0) {
-            fprintf(stderr, "pedalcheck: Tone shortens the high-frequency tail by only %.1f %% — "
-                            "that is not damping in the feedback loop, which is what PASP says "
-                            "the engine's second parameter does\n",
+            fprintf(stderr,
+                    "pedalcheck: Tone shortens the high-frequency tail by only %.1f %% — "
+                    "that is not damping in the feedback loop, which is what PASP says "
+                    "the engine's second parameter does\n",
                     shortenPct);
             ++gFailures;
         }
         // And it has to be monotonic, or the knob does two things at once somewhere in the middle.
         if (!(highAt[0] < highAt[1] && highAt[1] < highAt[2])) {
-            fprintf(stderr, "pedalcheck: the high-band tail is not monotonic in Tone: %.3f, %.3f, "
-                            "%.3f s\n",
+            fprintf(stderr,
+                    "pedalcheck: the high-band tail is not monotonic in Tone: %.3f, %.3f, "
+                    "%.3f s\n",
                     highAt[0], highAt[1], highAt[2]);
             ++gFailures;
         }
@@ -2388,8 +2411,9 @@ int main(int argc, char **argv)
             if (gVerbose)
                 printf("    Decay %4.1f: correlation between the two tails %+.5f\n", decay, rho);
             if (std::fabs(rho) > 0.10) {
-                fprintf(stderr, "pedalcheck: the two reverb tails correlate at %+.4f on identical "
-                                "input — the stereo banks are not detuned against each other\n",
+                fprintf(stderr,
+                        "pedalcheck: the two reverb tails correlate at %+.4f on identical "
+                        "input — the stereo banks are not detuned against each other\n",
                         rho);
                 ++gFailures;
             }
@@ -2574,8 +2598,9 @@ int main(int argc, char **argv)
         printf("    dragging Mix: worst step at a boundary %.6f, inside a block %.6f\n", boundary,
                inside);
         if (boundary > inside * 1.5) {
-            fprintf(stderr, "pedalcheck: dragging Mix steps %.2fx harder at block boundaries than "
-                            "inside a block — the control is not smoothed per sample\n",
+            fprintf(stderr,
+                    "pedalcheck: dragging Mix steps %.2fx harder at block boundaries than "
+                    "inside a block — the control is not smoothed per sample\n",
                     boundary / std::max(1e-12, inside));
             ++gFailures;
         }
@@ -2623,8 +2648,9 @@ int main(int argc, char **argv)
             const char *name = (which == Reverb::kDecay) ? "Decay" : "Tone";
             printf("    slamming %-5s: worst step before %.6f, after %.6f\n", name, before, after);
             if (after > before * 2.0) {
-                fprintf(stderr, "pedalcheck: slamming %s steps the output %.2fx harder than the "
-                                "material's own slope — the control is not ramped\n",
+                fprintf(stderr,
+                        "pedalcheck: slamming %s steps the output %.2fx harder than the "
+                        "material's own slope — the control is not ramped\n",
                         name, after / std::max(1e-12, before));
                 ++gFailures;
             }
@@ -2675,13 +2701,13 @@ int main(int argc, char **argv)
         const double faded = worstStep(fl), hard = worstStep(hl);
         printf("    worst step at the stomp: %.6f faded, %.6f spliced\n", faded, hard);
         if (faded > hard * 0.25) {
-            fprintf(stderr, "pedalcheck: the faded stomp steps %.6f against the splice's %.6f — "
-                            "the engage ramp is not doing anything\n",
+            fprintf(stderr,
+                    "pedalcheck: the faded stomp steps %.6f against the splice's %.6f — "
+                    "the engage ramp is not doing anything\n",
                     faded, hard);
             ++gFailures;
         }
     }
-
 
     printf("\n");
     if (gFailures) {
