@@ -2407,6 +2407,19 @@ int main(int argc, char **argv)
             std::vector<double> l(size_t(kRate * 6.0), 0.0), r(l.size(), 0.0);
             l[0] = r[0] = 1.0;
             b.run(l.data(), r.data(), l.size());
+            // THE DRY IS SUBTRACTED BEFORE THE TAILS ARE COMPARED, and it has to be, because Mix
+            // is no longer a crossfade: Mix 100 % is dry PLUS wet rather than wet alone, and the
+            // dry is the SAME impulse on both channels. Left in, that one common sample correlated
+            // the two outputs at +0.507 and this check read it as the stereo banks not being
+            // detuned — a statement about the pedal, made by a measurement that had stopped
+            // looking at the tails at all.
+            //
+            // The subtraction is exact rather than approximate, and the new topology is what makes
+            // it so: the dry path is a wire, so the wet is output minus input sample for sample,
+            // and the engine has no feedthrough — nothing reaches the output before the shortest
+            // comb has run once — so the whole of the dry sits in index 0 and none of the wet does.
+            l[0] -= 1.0;
+            r[0] -= 1.0;
             const double rho = correlation(l, r);
             if (gVerbose)
                 printf("    Decay %4.1f: correlation between the two tails %+.5f\n", decay, rho);
@@ -2456,7 +2469,7 @@ int main(int argc, char **argv)
 
     // The wet level, against the prediction made from the engine's structure. Two claims: that it
     // does not move as Decay is swept, which is what makes the Mix knob stay put, and that it is
-    // unity, which is what makes Mix at 100 % a replacement for the dry signal rather than a jump.
+    // unity, which is what puts the wet at the dry's own level when Mix is all the way up.
     printf("wet level: flat across Decay, and equal to what the structure predicts\n");
     {
         // A deterministic broadband stimulus, so the figure is repeatable: a chirp covering the
@@ -2474,6 +2487,14 @@ int main(int argc, char **argv)
             reverbAt(b, decay, 10.0, 0.0, 100.0);
             std::vector<double> l = src, r = src;
             b.run(l.data(), r.data(), n);
+            // THE WET IS OUTPUT MINUS INPUT, which is exact here and was not expressible before.
+            // Mix stopped being a crossfade, so Mix 100 % is dry plus wet: measured on the output
+            // this read +2.95 dB, which is two uncorrelated unity-gain signals summing (+3.01 dB)
+            // and not a wet level that had moved. The dry path is a wire, so subtracting the
+            // stimulus recovers the wet sample for sample and the claim below is about the wet
+            // again rather than about the sum.
+            for (size_t i = 0; i < n; ++i)
+                l[i] -= src[i];
             // Skip the first two seconds: the tail has to be established before its level means
             // anything, and at Decay 10 that takes a while.
             const double gainDb = rmsDb(l, size_t(kRate * 2.0)) - 20.0 * std::log10(inRms);
@@ -2489,9 +2510,15 @@ int main(int argc, char **argv)
         // table and the allpass gain rather than read out of the pedal.
         check("reverb.h's kWetNorm against the structural derivation", reverbdef::kWetNorm,
               1.0 / predictedRawWetGain(), 0.01, "");
-        // And the product of the two is unity, which is what Mix at 100 % being a REPLACEMENT for
-        // the dry signal means. Measured 0.12 dB under, which is the 1.4 % the derivation's
-        // "the cross terms vanish" step waves away.
+        // And the product of the two is unity: at Mix 100 % the wet arrives at the same level the
+        // dry does, which is what makes the knob a BLEND with a usable top end rather than one
+        // that spends its travel somewhere else. Measured 0.12 dB under, which is the 1.4 % the
+        // derivation's "the cross terms vanish" step waves away.
+        //
+        // This used to be worded as Mix 100 % REPLACING the dry, and that stopped being true when
+        // the crossfade did: the dry is a wire now and the wet is added to it. The quantity the
+        // check makes a claim about is unchanged — the wet's own level — and what changed is that
+        // it is now measured on the wet rather than on an output that happened to contain only it.
         check("wet level at Mix 100 %", 0.5 * (lo + hi), 0.0, 0.5, "dB");
     }
 
