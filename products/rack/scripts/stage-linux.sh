@@ -109,12 +109,31 @@ namp_dist_no_unique "$PKGRACK" "namp-rack"
 # `grep -q`. That is not only six times faster: grep -q closes the pipe as soon as it matches,
 # strings takes SIGPIPE, and under `set -o pipefail` the successful case becomes a FAILING
 # pipeline. Found by this check reporting a missing head.png that was demonstrably present.
+#
+# AND THE MATCH IS A SUBSTRING (-F), NOT A WHOLE LINE (-xF), which is the SECOND false failure this
+# one check has produced. `strings` does not emit one string literal per line -- it emits each run
+# of printable bytes, and the table's keys sit in .rodata wherever the linker put them. When the
+# bytes immediately before a key happen to be printable, the run does not start at the key: on the
+# packaging machine fonts/Michroma-Regular.ttf came out as "q=fonts/Michroma-Regular.ttf" and an
+# anchored match called the font missing. It was not missing. Measured, not deduced: the generated
+# table held it at 62972 bytes opening 00 01 00 00 -- the sfnt magic -- against a source file of
+# exactly 62972 bytes.
+#
+# Anchoring bought nothing to lose. These keys are distinctive paths, so a substring hit is the
+# same statement as a whole-line hit, and what the check is for -- that the table was generated and
+# linked rather than quietly emptied -- is answered either way.
+#
+# THE SAME SHAPE IS IN products/rack/scripts/stage-windows.sh, which greps its own `strings` output
+# with -qxF for the WASAPI and ASIO tokens. Those are mangled C++ names and are less likely to abut
+# printable bytes, and they are NOT changed here because nothing on this machine can build or test
+# that binary; a blind edit to a gate is how a gate stops asking. Fix them the next time that build
+# is in front of someone.
 RACK_STRINGS="$(mktemp)"
 trap 'rm -f "$RACK_STRINGS"' EXIT
 strings "$PKGRACK" > "$RACK_STRINGS"
 for _res in img/head.png img/cabinet.png img/dial.png img/File.svg \
             fonts/Michroma-Regular.ttf fonts/Roboto-Regular.ttf; do
-  grep -qx "$_res" "$RACK_STRINGS" ||
+  grep -qF "$_res" "$RACK_STRINGS" ||
     namp_dist_die "namp-rack does not carry $_res; its art was not linked in and the editor
 would draw flat rectangles. Check the embedded-resource list in CMakeLists.txt."
 done
