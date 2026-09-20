@@ -1040,7 +1040,6 @@ int main(int argc, char **argv)
         check(arrived, "and OD2 becomes the channel that is sounding");
     }
 
-
     // --- 7. the pedalboard's footswitches -----------------------------------------------------
     //
     // Five more rows in the same table, and nothing new in the mechanism - which is the claim D8
@@ -1116,8 +1115,8 @@ int main(int argc, char **argv)
         bool eachOwn = true;
         for (int p = 0; p < kPedalCount; ++p) {
             Block press = stomp(rig, 100 + p);
-            eachOwn = eachOwn && echoOf(press, kPedalOnId[p], v) && near(v, 1.0) &&
-                      !press.sawChannelEcho;
+            eachOwn =
+                eachOwn && echoOf(press, kPedalOnId[p], v) && near(v, 1.0) && !press.sawChannelEcho;
             for (int q = 0; q < kPedalCount; ++q)
                 if (q != p)
                     eachOwn = eachOwn && !echoOf(press, kPedalOnId[q], v);
@@ -1181,7 +1180,8 @@ int main(int argc, char **argv)
                 everyPress =
                     everyPress && echoOf(press, kPedalOnId[kPedalBoost], v) && near(v, kAfter[i]);
             }
-            check(everyPress, "a slot that sends the same value every press toggles on every press");
+            check(everyPress,
+                  "a slot that sends the same value every press toggles on every press");
         }
 
         // And the other half of that rule, which is what the rising edge was really protecting. A
@@ -1262,8 +1262,8 @@ int main(int argc, char **argv)
                   "the editor accepts the same blob");
             bool mirrors = true;
             for (int c = 0; c < kChannelCount; ++c)
-                mirrors = mirrors && near(controller->getParamNormalized(kChannelLevelId[c]),
-                                          trims[c]);
+                mirrors =
+                    mirrors && near(controller->getParamNormalized(kChannelLevelId[c]), trims[c]);
             for (int i = 0; i < kPedalParamCount; ++i)
                 mirrors = mirrors && near(controller->getParamNormalized(kPedalParams[i].id),
                                           pedals[static_cast<size_t>(i)]);
@@ -1306,8 +1306,8 @@ int main(int argc, char **argv)
             check(component->setState(&withEq) == kResultOk, "a version 7 blob with EQ off loads");
             MemoryStream again;
             double eqAgain = -1.0;
-            check(component->getState(&again) == kResultOk &&
-                      readTrims(again, t, &pv, &eqAgain) && eqAgain == 0.0,
+            check(component->getState(&again) == kResultOk && readTrims(again, t, &pv, &eqAgain) &&
+                      eqAgain == 0.0,
                   "... and EQ is still off after the round trip");
             withEq.seek(0, IBStream::kIBSeekSet, nullptr);
             check(controller->setComponentState(&withEq) == kResultOk &&

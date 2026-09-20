@@ -629,9 +629,9 @@ void RationsEditorView::drawPedalboardStatic(Canvas &c)
     for (int i = 0; i < geo::kPedalCount; ++i) {
         const geo::PedalSpec &p = geo::kPedals[i];
         if (cairo_surface_t *art = mImages.get(p.art))
-            c.drawImage(art, Rect(static_cast<float>(geo::kPedalLeft(i)),
-                                  static_cast<float>(p.y), static_cast<float>(geo::kPedalW),
-                                  static_cast<float>(geo::kPedalH)));
+            c.drawImage(art,
+                        Rect(static_cast<float>(geo::kPedalLeft(i)), static_cast<float>(p.y),
+                             static_cast<float>(geo::kPedalW), static_cast<float>(geo::kPedalH)));
     }
 
     // The patch cables, between neighbours within a row only. Both jacks of a
@@ -647,8 +647,8 @@ void RationsEditorView::drawPedalboardStatic(Canvas &c)
         const float x1 = static_cast<float>(geo::kPedalLeft(i + 1));
         const float y = static_cast<float>(geo::kPedals[i].y + geo::kPedalJackY);
         const float d = (x1 - x0) * 0.35f;
-        c.strokeBezier(x0, y, x0 + d, y + geo::kPedalCableSag, x1 - d,
-                       y + geo::kPedalCableSag, x1, y);
+        c.strokeBezier(x0, y, x0 + d, y + geo::kPedalCableSag, x1 - d, y + geo::kPedalCableSag, x1,
+                       y);
     }
 
     // Which half of the chain each row is. Michroma, like every other legend.
@@ -754,8 +754,8 @@ void RationsEditorView::drawPedal(Canvas &c, int pedal)
             c.strokeRoundRect(box, static_cast<float>(geo::kPedalMiniRadius));
         }
 
-        std::string text = spec.kind == PedalParamKind::Toggle ? std::string(spec.legend)
-                                                              : paramText(spec.id);
+        std::string text =
+            spec.kind == PedalParamKind::Toggle ? std::string(spec.legend) : paramText(spec.id);
         if (text.empty())
             text = spec.legend; // the controller had no text for it; name it rather than draw a gap
         c.setFont(Font::Title);
@@ -783,12 +783,10 @@ void RationsEditorView::drawPedal(Canvas &c, int pedal)
     // allowance.
     c.setFont(Font::Title);
     c.setFontSize(static_cast<float>(geo::kPedalNameSize));
-    const std::string name =
-        c.clipToWidth(p.name, static_cast<float>(geo::kPedalFaceW));
+    const std::string name = c.clipToWidth(p.name, static_cast<float>(geo::kPedalFaceW));
     drawPedalString(c, name.c_str(),
-                     geo::kPedalLeft(pedal) + geo::kPedalKnobCX -
-                         c.stringWidth(name.c_str()) * 0.5f,
-                     static_cast<float>(p.y + geo::kPedalNameY));
+                    geo::kPedalLeft(pedal) + geo::kPedalKnobCX - c.stringWidth(name.c_str()) * 0.5f,
+                    static_cast<float>(p.y + geo::kPedalNameY));
 }
 
 //------------------------------------------------------------------------
@@ -912,12 +910,10 @@ void RationsEditorView::composeSettings(Canvas &c)
     //
     // The third is the one the pedal rows made necessary: the two halves of this list do different
     // things with a press, and nothing about a row says which half it is in.
-    const char *notes[geo::kSettingsFootnoteCount] = {geo::kSettingsFootnote,
-                                                      geo::kSettingsFootnote2,
-                                                      geo::kSettingsFootnote3};
-    const int noteY[geo::kSettingsFootnoteCount] = {geo::kSettingsFootnoteY,
-                                                    geo::kSettingsFootnote2Y,
-                                                    geo::kSettingsFootnote3Y};
+    const char *notes[geo::kSettingsFootnoteCount] = {
+        geo::kSettingsFootnote, geo::kSettingsFootnote2, geo::kSettingsFootnote3};
+    const int noteY[geo::kSettingsFootnoteCount] = {
+        geo::kSettingsFootnoteY, geo::kSettingsFootnote2Y, geo::kSettingsFootnote3Y};
     for (int i = 0; i < geo::kSettingsFootnoteCount; ++i)
         c.drawString(notes[i], cx - c.stringWidth(notes[i]) * 0.5f, static_cast<float>(noteY[i]));
 
@@ -1484,8 +1480,8 @@ void RationsEditorView::drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled
     // this is where that shows on the faceplate. k.label stays as the fallback and as the string
     // the art audit measures — an arbitrary user name cannot be measured in advance, which is why
     // the clip is here and is what keeps a long one out of its neighbour's column.
-    const std::string legend = channel >= 0 && mController ? mController->channelName(channel)
-                                                           : std::string(k.label);
+    const std::string legend =
+        channel >= 0 && mController ? mController->channelName(channel) : std::string(k.label);
 
     // Whether a dial gets a permanent value row underneath is decided by geometry, not by kind.
     //

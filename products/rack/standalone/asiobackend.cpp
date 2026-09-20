@@ -814,8 +814,8 @@ int AsioBackend::takeBufferSizeChange()
 }
 
 //------------------------------------------------------------------------
-// The driver's name is the whole point of this line: it is what the user chose, and on a machine with
-// more than one interface it is the only way to tell from the window which one is sounding.
+// The driver's name is the whole point of this line: it is what the user chose, and on a machine
+// with more than one interface it is the only way to tell from the window which one is sounding.
 std::string AsioBackend::deviceSummary() const
 {
     if (!isOpen())

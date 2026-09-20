@@ -100,14 +100,15 @@ bool readSubmodel(const nlohmann::json &j, double maxValue, const nlohmann::json
         out.metadata.loudness = v;
 
     // The dBu pair is the opposite case, and reading it from the submodel alone is what made
-    // Calibrated and the whole input-calibration block permanently dead: the two levels describe the
-    // capture RIG rather than the model, so the trainer writes them ONCE, at the file's top level.
-    // Measured across 35 development captures, every one a SlimmableContainer: 20 state
+    // Calibrated and the whole input-calibration block permanently dead: the two levels describe
+    // the capture RIG rather than the model, so the trainer writes them ONCE, at the file's top
+    // level. Measured across 35 development captures, every one a SlimmableContainer: 20 state
     // input_level_dbu 13 at file level and NONE state either key on a submodel. The submodel is
     // still tried first, so a future trainer that does write them per-variant wins; today's files
     // take the fallback. For a plain (non-container) capture `j` IS the file root, so the two
     // lookups are the same object and the fallback is a no-op by construction.
-    if (readMetaNumber(meta, "input_level_dbu", v) || readMetaNumber(fileMeta, "input_level_dbu", v))
+    if (readMetaNumber(meta, "input_level_dbu", v) ||
+        readMetaNumber(fileMeta, "input_level_dbu", v))
         out.metadata.input_level = v;
     if (readMetaNumber(meta, "output_level_dbu", v) ||
         readMetaNumber(fileMeta, "output_level_dbu", v))

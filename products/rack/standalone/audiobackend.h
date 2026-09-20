@@ -201,14 +201,14 @@ public:
     // One line describing the device that is open, for the rack's footer. Empty when none is.
     //
     // COMPOSED BY THE BACKEND, because only the backend knows what is worth saying, and the three
-    // have almost nothing in common to say: JACK has a server whose rate and size it was given, ASIO
-    // has a driver the user chose by name, and WASAPI has two endpoints, a share mode it may have
-    // been refused, and possibly two clocks that drift. A caller assembling this from the interface's
-    // getters could only print the intersection, which is a rate and a block size — exactly the part
-    // a user does not need help identifying.
+    // have almost nothing in common to say: JACK has a server whose rate and size it was given,
+    // ASIO has a driver the user chose by name, and WASAPI has two endpoints, a share mode it may
+    // have been refused, and possibly two clocks that drift. A caller assembling this from the
+    // interface's getters could only print the intersection, which is a rate and a block size —
+    // exactly the part a user does not need help identifying.
     //
-    // Main thread. Returns by value rather than a pointer into backend state: some of the numbers in
-    // it are read from atomics the audio thread writes.
+    // Main thread. Returns by value rather than a pointer into backend state: some of the numbers
+    // in it are read from atomics the audio thread writes.
     virtual std::string deviceSummary() const = 0;
 };
 

@@ -377,8 +377,7 @@ struct PedalParamSpec {
 // the active channel one list parameter instead of four booleans.
 inline constexpr int kDelaySyncCount = 12;
 inline constexpr const char *kDelaySyncNames[kDelaySyncCount] = {
-    "Free",  "1/1",   "1/2",    "1/4.",  "1/4",  "1/4T",
-    "1/8.",  "1/8",   "1/8T",   "1/16.", "1/16", "1/16T",
+    "Free", "1/1", "1/2", "1/4.", "1/4", "1/4T", "1/8.", "1/8", "1/8T", "1/16.", "1/16", "1/16T",
 };
 // Beats per repeat for each of the above, index 0 unused (Free reads kDelayTimeId instead).
 inline constexpr double kDelaySyncBeats[kDelaySyncCount] = {
@@ -392,9 +391,11 @@ inline constexpr PedalParamSpec kPedalParams[] = {
     // around the knob on the pedal being modelled, and the mapping to the circuit (Drive to the
     // clipping stage's feedback resistance, Tone to the second-order low-pass) happens in the DSP.
     {kBoostOnId, kPedalBoost, "Boost", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
-    {kBoostDriveId, kPedalBoost, "Boost Drive", "Drive", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+    {kBoostDriveId, kPedalBoost, "Boost Drive", "Drive", nullptr, PedalParamKind::Range, 0, 10, 5,
+     1},
     {kBoostToneId, kPedalBoost, "Boost Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
-    {kBoostLevelId, kPedalBoost, "Boost Level", "Level", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
+    {kBoostLevelId, kPedalBoost, "Boost Level", "Level", nullptr, PedalParamKind::Range, 0, 10, 5,
+     1},
 
     {kChorusOnId, kPedalChorus, "Chorus", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
     // Rate is LOGARITHMIC and stops at 3 Hz, and both halves of that are answers to the same
@@ -407,37 +408,49 @@ inline constexpr PedalParamSpec kPedalParams[] = {
     // that the rest of the range stays usable too.
     {kChorusRateId, kPedalChorus, "Chorus Rate", "Rate", "Hz", PedalParamKind::Range, 0.1, 3.0, 0.8,
      2, true},
-    {kChorusDepthId, kPedalChorus, "Chorus Depth", "Depth", "%", PedalParamKind::Range, 0, 100, 50, 0},
+    {kChorusDepthId, kPedalChorus, "Chorus Depth", "Depth", "%", PedalParamKind::Range, 0, 100, 50,
+     0},
     {kChorusMixId, kPedalChorus, "Chorus Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 50, 0},
 
     // Flanger. Regen is SIGNED: negative feedback gives the hollow "jet", positive gives peaks,
     // and they are different enough that a player wants both from one control rather than a
     // polarity switch. 95 rather than 100 because unity feedback in a comb filter does not decay.
     {kFlangerOnId, kPedalFlanger, "Flanger", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
-    {kFlangerRateId, kPedalFlanger, "Flanger Rate", "Rate", "Hz", PedalParamKind::Range, 0.05, 5.0, 0.3, 2},
-    {kFlangerDepthId, kPedalFlanger, "Flanger Depth", "Depth", "%", PedalParamKind::Range, 0, 100, 70, 0},
-    {kFlangerManualId, kPedalFlanger, "Flanger Manual", "Manual", "%", PedalParamKind::Range, 0, 100, 30, 0},
-    {kFlangerRegenId, kPedalFlanger, "Flanger Regen", "Regen", "%", PedalParamKind::Range, -95, 95, 50, 0},
+    {kFlangerRateId, kPedalFlanger, "Flanger Rate", "Rate", "Hz", PedalParamKind::Range, 0.05, 5.0,
+     0.3, 2},
+    {kFlangerDepthId, kPedalFlanger, "Flanger Depth", "Depth", "%", PedalParamKind::Range, 0, 100,
+     70, 0},
+    {kFlangerManualId, kPedalFlanger, "Flanger Manual", "Manual", "%", PedalParamKind::Range, 0,
+     100, 30, 0},
+    {kFlangerRegenId, kPedalFlanger, "Flanger Regen", "Regen", "%", PedalParamKind::Range, -95, 95,
+     50, 0},
 
     // Delay. Time is in ms and is IGNORED while Sync names a division; the knob stays live and
     // keeps its value so unsyncing returns to where the player left it.
     {kDelayOnId, kPedalDelay, "Delay", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
-    {kDelayTimeId, kPedalDelay, "Delay Time", "Time", "ms", PedalParamKind::Range, 20, 2000, 400, 0},
+    {kDelayTimeId, kPedalDelay, "Delay Time", "Time", "ms", PedalParamKind::Range, 20, 2000, 400,
+     0},
     // "Repeats" rather than "Feedback" on the enclosure: the word is the one an outer knob's
     // legend has room for (68 px against 62 at kPedalLabelSize, caught by panelrender's text
     // audit), and it is what the object being modelled prints - Boss abbreviates to F.BACK, MXR
     // prints REGEN, and "Repeats" says the same thing without an abbreviation. The HOST still sees
     // "Delay Feedback", which is the name that has to be unambiguous in an automation lane.
-    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Repeats", "%", PedalParamKind::Range, 0, 95, 35, 0},
+    {kDelayFeedbackId, kPedalDelay, "Delay Feedback", "Repeats", "%", PedalParamKind::Range, 0, 95,
+     35, 0},
     {kDelayToneId, kPedalDelay, "Delay Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
     {kDelayMixId, kPedalDelay, "Delay Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 30, 0},
-    {kDelaySyncId, kPedalDelay, "Delay Sync", "Sync", nullptr, PedalParamKind::List, 0, kDelaySyncCount - 1, 0, 0},
-    {kDelayPingPongId, kPedalDelay, "Delay Ping-Pong", "Ping", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
+    {kDelaySyncId, kPedalDelay, "Delay Sync", "Sync", nullptr, PedalParamKind::List, 0,
+     kDelaySyncCount - 1, 0, 0},
+    {kDelayPingPongId, kPedalDelay, "Delay Ping-Pong", "Ping", nullptr, PedalParamKind::Toggle, 0,
+     1, 0, 0},
 
     {kReverbOnId, kPedalReverb, "Reverb", "", nullptr, PedalParamKind::Toggle, 0, 1, 0, 0},
-    {kReverbDecayId, kPedalReverb, "Reverb Decay", "Decay", nullptr, PedalParamKind::Range, 0, 10, 4, 1},
-    {kReverbToneId, kPedalReverb, "Reverb Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5, 1},
-    {kReverbPreDelayId, kPedalReverb, "Reverb Pre-delay", "Pre", "ms", PedalParamKind::Range, 0, 200, 20, 0},
+    {kReverbDecayId, kPedalReverb, "Reverb Decay", "Decay", nullptr, PedalParamKind::Range, 0, 10,
+     4, 1},
+    {kReverbToneId, kPedalReverb, "Reverb Tone", "Tone", nullptr, PedalParamKind::Range, 0, 10, 5,
+     1},
+    {kReverbPreDelayId, kPedalReverb, "Reverb Pre-delay", "Pre", "ms", PedalParamKind::Range, 0,
+     200, 20, 0},
     {kReverbMixId, kPedalReverb, "Reverb Mix", "Mix", "%", PedalParamKind::Range, 0, 100, 25, 0},
 };
 

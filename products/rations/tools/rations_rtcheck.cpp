@@ -351,11 +351,10 @@ int main(int argc, char **argv)
                                    pedalIndex >= 0) {
                             const double now =
                                 pedalNorm[pedalIndex].load(std::memory_order_relaxed);
-                            pedalNorm[pedalIndex].store(
-                                target.action == Rations::MidiAction::Toggle
-                                    ? (now > 0.5 ? 0.0 : 1.0)
-                                    : target.value,
-                                std::memory_order_relaxed);
+                            pedalNorm[pedalIndex].store(target.action == Rations::MidiAction::Toggle
+                                                            ? (now > 0.5 ? 0.0 : 1.0)
+                                                            : target.value,
+                                                        std::memory_order_relaxed);
                         }
                     }
                 }

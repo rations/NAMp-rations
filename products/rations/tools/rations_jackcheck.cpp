@@ -350,8 +350,9 @@ bool parseArgs(int argc, char **argv, Options &o)
             if (!(v = next()))
                 return false;
             if (!parsePedals(v, o.pedals)) {
-                fprintf(stderr, "rations_jackcheck: '%s' is not a pedal; try all, none, or a\n"
-                                "  comma-separated list of boost, chorus, flanger, delay, reverb\n",
+                fprintf(stderr,
+                        "rations_jackcheck: '%s' is not a pedal; try all, none, or a\n"
+                        "  comma-separated list of boost, chorus, flanger, delay, reverb\n",
                         v);
                 return false;
             }

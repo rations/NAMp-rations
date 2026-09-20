@@ -111,8 +111,8 @@ public:
         const double rate = plain[kRate];
         const double depth = plain[kDepth] * 0.01 * flangerdef::kMaxExcursion;
         // Manual is a position along the delay span, not a time: the knob reads 0-100 %.
-        const double manual = flangerdef::kMinMs
-                              + (flangerdef::kMaxMs - flangerdef::kMinMs) * plain[kManual] * 0.01;
+        const double manual =
+            flangerdef::kMinMs + (flangerdef::kMaxMs - flangerdef::kMinMs) * plain[kManual] * 0.01;
         const double regen =
             std::clamp(plain[kRegen] * 0.01, -flangerdef::kMaxRegen, flangerdef::kMaxRegen);
 
@@ -139,9 +139,9 @@ protected:
         mMsToSamples = sampleRate * 0.001;
         // The longest delay ever asked for is M0 at its maximum, swept to its longest.
         const int maxDelay =
-            static_cast<int>(std::ceil(flangerdef::kMaxMs * (1.0 + flangerdef::kMaxExcursion)
-                                       * mMsToSamples))
-            + 4;
+            static_cast<int>(
+                std::ceil(flangerdef::kMaxMs * (1.0 + flangerdef::kMaxExcursion) * mMsToSamples)) +
+            4;
         for (int c = 0; c < 2; ++c)
             mLine[c].prepare(maxDelay);
         mLfo.prepare(sampleRate);

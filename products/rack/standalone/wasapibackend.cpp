@@ -541,10 +541,11 @@ int WasapiBackend::takeBufferSizeChange()
 }
 
 //------------------------------------------------------------------------
-// The share mode and the two-clock case are here because both are things the user did not ask for and
-// needs to know: exclusive mode may have been refused by whatever else holds the device, and a rig
-// with the guitar on an interface and the sound on the laptop's speakers is running two crystals. The
-// drift corrections are what that second one costs, so they are shown where it is named.
+// The share mode and the two-clock case are here because both are things the user did not ask for
+// and needs to know: exclusive mode may have been refused by whatever else holds the device, and a
+// rig with the guitar on an interface and the sound on the laptop's speakers is running two
+// crystals. The drift corrections are what that second one costs, so they are shown where it is
+// named.
 std::string WasapiBackend::deviceSummary() const
 {
     if (!isOpen())

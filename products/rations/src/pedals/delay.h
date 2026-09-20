@@ -129,7 +129,10 @@ static_assert(kToneLoHz > kLoopHpHz * 2.0 && kToneLoHz < kToneHiHz,
 class LoopTone
 {
 public:
-    void reset() { mLp = mHp = 0.0; }
+    void reset()
+    {
+        mLp = mHp = 0.0;
+    }
 
     double process(double x, double aLp, double aHp)
     {
@@ -155,7 +158,10 @@ public:
     // and the free-running time is used instead — which is also what happens when Sync is "Free".
     // Must be pushed BEFORE setParams, because that is where the division is turned into a time;
     // PedalChain::setParams does so, and says why at the call.
-    void setTempo(double bpm) { mTempoBpm = bpm; }
+    void setTempo(double bpm)
+    {
+        mTempoBpm = bpm;
+    }
 
     void setParams(const double *plain) override
     {
@@ -177,9 +183,9 @@ public:
         // Tone is 0..10 on the knob and geometric in frequency, so equal turns of it are equal
         // musical intervals. The COEFFICIENT is what gets smoothed, not the frequency, so the
         // per-sample path carries no exp().
-        const double toneHz = delaydef::kToneLoHz
-                              * std::pow(delaydef::kToneHiHz / delaydef::kToneLoHz,
-                                         std::clamp(plain[kTone] * 0.1, 0.0, 1.0));
+        const double toneHz =
+            delaydef::kToneLoHz * std::pow(delaydef::kToneHiHz / delaydef::kToneLoHz,
+                                           std::clamp(plain[kTone] * 0.1, 0.0, 1.0));
         const double aLp = onePoleCoef(toneHz);
 
         // The first push after a prepare or a reset lands; every one after it sweeps. See the same

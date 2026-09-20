@@ -64,14 +64,23 @@ public:
 
     // The footswitch. Only ever sets a target; the crossing is done a sample at a time in
     // process(), because a footswitch that stepped the mix would click.
-    void setEngaged(bool on) { mEngaged = on; }
-    bool engaged() const { return mEngaged; }
+    void setEngaged(bool on)
+    {
+        mEngaged = on;
+    }
+    bool engaged() const
+    {
+        return mEngaged;
+    }
 
     // Whether this pedal still has work to do. NOT the same as engaged(): a pedal switched off a
     // moment ago is still ramping out, and a caller that skipped it on engaged() alone would cut
     // the fade off part-way, which is the click the fade exists to prevent. Goes false only once
     // the ramp has actually landed on zero.
-    bool active() const { return mEngaged || mMix > 0.0; }
+    bool active() const
+    {
+        return mEngaged || mMix > 0.0;
+    }
 
     // This pedal's own slice of the denormalized parameter array, in kPedalParams order. Called
     // once per sub-block from the audio thread, so it may compute coefficients but must not

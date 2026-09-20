@@ -41,7 +41,10 @@ public:
 
     // Host tempo, for the Delay's sync divisions. Zero or negative means the host supplied none,
     // and the Delay falls back to its free-running time.
-    void setTempo(double bpm) { mTempoBpm = bpm; }
+    void setTempo(double bpm)
+    {
+        mTempoBpm = bpm;
+    }
 
     // What the board adds to the plug-in's reported latency, in HOST-rate samples. Reported
     // WHETHER OR NOT the pedal that causes it is engaged, and that is the whole point: the only

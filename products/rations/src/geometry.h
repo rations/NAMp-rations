@@ -1041,7 +1041,7 @@ constexpr int kPedalKnobRow1Y = 44; // three-knob: measured, the upper pair
 constexpr int kPedalKnobMidY = 77;  // three-knob: measured, the centred lower dial
 constexpr int kPedalKnob4Row1Y = 40;
 constexpr int kPedalKnob4Row2Y = 100;
-constexpr int kPedalLabelDY = 12;    // baseline below the knob's lower edge
+constexpr int kPedalLabelDY = 12; // baseline below the knob's lower edge
 // Bare board between a legend's INK and whatever is under it. Measured against the real glyph
 // extents by panelrender, not assumed: several of these legends carry descenders.
 constexpr int kPedalLabelClearance = 4;
@@ -1059,7 +1059,7 @@ constexpr int kPedalLedR = 7;
 constexpr int kPedalLedY = 148;
 constexpr int kPedalSwitchR = 22;
 constexpr int kPedalSwitchY = 188;
-constexpr int kPedalNameY = 250;      // baseline of the pedal's own name
+constexpr int kPedalNameY = 250; // baseline of the pedal's own name
 constexpr int kPedalNameSize = 20;
 constexpr int kPedalLabelSize = 11;
 constexpr int kPedalJackY = 125;     // where a patch cable meets the enclosure

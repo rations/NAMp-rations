@@ -95,7 +95,8 @@ void render(nam::DSP &model, const double *in, double *out, int count)
     }
 }
 
-std::unique_ptr<nam::DSP> build(const Rations::CaptureSource &source, double slim, const char *label)
+std::unique_ptr<nam::DSP> build(const Rations::CaptureSource &source, double slim,
+                                const char *label)
 {
     std::string error;
     auto model = Rations::buildCaptureModel(source, slim, Rations::engine::kChunk, error);
@@ -207,7 +208,8 @@ int main(int argc, char **argv)
 
     const int total = static_cast<int>(opt.seconds * kNativeRate);
     if (opt.switchAt + opt.fadeLen + prewarm >= total) {
-        fprintf(stderr, "rations_fadecheck: not enough material after the switch; raise --seconds\n");
+        fprintf(stderr,
+                "rations_fadecheck: not enough material after the switch; raise --seconds\n");
         return 1;
     }
 

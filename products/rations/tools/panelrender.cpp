@@ -60,15 +60,25 @@ namespace
 // Every raster layer the editor loads. Keep in step with gui/make_assets.sh and
 // with the NAMP_IMG_FILES list in CMakeLists.txt.
 const char *const kRequiredImages[] = {
-    "head",         "cabinet",       "dial",          "led_on",        "led_off",
-    "switch_up_ring", "switch_down_ring", "meter_track",
+    "head",
+    "cabinet",
+    "dial",
+    "led_on",
+    "led_off",
+    "switch_up_ring",
+    "switch_down_ring",
+    "meter_track",
     // The head's title badge. It is art rather than text now, so a missing badge
     // is a head page with no name on it — worth failing for, like the head itself.
     "namp-badge",
     // The pedalboard. The five enclosures and the footswitch cap; the pedals'
     // knobs and LEDs are the very same dial/led_on/led_off named above, which is
     // why there are no pedal-specific entries for them.
-    "pedal-boost", "pedal-chorus", "pedal-flanger", "pedal-delay", "pedal-reverb",
+    "pedal-boost",
+    "pedal-chorus",
+    "pedal-flanger",
+    "pedal-delay",
+    "pedal-reverb",
     "pedal_switch",
 };
 // Every icon the editor rasterises. Folder is the author's own; the rest are
@@ -418,7 +428,7 @@ void drawPedalFace(Canvas &c, ImageCache &images, int pedal, bool on, unsigned l
         const std::string fit =
             c.clipToWidth(spec.legend, static_cast<float>(geo::pedalKnobLabelAllowance(pedal, k)));
         drawPedalString(c, fit.c_str(), cx - c.stringWidth(fit.c_str()) * 0.5f,
-                         cy + geo::kPedalKnobR + geo::kPedalLabelDY);
+                        cy + geo::kPedalKnobR + geo::kPedalLabelDY);
     }
 
     for (int m = 0, nm = pedalMiniCount(pedal); m < nm; ++m) {
@@ -469,12 +479,10 @@ void drawPedalFace(Canvas &c, ImageCache &images, int pedal, bool on, unsigned l
 
     c.setFont(Font::Title);
     c.setFontSize(static_cast<float>(geo::kPedalNameSize));
-    const std::string name =
-        c.clipToWidth(p.name, static_cast<float>(geo::kPedalFaceW));
+    const std::string name = c.clipToWidth(p.name, static_cast<float>(geo::kPedalFaceW));
     drawPedalString(c, name.c_str(),
-                     geo::kPedalLeft(pedal) + geo::kPedalKnobCX -
-                         c.stringWidth(name.c_str()) * 0.5f,
-                     static_cast<float>(p.y + geo::kPedalNameY));
+                    geo::kPedalLeft(pedal) + geo::kPedalKnobCX - c.stringWidth(name.c_str()) * 0.5f,
+                    static_cast<float>(p.y + geo::kPedalNameY));
 }
 
 //------------------------------------------------------------------------
@@ -1036,8 +1044,8 @@ bool auditPedalClearance(FontStack &fonts)
             const float w = c.stringWidth(spec.legend);
             const float l = pt.x - w * 0.5f;
             const float r = pt.x + w * 0.5f;
-            const float inkBottom = pt.y + geo::kPedalKnobR + geo::kPedalLabelDY +
-                                    c.stringDescent(spec.legend);
+            const float inkBottom =
+                pt.y + geo::kPedalKnobR + geo::kPedalLabelDY + c.stringDescent(spec.legend);
             for (const Span &o : below) {
                 // "Below" is judged against the KNOB'S CENTRE, not against the label's ink.
                 // The first version of this compared with the ink bottom, which meant an
@@ -1058,8 +1066,8 @@ bool auditPedalClearance(FontStack &fonts)
                 }
                 if (clear < worst) {
                     worst = clear;
-                    worstWhat = std::string(geo::kPedals[i].name) + " " + spec.legend + " over " +
-                                o.what;
+                    worstWhat =
+                        std::string(geo::kPedals[i].name) + " " + spec.legend + " over " + o.what;
                 }
             }
         }
@@ -1173,8 +1181,7 @@ bool auditPedalInk(ImageCache &images)
             }
         }
 
-        const double ratio =
-            contrastRatio(luminanceOf(mean), luminanceOf(geo::kPedalInk));
+        const double ratio = contrastRatio(luminanceOf(mean), luminanceOf(geo::kPedalInk));
         char buf[64];
         snprintf(buf, sizeof buf, "%s %.2f  ", geo::kPedals[i].name, ratio);
         line += buf;
@@ -1209,8 +1216,8 @@ bool auditPedalHitBoxes()
     struct Target {
         std::string what;
         bool circle;
-        float cx, cy, r;    // circle
-        float l, t, rt, b;  // rect
+        float cx, cy, r;   // circle
+        float l, t, rt, b; // rect
     };
     auto overlap = [](const Target &a, const Target &b) {
         if (a.circle && b.circle) {
@@ -1300,10 +1307,9 @@ bool auditText(FontStack &fonts)
         utilityRight =
             std::max(utilityRight, geo::kTopLedCX[i] + static_cast<float>(geo::kTopLedR));
     }
-    const float titleRoom =
-        2.0f * std::min(geo::kFaceCX - utilityRight,
-                        (geo::kSlimIconCX - geo::kSlimIconW / 2.0f - 4.0f) -
-                            static_cast<float>(geo::kFaceCX));
+    const float titleRoom = 2.0f * std::min(geo::kFaceCX - utilityRight,
+                                            (geo::kSlimIconCX - geo::kSlimIconW / 2.0f - 4.0f) -
+                                                static_cast<float>(geo::kFaceCX));
     fits.push_back({"wordmark", Font::Title, geo::kTitleSize, "Rations", titleRoom});
 
     // Dial legends: they must not reach their neighbours', so the allowance is
@@ -1357,8 +1363,7 @@ bool auditText(FontStack &fonts)
     // over the lugs would sit on the cable rather than on the box.
     for (int i = 0; i < geo::kPedalCount; ++i)
         fits.push_back({geo::kPedals[i].name, Font::Title, geo::kPedalNameSize,
-                        geo::kPedals[i].name,
-                        static_cast<float>(geo::kPedalFaceW)});
+                        geo::kPedals[i].name, static_cast<float>(geo::kPedalFaceW)});
     // The row legend sits in the band ABOVE its row, not beside it, so its
     // allowance is the page's own width less the margin it starts at. (The first
     // version of this measured the space to the LEFT of the leftmost pedal, which

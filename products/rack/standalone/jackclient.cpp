@@ -68,8 +68,8 @@ JackClient::~JackClient()
 
 //------------------------------------------------------------------------
 // The server's own numbers, and nothing about a device: on this platform the user chose their
-// interface when they started JACK, and naming one here would be reporting a choice this program did
-// not make and cannot change.
+// interface when they started JACK, and naming one here would be reporting a choice this program
+// did not make and cannot change.
 std::string JackClient::deviceSummary() const
 {
     if (!mClient)

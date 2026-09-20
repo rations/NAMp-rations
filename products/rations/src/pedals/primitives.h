@@ -56,7 +56,10 @@ public:
         reset();
     }
 
-    void reset() { mPhase = 0.0; }
+    void reset()
+    {
+        mPhase = 0.0;
+    }
 
     void setRate(double hz)
     {
@@ -75,11 +78,20 @@ public:
             mPhase -= std::floor(mPhase);
     }
 
-    double phase() const { return mPhase; }
+    double phase() const
+    {
+        return mPhase;
+    }
 
     // Value at `offsetTurns` ahead of the running phase. 0.25 is quadrature, 0.5 antiphase.
-    double sineAt(double offsetTurns) const { return std::sin(kTwoPi * (mPhase + offsetTurns)); }
-    double triangleAt(double offsetTurns) const { return triangle(mPhase + offsetTurns); }
+    double sineAt(double offsetTurns) const
+    {
+        return std::sin(kTwoPi * (mPhase + offsetTurns));
+    }
+    double triangleAt(double offsetTurns) const
+    {
+        return triangle(mPhase + offsetTurns);
+    }
 
     // Unit triangle: 0 at phase 0, +1 at 0.25, 0 at 0.5, -1 at 0.75. Continuous everywhere, so a
     // phase offset costs nothing and the delay it modulates never steps.
@@ -144,7 +156,10 @@ public:
     // The largest delay this line can be read at. Callers clamp against it rather than the line
     // clamping silently, because a delay that was quietly shortened is a pedal that quietly
     // stopped doing what its knob says.
-    double maxDelay() const { return static_cast<double>(mBuf.size()) - 3.0; }
+    double maxDelay() const
+    {
+        return static_cast<double>(mBuf.size()) - 3.0;
+    }
 
     // The shortest legal delay. One sample, because the cubic kernel reaches one sample NEWER than
     // the read point and x[n] is the newest sample there is.
@@ -207,8 +222,14 @@ public:
         snap(initial);
     }
 
-    void setTarget(double v) { mTarget = v; }
-    void snap(double v) { mCur = mTarget = v; }
+    void setTarget(double v)
+    {
+        mTarget = v;
+    }
+    void snap(double v)
+    {
+        mCur = mTarget = v;
+    }
 
     double next()
     {
@@ -220,8 +241,14 @@ public:
         return mCur;
     }
 
-    double current() const { return mCur; }
-    double target() const { return mTarget; }
+    double current() const
+    {
+        return mCur;
+    }
+    double target() const
+    {
+        return mTarget;
+    }
 
 private:
     static constexpr double kSnap = 1.0e-12;

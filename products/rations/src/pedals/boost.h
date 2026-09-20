@@ -184,9 +184,8 @@ protected:
 
         // One smoothing step and one coefficient rebuild per block. exp() once per block, never
         // per sample.
-        const double alpha =
-            1.0
-            - std::exp(-(static_cast<double>(numSamples) / mSampleRate) / ts9::kControlSmoothSec);
+        const double alpha = 1.0 - std::exp(-(static_cast<double>(numSamples) / mSampleRate) /
+                                            ts9::kControlSmoothSec);
         const double driveWas = mDrive;
         const double toneWas = mTone;
         mDrive += (mDriveTarget - mDrive) * alpha;
@@ -241,7 +240,10 @@ protected:
 private:
     static constexpr double kPi = 3.14159265358979323846;
 
-    static double clamp01(double v) { return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v); }
+    static double clamp01(double v)
+    {
+        return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+    }
     static double clampPot(double v)
     {
         return v < ts9::kPotEnd ? ts9::kPotEnd : (v > 1.0 - ts9::kPotEnd ? 1.0 - ts9::kPotEnd : v);
@@ -280,8 +282,8 @@ private:
     // or two iterations.
     double solveClipper(double in)
     {
-        const double drive = in * mInvCc;    // the input current term, on its own
-        const double base = drive + mDeriv;  // plus the trapezoid's stored past term
+        const double drive = in * mInvCc;   // the input current term, on its own
+        const double base = drive + mDeriv; // plus the trapezoid's stored past term
 
         // THE INITIAL GUESS IS NOT OPTIONAL, and this is the one thing in the Boost that was got
         // wrong and found by measurement rather than by reading. Warm-starting from the previous
@@ -366,8 +368,8 @@ private:
         const double rpar = rl * rr / (rl + rr);
         const double y = (rl + rr) * (ts9::kToneRz + rpar);
         const double wz = 1.0 / (ts9::kToneCz * (ts9::kToneRz + rpar));
-        const double wp = 1.0 / (ts9::kToneCs * (ts9::kToneRs * ts9::kToneRi /
-                                                 (ts9::kToneRs + ts9::kToneRi)));
+        const double wp =
+            1.0 / (ts9::kToneCs * (ts9::kToneRs * ts9::kToneRi / (ts9::kToneRs + ts9::kToneRi)));
         const double x = (rr / (rl + rr)) * wz;
 
         const double b1 = rl * ts9::kToneRf + y;
