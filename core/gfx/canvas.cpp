@@ -340,6 +340,77 @@ std::string Canvas::clipToWidth(const std::string &s, float maxW) const
     return std::string();
 }
 
+// Elide the middle, keeping both ends, so a name's distinguishing suffix survives. See the
+// declaration for why this exists beside clipToWidth rather than replacing it.
+//
+// The tail gets the larger share of what is left after the ellipsis, because it is the end that
+// identifies the file; the head is kept at all because a name with no head reads as a fragment
+// rather than as a shortened name.
+//
+// Both halves are grown a WHOLE UTF-8 character at a time -- cutting mid-sequence would emit a
+// replacement glyph -- and the result is then re-measured and trimmed, because the width of a
+// concatenation is not the sum of its parts: kerning and hinting mean head + ellipsis + tail can
+// come out a little wider than the three measured separately.
+std::string Canvas::elideMiddle(const std::string &s, float maxW) const
+{
+    if (stringWidth(s.c_str()) <= maxW)
+        return s;
+
+    static const char *kEllipsis = "\xE2\x80\xA6"; // U+2026 HORIZONTAL ELLIPSIS
+    const float ellW = stringWidth(kEllipsis);
+    // No room for the ellipsis itself, let alone anything either side of it: fall back rather than
+    // return something that would overrun the row it was measured for.
+    if (maxW <= ellW)
+        return clipToWidth(s, maxW);
+
+    const float budget = maxW - ellW;
+    const float headBudget = budget * 0.40f;
+
+    // Grow the head forward over whole characters.
+    size_t head = 0;
+    while (head < s.size()) {
+        size_t n = head + 1;
+        while (n < s.size() && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80)
+            ++n;
+        if (stringWidth(s.substr(0, n).c_str()) > headBudget)
+            break;
+        head = n;
+    }
+
+    // Grow the tail backward over whole characters, spending whatever the head did not.
+    const float tailBudget = budget - stringWidth(s.substr(0, head).c_str());
+    size_t tail = s.size();
+    while (tail > head) {
+        size_t n = tail - 1;
+        while (n > head && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80)
+            --n;
+        if (stringWidth(s.substr(n).c_str()) > tailBudget)
+            break;
+        tail = n;
+    }
+
+    // Nothing was kept at either end: the width is too small for this approach to say anything,
+    // so let the plain truncation answer instead of returning a bare ellipsis.
+    if (head == 0 && tail == s.size())
+        return clipToWidth(s, maxW);
+
+    std::string out = s.substr(0, head) + kEllipsis + s.substr(tail);
+    // Re-measure, and give back characters from the HEAD if the join came out wide -- the tail is
+    // the half worth keeping.
+    while (stringWidth(out.c_str()) > maxW && head > 0) {
+        size_t n = head - 1;
+        while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80)
+            --n;
+        head = n;
+        out = s.substr(0, head) + kEllipsis + s.substr(tail);
+    }
+    // Still too wide with no head left at all, which means the tail alone does not fit: the plain
+    // truncation is the only thing that can be guaranteed to.
+    if (stringWidth(out.c_str()) > maxW)
+        return clipToWidth(s, maxW);
+    return out;
+}
+
 //------------------------------------------------------------------------
 void Canvas::pushClip(const Rect &r)
 {

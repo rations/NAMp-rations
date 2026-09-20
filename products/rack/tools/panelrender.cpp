@@ -235,7 +235,11 @@ void drawIrRow(Canvas &c, SvgCache &icons, const geo::FileRow &row, const char *
     c.setFont(Font::Body);
     c.setFontSize(geo::kFileRowTextSize);
     c.setColor(loaded ? geo::kTextColor : geo::kDimColor);
-    c.drawString(c.clipToWidth(text, row.w - (tx - row.x) - 10).c_str(), tx, row.y + row.h - 10);
+    // elideMiddle and the editor's own 30-unit allowance, so this render is what the editor
+    // draws: an IR's identifying part is its SUFFIX, and tail truncation renders different files
+    // identically. The 10 here was a second number for the same gap and reported a row as fitting
+    // text the editor would have elided.
+    c.drawString(c.elideMiddle(text, row.w - (tx - row.x) - 30.0f).c_str(), tx, row.y + row.h - 10);
 }
 
 //------------------------------------------------------------------------
@@ -375,7 +379,10 @@ void renderCabinet(Canvas &c, ImageCache &images, SvgCache &icons)
         c, Font::Title, geo::kBlendLabelSize, bothLoaded ? geo::kTextColor : geo::kDimColor,
         "Blend", static_cast<float>(geo::kBlendCX), static_cast<float>(geo::kBlendLabelBaselineY));
 
-    drawIrRow(c, icons, geo::kIrRowA, "Marshall 1960A - SM57 cap edge.wav", true);
+    // A LONG name, and a real one: the page has to be judged in the state that breaks it. The
+    // short name this used to carry fits in any width the row has ever had, so the render looked
+    // correct throughout the period when a real IR folder was rendering 192 files as 45 labels.
+    drawIrRow(c, icons, geo::kIrRowA, "V30 LL 4FB 4x12 SM57 0.00in 0.0in OA30 7603.wav", true);
     drawIrRow(c, icons, geo::kIrRowB, geo::kIrRowB.placeholder, false);
 }
 

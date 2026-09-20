@@ -172,6 +172,14 @@ public:
     float stringAscent(const char *text) const;
     // Truncate with an ellipsis until it fits maxW at the current font.
     std::string clipToWidth(const std::string &s, float maxW) const;
+    // The same, but eliding the MIDDLE so the string's END survives. For names whose
+    // distinguishing part is the suffix -- a file name above all. clipToWidth cuts the tail, which
+    // on a folder of IRs named by a long fixed prefix and a short varying suffix renders different
+    // files identically: measured on a real 192-file IR pack, 192 names came out as 45 distinct
+    // labels in the width the cabinet page used to give them, so stepping the prev/next arrows
+    // changed the sound without changing the text. Keep clipToWidth for a legend, whose meaning is
+    // at its front; reach for this one whenever the string is a name the user chose.
+    std::string elideMiddle(const std::string &s, float maxW) const;
 
     //--- clipping ------------------------------------------------------
     void pushClip(const Rect &r);

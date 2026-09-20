@@ -68,9 +68,21 @@ constexpr int kWinW = 1133;
 constexpr int kWinH = 403;
 
 // The cabinet: art aspect 1483/872 = 1.7007, drawn as wide as the page allows
-// with the two IR rows underneath it and a back button above.
+// with the two IR rows STACKED underneath it and a back button above.
+//
+// The height carries the second row: the loaders are one above the other rather
+// than side by side, so each one spans the cabinet's full width. Why, measured
+// on a real IR collection (256 files) rather than judged by eye: an IR pack
+// names its files by a long fixed prefix and a short varying suffix
+// ("V30 LL 4FB 4x12 SM57 0.00in 0.0in OA30 7603.wav"), so the part that
+// identifies the file is the part at the END. Two side-by-side rows left 187
+// units for the name, which truncated every one of those before the suffix --
+// 192 distinct files rendered as 45 distinct labels, and stepping the prev/next
+// arrows changed the sound without changing a pixel of the text. Full width
+// gives 494 units against a longest measured name of 328: 192 of 192 distinct.
+// The literal is checked against the rows by the static_assert beside kIrRowB.
 constexpr int kCabPageW = 640;
-constexpr int kCabPageH = 460;
+constexpr int kCabPageH = 496;
 
 // The pedalboard: five enclosures on two rows, PRE above and POST below.
 // 3 * kPedalW + 2 * kPedalGap + 2 * 24 of margin across; the header band the back
@@ -919,11 +931,25 @@ struct FileRow {
 };
 constexpr int kFileRowH = 28;
 constexpr int kIrRowY = kCabY + kCabH + 12; // 412
-constexpr int kIrRowGap = 18;
-constexpr int kIrRowW = (kCabW - kIrRowGap) / 2; // 289
+// Between the two stacked rows. Much smaller than the 18 that used to separate
+// them side by side: horizontally that gap was holding two widgets apart, and
+// vertically it is holding two rows of one list together.
+constexpr int kIrRowVGap = 8;
+// EACH row spans the cabinet's full width -- see kCabPageH for the measurement
+// that decided it. This is the whole of the fix: the name is not elided in the
+// common case at all, rather than elided more cleverly.
+constexpr int kIrRowW = kCabW; // 596
 constexpr FileRow kIrRowA = {kCabX, kIrRowY, kIrRowW, kFileRowH, "Select IR...", "wav"};
-constexpr FileRow kIrRowB = {kCabX + kIrRowW + kIrRowGap, kIrRowY, kIrRowW, kFileRowH,
-                             "Select IR (optional)...",   "wav"};
+constexpr FileRow kIrRowB = {kCabX,     kIrRowY + kFileRowH + kIrRowVGap, kIrRowW,
+                             kFileRowH, "Select IR (optional)...",        "wav"};
+// The page height is a literal (it is needed long before this point), so this is
+// what stops it drifting from the rows it has to contain. The bottom margin is
+// 20 and matches what the single row left when the pair sat side by side.
+static_assert(kIrRowB.y + kIrRowB.h + 20 == kCabPageH,
+              "the cabinet page height no longer matches the stacked IR rows it must contain");
+static_assert(kIrRowA.x + kIrRowA.w == kCabX + kCabW && kIrRowB.x + kIrRowB.w == kCabX + kCabW,
+              "each IR row must span exactly the cabinet's width -- cabinet and rows are one "
+              "column, and a row that stops short reads as a widget parked under a picture");
 constexpr int kRowIconW = 20; // status icon inset at the left of a row
 // How tall that icon is drawn. Here rather than in the view, because the
 // settings page's capture rows draw the same icon and the art audit measures
@@ -1585,7 +1611,8 @@ constexpr const char *kOutputFootnote2 =
 constexpr int kBrowserX = 16;
 constexpr int kBrowserY = 16;
 constexpr int kBrowserW = kCabPageW - 2 * kBrowserX; // 608
-constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
+constexpr int kBrowserH =
+    kCabPageH - 2 * kBrowserY; // 464 -- grew with the cabinet page when the IR rows were stacked
 
 // The settings page opens the same browser for its four capture rows, and it is
 // a much taller page — the cabinet's card centred on it would leave 230 units of

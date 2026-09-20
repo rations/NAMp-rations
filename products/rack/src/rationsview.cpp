@@ -1567,7 +1567,11 @@ void RationsEditorView::drawIrRow(Canvas &c, int slot)
     c.setFontSize(geo::kFileRowTextSize);
     c.setColor(loaded ? geo::kTextColor : geo::kDimColor);
     const std::string text = loaded ? pathBaseName(path) : std::string(row.placeholder);
-    c.drawString(c.clipToWidth(text, r.w - (tx - r.x) - 30.0f).c_str(), tx, r.bottom() - 10.0f);
+    // elideMiddle, not clipToWidth: an IR pack names its files by a long fixed prefix and a short
+    // varying suffix, so the end is what says which file this is. Tail truncation renders
+    // different IRs identically and makes the prev/next arrows look dead. The row is now wide
+    // enough that nothing is elided in the common case; this is what happens beyond it.
+    c.drawString(c.elideMiddle(text, r.w - (tx - r.x) - 30.0f).c_str(), tx, r.bottom() - 10.0f);
 
     if (loaded) {
         const Rect clear = rowClearBox(row);
