@@ -99,6 +99,9 @@ cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 #   rack/desktop/*.desktop    -> ~/.local/share/applications             (its menu entry)
 #   rack/desktop/*.png        -> ~/.local/share/icons/hicolor/<size>/apps (its icon)
 #
+# The last two follow XDG_DATA_HOME where it is set, so ~/.local/share is the default rather than
+# the rule; the installer prints the paths it actually used.
+#
 # The standalone is self-contained: the amp, its art and its fonts are inside the binary, so there
 # is nothing else for it to find. The pedals go to ~/.vst3 because that is one of the directories
 # the standalone's own scan looks in, so they appear in its plug-in list on the next rescan -- and
@@ -213,6 +216,9 @@ Everything goes under your home directory and nothing needs root:
     ~/.vst3/Rations*.vst3              the five pedals
     ~/.local/bin/namp-rack             the standalone
     ~/.local/share/applications/       its menu entry, with an icon
+
+(If you have set XDG_DATA_HOME, the menu entry and the icon go there instead.
+The installer prints the paths it actually used when it finishes.)
 
 Then rescan plug-ins in your DAW. To remove it all again:
 

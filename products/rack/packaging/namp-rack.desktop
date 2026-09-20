@@ -5,6 +5,7 @@ Name=NAMp Rack
 GenericName=Guitar Amplifier and Plug-in Host
 Comment=Four-channel Neural Amp Modeler amp head with a VST3/LV2 plug-in rack (JACK)
 Exec=namp-rack
+TryExec=namp-rack
 Icon=namp-rack
 Terminal=false
 Categories=AudioVideo;Audio;X-Digital_Processing;

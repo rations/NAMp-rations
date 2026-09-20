@@ -5,6 +5,7 @@ Name=NAMp Rations
 GenericName=Guitar Amplifier
 Comment=Four-channel Neural Amp Modeler amp head (JACK)
 Exec=namp-rations-standalone
+TryExec=namp-rations-standalone
 Icon=namp-rations
 Terminal=false
 Categories=AudioVideo;Audio;X-Digital_Processing;

@@ -460,9 +460,24 @@ EOF
                 ;;
             desktop)
                 cat <<'EOF'
+# The menu and icon directories are derived from XDG_DATA_HOME, NOT hard-coded to ~/.local/share,
+# because that variable is what the menu itself reads: GLib's g_get_user_data_dir() returns
+# $XDG_DATA_HOME when it is set and $HOME/.local/share only as the fallback (measured against
+# GLib 2.84.4). A user who has relocated XDG_DATA_HOME -- and some distributions and dotfile
+# setups do -- would otherwise get the entry installed into a directory nothing ever scans, which
+# looks exactly like the install having silently done nothing.
+# The Base Directory Specification says a relative value is invalid and must be ignored, so the
+# leading-slash test is the spec's rule and not a guess.
+if [ -n "${XDG_DATA_HOME:-}" ] && [ "${XDG_DATA_HOME#/}" != "$XDG_DATA_HOME" ]; then
+  DATA_HOME="$XDG_DATA_HOME"
+else
+  DATA_HOME="$HOME/.local/share"
+fi
+# There is no XDG variable for user binaries; ~/.local/bin is the location systemd's
+# file-hierarchy(7) specifies, so it stays literal rather than being invented from one.
 BIN_DIR="$HOME/.local/bin"
-APP_DIR="$HOME/.local/share/applications"
-ICON_ROOT="$HOME/.local/share/icons/hicolor"
+APP_DIR="$DATA_HOME/applications"
+ICON_ROOT="$DATA_HOME/icons/hicolor"
 
 refresh() {
   command -v update-desktop-database >/dev/null && update-desktop-database "$APP_DIR" 2>/dev/null || true
@@ -479,9 +494,38 @@ EOF
 # relative to the extracted archive. The directory is a parameter rather than a constant because
 # the release package holds more than one product and each keeps its own files under its own
 # subdirectory -- there is no one "desktop/" any more.
+#
+# Exec and TryExec are REWRITTEN to an absolute path here rather than copied through, because the
+# staged entry carries the bare command name -- the right form for a distribution that installs
+# into /usr/bin, and the wrong one for this installer, which installs into ~/.local/bin. A desktop
+# entry's Exec is resolved against the PATH of the SESSION, not of a login shell, and a session
+# started by a display manager or by openbox-session commonly has PATH=/usr/local/bin:/usr/bin:/bin
+# with no ~/.local/bin on it. Measured, both halves, on a machine where the binary was installed
+# and present:
+#   * openbox (obmenu-generator) reads Exec out of the file and hands it to exec, so the entry is
+#     listed in the menu and clicking it fails with "file not found";
+#   * GLib REJECTS the file outright -- g_desktop_app_info_load_from_keyfile returns FALSE when
+#     g_find_program_in_path(argv[0]) is NULL (checked against GLib 2.84.4:
+#     Gio.DesktopAppInfo.new_from_filename returned NULL under the session PATH and an object under
+#     a PATH carrying ~/.local/bin). Everything built on GDesktopAppInfo therefore shows no entry
+#     AT ALL, in no category, including "All" -- which is what MATE does.
+# Exec is quoted and TryExec is not: GLib unquotes Exec per the Desktop Entry Specification and
+# passes TryExec to g_find_program_in_path verbatim, so quoting TryExec would break the very lookup
+# it exists to perform. Both were confirmed by loading and launching an entry whose path contained
+# a space. TryExec is added so that a stale entry left behind by a hand-deleted binary hides itself
+# instead of offering a launch that cannot work.
+# Written to a sibling and renamed over, rather than redirected onto the target: a redirection
+# truncates before grep runs, so a missing or unreadable staged entry would leave a WORKING install
+# holding a zero-length one, which under `set -e` is where the installer would then stop.
 namp_install_icons_install() {
     cat <<EOF
-install -m 644 "\$HERE/$2/$1.desktop" "\$APP_DIR/$1.desktop"
+{
+  grep -v -E '^(Exec|TryExec)=' "\$HERE/$2/$1.desktop"
+  printf 'Exec="%s/$1"\n' "\$BIN_DIR"
+  printf 'TryExec=%s/$1\n' "\$BIN_DIR"
+} > "\$APP_DIR/$1.desktop.new"
+chmod 644 "\$APP_DIR/$1.desktop.new"
+mv -f "\$APP_DIR/$1.desktop.new" "\$APP_DIR/$1.desktop"
 for SIZE in 256 128 64 48; do
   mkdir -p "\$ICON_ROOT/\${SIZE}x\${SIZE}/apps"
   install -m 644 "\$HERE/$2/$1-\${SIZE}.png" "\$ICON_ROOT/\${SIZE}x\${SIZE}/apps/$1.png"
@@ -498,12 +542,16 @@ done
 EOF
 }
 
+# The "works either way" claim below is true because namp_install_icons_install writes an ABSOLUTE
+# Exec into the installed entry. It was not true while the entry carried the bare command name, and
+# it must not be restated anywhere that stops being the case.
 namp_install_path_note() {
     cat <<EOF
 case ":\$PATH:" in
   *":\$BIN_DIR:"*) ;;
   *) echo "Note: \$BIN_DIR is not on your PATH, so '$1' will not be"
-     echo "found by name from a shell. The menu entry works either way." ;;
+     echo "found by name from a shell. The menu entry works either way -- it"
+     echo "was installed with the full path to the program, not just its name." ;;
 esac
 echo
 echo "To remove it again:  ./install.sh --uninstall"
