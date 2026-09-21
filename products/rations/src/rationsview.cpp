@@ -329,8 +329,12 @@ void RationsEditorView::drawStaticLayer(Canvas &c)
 {
     switch (mPage) {
         case geo::Page::Head:
+            // kHeadArtH and not kWinH: the art is blitted at its own size at the top of the page
+            // and the strip occupies the band below it. Using the page height here would stretch
+            // the photograph, which is the one thing the split of those two constants prevents.
             if (cairo_surface_t *head = mImages.get("head"))
-                c.drawImage(head, Rect(0, 0, geo::kWinW, geo::kWinH));
+                c.drawImage(head, Rect(0, 0, geo::kWinW, geo::kHeadArtH));
+            drawHeadStripStatic(c);
             // The wordmark: the NAMp badge with "Rations" under it. The badge is art and the
             // word is still text in Michroma, centred by measuring it at draw time — so this
             // must stay in step with panelrender's renderHead(), which draws the same two
@@ -601,6 +605,97 @@ void RationsEditorView::composeHead(Canvas &c)
     // The settings button. Drawn in the page buttons' own style at its own smaller size, because
     // it says what is behind it rather than naming one page — see geometry.h.
     drawButton(c, geo::kSettingsButton, true, geo::kSettingsButtonTextSize);
+
+    drawHeadStrip(c);
+}
+
+//------------------------------------------------------------------------
+// The strip's ground furniture: the edge that separates it from the photograph, and the three
+// rules between the four bank columns. Static, so it is composited once per resize with the art
+// rather than redrawn under every frame's text.
+void RationsEditorView::drawHeadStripStatic(Canvas &c)
+{
+    c.setColor(geo::kStripEdgeColor, geo::kStripEdgeAlpha);
+    c.fillRect(Rect(0.0f, static_cast<float>(geo::kStripTop), static_cast<float>(geo::kWinW),
+                    static_cast<float>(geo::kStripEdgeH)));
+
+    // Three rules and not five: the outer two would be the page's own edges, where a rule reads
+    // as a border round the strip rather than as a division inside it.
+    const float top = static_cast<float>(geo::kStripTop + geo::kStripPadT);
+    const float h = static_cast<float>(geo::kStripCaptureY + geo::kStripCaptureDescent) - top;
+    c.setColor(geo::kStripEdgeColor, geo::kStripDividerAlpha);
+    for (int i = 1; i < geo::kStripBankCount; ++i)
+        c.fillRect(Rect(static_cast<float>(geo::kStripColX0 + i * geo::kStripColW), top,
+                        static_cast<float>(geo::kStripEdgeH), h));
+}
+
+//------------------------------------------------------------------------
+// The live half of the strip. Everything here is read straight out of the controller or out of
+// the capability cache, so nothing has to be told when it changes: a pedal stomped over MIDI, a
+// bank loaded on the settings page and a dial moved by automation all arrive as the ParamChanged
+// or ModelCapsChanged that already marks this view dirty.
+void RationsEditorView::drawHeadStrip(Canvas &c)
+{
+    const int sounding = activeChannel();
+    const float clip = static_cast<float>(geo::kStripTextW);
+
+    for (int ch = 0; ch < kChannelCount; ++ch) {
+        const float cx = static_cast<float>(geo::kStripColCX[ch]);
+
+        // The same three-deep name the dial legend above shows, so a folder loaded or a name
+        // typed moves both at once.
+        const std::string name = c.clipToWidth(mController ? mController->channelName(ch)
+                                                           : std::string(kChannelDefaultName[ch]),
+                                               clip);
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kStripBankNameSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(name.c_str(), cx - c.stringWidth(name.c_str()) * 0.5f,
+                     static_cast<float>(geo::kStripBankNameY));
+
+        c.setFont(Font::Body);
+        c.setFontSize(geo::kStripCaptureSize);
+        const std::string capture = stripCaptureName(ch);
+        if (capture.empty()) {
+            // An empty channel is an ordinary state and not an error one - a fresh instance has
+            // four of them - so it is reported by colour rather than by a message. Green means a
+            // capture, dim means nothing there, and the same dash covers a bank whose names have
+            // not arrived from the worker yet.
+            c.setColor(geo::kDimColor);
+            c.drawString(geo::kStripNoCapture, cx - c.stringWidth(geo::kStripNoCapture) * 0.5f,
+                         static_cast<float>(geo::kStripCaptureY));
+            continue;
+        }
+
+        // The name follows the DIAL, which is where the hand is. On the sounding channel the
+        // engine slews towards it at its own rate, so for up to a receptive field per capture
+        // crossed the two disagree - and that interval is drawn at a lower alpha rather than
+        // hidden, because the honest report is that the panel has arrived and the ears have not.
+        // The four channel lamps above are what say which channel is sounding at all.
+        const bool arrived = (ch != sounding) || captureIndex(ch) == dialCaptureIndex(ch);
+        c.setColor(geo::kAccent, arrived ? 255 : geo::kStripCatchingUpAlpha);
+        const std::string shown = c.elideMiddle(capture, clip);
+        c.drawString(shown.c_str(), cx - c.stringWidth(shown.c_str()) * 0.5f,
+                     static_cast<float>(geo::kStripCaptureY));
+    }
+
+    // The pedals read the same parameter the pedalboard page's footswitches do, so the two pages
+    // cannot disagree and a MIDI stomp moves both. Nothing is cached here for the same reason.
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kStripPedalNameSize);
+    for (int p = 0; p < geo::kPedalCount; ++p) {
+        const bool on = paramValue(kPedalOnId[p]) > 0.5;
+        c.setColor(on ? geo::kTextColor : geo::kDimColor);
+        // Right-aligned against the lamp, so every name ends the same distance from the lamp
+        // that reports it however wide the name is. See kStripPedalNameRight.
+        const std::string name =
+            c.clipToWidth(geo::kPedals[p].name, static_cast<float>(geo::kStripPedalNameW));
+        c.drawString(name.c_str(),
+                     static_cast<float>(geo::kStripPedalNameRight(p)) - c.stringWidth(name.c_str()),
+                     static_cast<float>(geo::kStripPedalCY + geo::kStripPedalNameDY));
+        drawLed(c, static_cast<float>(geo::kStripPedalLedCX(p)),
+                static_cast<float>(geo::kStripPedalCY), on, static_cast<float>(geo::kStripLedR));
+    }
 }
 
 //------------------------------------------------------------------------
@@ -934,8 +1029,9 @@ void RationsEditorView::composeSettings(Canvas &c)
 }
 
 //------------------------------------------------------------------------
-// One capture row: the channel's name on the left, what is loaded in the middle, a clear box at
-// the end, and a build-progress hairline along the bottom edge while the bank is still coming up.
+// One capture row: the channel's name on the left, what is loaded in the middle, and a clear box
+// at the end. There is no per-row build progress and there cannot be one: kBankProgressId is a
+// single global figure, so it cannot say WHICH bank is building. It gates the caps poll instead.
 //
 // This is the cabinet page's IR row with a name field added, and it is drawn from the same parts
 // for the same reason: it is the same act. What differs is that a channel's source may be a FOLDER
@@ -1542,7 +1638,9 @@ std::string RationsEditorView::knobReadout(const geo::KnobSpec &k) const
     for (int ch = 0; ch < kChannelCount; ++ch) {
         if (k.id != kChannelGainId[ch])
             continue;
-        const int index = captureIndex(ch);
+        // The dial's own capture, so the readout under the hand and the strip below the
+        // faceplate never name two different things while that dial is being dragged.
+        const int index = dialCaptureIndex(ch);
         if (index < 0 || index >= static_cast<int>(mCaptureNames[ch].size()))
             return std::string();
         return shortCaptureLabel(mCaptureNames[ch][static_cast<size_t>(index)]);
@@ -1873,21 +1971,55 @@ int RationsEditorView::activeChannel() const
                       kChannelCount - 1);
 }
 
-// Which capture is sounding in channel `c`. The processor reports the active channel's index from
+// Where channel `c`'s DIAL is pointing, which is a fact about the panel and is true the instant
+// the hand moves. Nothing about the audio thread enters it.
+int RationsEditorView::dialCaptureIndex(int c) const
+{
+    if (c < 0 || c >= kChannelCount || mEntryCount[c] <= 0)
+        return -1;
+    if (mEntryCount[c] == 1)
+        return 0;
+    const double norm = paramValue(kChannelGainId[c]);
+    return std::clamp(static_cast<int>(std::lround(norm * (mEntryCount[c] - 1))), 0,
+                      mEntryCount[c] - 1);
+}
+
+// Which capture is SOUNDING in channel `c`. The processor reports the active channel's index from
 // the audio thread, but only once audio has actually run; before that (and in a stopped host, and
 // for the three channels that are not sounding) the dial's own position is the honest answer, so
 // the readout is never blank or wrong at index zero.
+//
+// The two differ on one channel and for a bounded time: the engine slews towards the dial rather
+// than jumping to it, so on the sounding channel this lags dialCaptureIndex() by up to a
+// receptive field per capture crossed. Which of the two a caller wants is a real choice and not
+// an implementation detail, which is why there are two functions and not a flag.
 int RationsEditorView::captureIndex(int c) const
 {
     if (c < 0 || c >= kChannelCount || mEntryCount[c] <= 0)
         return -1;
     if (c == activeChannel() && mActiveIndex >= 0 && mActiveIndex < mEntryCount[c])
         return mActiveIndex;
-    if (mEntryCount[c] == 1)
-        return 0;
-    const double norm = paramValue(kChannelGainId[c]);
-    return std::clamp(static_cast<int>(std::lround(norm * (mEntryCount[c] - 1))), 0,
-                      mEntryCount[c] - 1);
+    return dialCaptureIndex(c);
+}
+
+// The capture name the strip prints for channel `c`. Empty when that channel has no bank, or
+// when its names have not arrived from the worker yet - the caller draws the placeholder, since
+// an empty channel and a bank still building look the same from here and read the same to a user.
+std::string RationsEditorView::stripCaptureName(int c) const
+{
+    if (c < 0 || c >= kChannelCount)
+        return std::string();
+    const int index = dialCaptureIndex(c);
+    if (index < 0 || index >= static_cast<int>(mCaptureNames[c].size()))
+        return std::string();
+    // captureLabel and not shortCaptureLabel: the WHOLE file name, with only the extension
+    // taken off. The dial's own readout keeps the short form because it has 88 units to work in;
+    // this column has 267, and at that width the rest of the name is worth showing. What looks
+    // like a repeated bank name in a long one usually is not redundant — a bank is commonly gain
+    // staged 1..10 with the position at the END, and some captures carry no number at all, so
+    // the tail is the part that says which capture this is and the head is what says it belongs
+    // to this bank. elideMiddle keeps both ends, which is why the column can afford it.
+    return captureLabel(mCaptureNames[c][static_cast<size_t>(index)]);
 }
 
 // Both slots filled, or the dial is inert. With one IR that IR runs at unity and the blend does
@@ -1990,6 +2122,17 @@ static Rect pedalMiniRect(int pedal, int slot)
 // art 24 wide) and for the same reason: the thing being aimed at on the real object is a foot. It
 // costs nothing here because the band it grows into holds nothing else - the mini slots stop at
 // kPedalMiniY + kPedalMiniH / 2 and the name starts below the switch, both asserted in geometry.h.
+// One pedal's cell on the head page's strip: the name and the lamp together, because at this
+// size the lamp alone is a 14-unit target and the two read as one control anyway. This is the
+// same argument the utility row's lamps make for falling inside their own switch's box.
+static Rect stripPedalCellRect(int pedal)
+{
+    return Rect(static_cast<float>(geo::kStripPedalCellX(pedal)),
+                static_cast<float>(geo::kStripPedalCellTop),
+                static_cast<float>(geo::kStripPedalCellW),
+                static_cast<float>(geo::kStripPedalCellH));
+}
+
 static Rect pedalSwitchRect(int pedal)
 {
     const geo::PedalPoint pt = geo::pedalSwitchCenter(pedal);
@@ -2187,6 +2330,19 @@ bool RationsEditorView::handleHeadClick(float x, float y)
         if (!top.contains(x, y))
             continue;
         editParam(t.id, paramValue(t.id) > 0.5 ? 0.0 : 1.0);
+        invalidate();
+        return true;
+    }
+
+    // The strip's pedal cells, last, because they are the only targets below the faceplate and
+    // nothing above may be shadowed by one. It is the same line handlePedalboardClick performs on
+    // the footswitch itself, against the same parameter, which is what makes the two pages two
+    // views of one state rather than two states to keep in step.
+    for (int i = 0; i < geo::kPedalCount; ++i) {
+        if (!stripPedalCellRect(i).contains(x, y))
+            continue;
+        const Vst::ParamID id = kPedalOnId[i];
+        editParam(id, paramValue(id) > 0.5 ? 0.0 : 1.0);
         invalidate();
         return true;
     }

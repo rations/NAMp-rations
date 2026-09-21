@@ -25,6 +25,7 @@
 // Usage: rations_lv2check [bundle directory]
 // With no argument it searches the host's ordinary LV2 path, which is what a DAW does.
 
+#include "geometry.h"
 #include "lv2/lv2message.h"
 #include "lv2/rationslv2.h"
 #include "version.h"
@@ -1362,8 +1363,13 @@ void checkUiBinary(const std::string &bundleDir, const LilvPlugin *plugin)
     }
 
     const int screen = DefaultScreen(dpy);
-    ::Window parent = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), 0, 0, 1133, 403, 0,
-                                          BlackPixel(dpy, screen), BlackPixel(dpy, screen));
+    // The editor's own head page at scale 1.0, taken from geometry.h rather than written down:
+    // the UI resizes the parent through ui_resize as soon as it opens, so the size is not a gate
+    // here — but a second copy of it is a number that goes stale silently, and this one did when
+    // the status strip made the page taller than the art.
+    ::Window parent = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), 0, 0, Rations::geo::kWinW,
+                                          Rations::geo::kWinH, 0, BlackPixel(dpy, screen),
+                                          BlackPixel(dpy, screen));
     XFlush(dpy);
 
     UridMap map;

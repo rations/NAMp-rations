@@ -166,6 +166,11 @@ private:
     // enclosure itself is static and is composited by drawPedalboardStatic.
     void drawPedal(Canvas &c, int pedal);
     void drawPedalSwitch(Canvas &c, float cx, float cy);
+    // The status strip under the faceplate: the four banks with the capture each dial is on, and
+    // the five pedals with a lamp each. Everything here is parameter- or caps-dependent, so it is
+    // composed every frame; the band it sits on and its dividers are static.
+    void drawHeadStrip(Canvas &c);
+    void drawHeadStripStatic(Canvas &c);
     void drawMeter(Canvas &c, const geo::MeterRect &m, float level, float peak);
     void drawButton(Canvas &c, const geo::ButtonSpec &b, bool enabled = true,
                     int textSize = geo::kPageButtonTextSize);
@@ -263,6 +268,13 @@ private:
     // Index of the capture sounding in channel `c`, falling back to that dial's position before
     // the processor has reported one.
     int captureIndex(int c) const;
+    // Index of the capture channel `c`'s DIAL is pointing at — always, including for the channel
+    // that is sounding, where captureIndex() answers with the engine's own slewed position
+    // instead. The panel says where the hand is; the channel lamps above say what is sounding.
+    int dialCaptureIndex(int c) const;
+    // The capture name to print for channel `c`, or an empty string when that channel has no bank
+    // loaded or its names have not arrived yet.
+    std::string stripCaptureName(int c) const;
     // The blend dial only does anything with both slots filled; with one it is drawn disabled and
     // ignores input, because a mix that can attenuate a one-IR user is a bug, not a blend.
     bool blendActive() const;

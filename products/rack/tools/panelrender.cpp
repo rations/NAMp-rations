@@ -280,11 +280,56 @@ const char *kWorstKnobValue[geo::kKnobCount] = {nullptr,     nullptr, nullptr, n
                                                 "-100.0 dB", "10.0",  "10.0",  "10.0"};
 const char *kWorstIoValue = "-40.0 dB";
 
+// Two real capture names, with two different jobs.
+//
+// kStripDemoCapture is what the render DRAWS: a long one, so the picture shows the row in
+// the state that stresses it and elideMiddle doing its work. Same reasoning as the cabinet
+// page's IR row, which carries a real 47-character name for the same reason.
+//
+// kStripFitCapture is what the text audit MEASURES, and it is deliberately not the one
+// above. A capture name is a file name the user chose and is expected to elide — asserting
+// that every conceivable one fits would fail on any bank with a long naming scheme and say
+// nothing. What is worth gating is that an ORDINARY name fits whole, which is what catches
+// kStripCaptureSize being raised or the column being narrowed. The IR rows audit their
+// placeholder rather than a real 328-unit filename for exactly this reason.
+const char *kStripDemoCapture = "1. MESA DUAL RECTIFIER 2025 _ CRUNCH _ RHYTHM #1";
+const char *kStripFitCapture = "boosted dual terror (mids) DI";
+
+// The strip under the faceplate, drawn exactly as RationsEditorView::drawHeadStrip and
+// drawHeadStripStatic draw it and in the same order. This render is what the Windows panel diff
+// compares against, so a difference here is a false regression.
+void renderHeadStrip(Canvas &c)
+{
+    c.setColor(geo::kStripEdgeColor, geo::kStripEdgeAlpha);
+    c.fillRect(Rect(0.0f, static_cast<float>(geo::kStripTop), static_cast<float>(geo::kWinW),
+                    static_cast<float>(geo::kStripEdgeH)));
+
+    const float dividerTop = static_cast<float>(geo::kStripTop + geo::kStripPadT);
+    const float dividerH =
+        static_cast<float>(geo::kStripCaptureY + geo::kStripCaptureDescent) - dividerTop;
+    c.setColor(geo::kStripEdgeColor, geo::kStripDividerAlpha);
+    for (int i = 1; i < geo::kStripBankCount; ++i)
+        c.fillRect(Rect(static_cast<float>(geo::kStripColX0 + i * geo::kStripColW), dividerTop,
+                        static_cast<float>(geo::kStripEdgeH), dividerH));
+
+    const float clip = static_cast<float>(geo::kStripTextW);
+    for (int ch = 0; ch < kChannelCount; ++ch) {
+        const float cx = static_cast<float>(geo::kStripColCX[ch]);
+        // The default names, which is what an unnamed channel shows and what auditText measures.
+        drawCenteredText(c, Font::Title, geo::kStripBankNameSize, geo::kTextColor,
+                         kChannelDefaultName[ch], cx, static_cast<float>(geo::kStripBankNameY));
+        const std::string shown = c.elideMiddle(kStripDemoCapture, clip);
+        drawCenteredText(c, Font::Body, geo::kStripCaptureSize, geo::kAccent, shown.c_str(), cx,
+                         static_cast<float>(geo::kStripCaptureY));
+    }
+}
+
+//------------------------------------------------------------------------
 void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
 {
     c.setColor(geo::kBgColor);
     c.fillRect(c.bounds());
-    c.drawImage(images.get("head"), Rect(0, 0, geo::kWinW, geo::kWinH));
+    c.drawImage(images.get("head"), Rect(0, 0, geo::kWinW, geo::kHeadArtH));
 
     // The wordmark: the NAMp badge with the title word under it. The same two draws as
     // RationsEditorView::drawStaticLayer, in the same order — this render is what the
@@ -360,6 +405,7 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
         c.drawImage(slim, Rect(geo::kSlimIconCX - geo::kSlimIconW / 2.0f,
                                geo::kSlimIconCY - geo::kSlimIconH / 2.0f, geo::kSlimIconW,
                                geo::kSlimIconH));
+    renderHeadStrip(c);
 }
 
 //------------------------------------------------------------------------
@@ -794,6 +840,16 @@ bool auditHitBoxes()
                      geo::kSlimIconCY - geo::kSlimIconH / 2.0f - 4,
                      geo::kSlimIconCX + geo::kSlimIconW / 2.0f + 4,
                      geo::kSlimIconCY + geo::kSlimIconH / 2.0f + 4});
+    // The strip's four bank columns are not clickable, but they are in the check as obstacles
+    // for the same reason the meters below are: a control drawn over a capture name is a fault
+    // whether or not a click is involved.
+    for (int i = 0; i < geo::kStripBankCount; ++i)
+        boxes.push_back({kChannelDefaultName[i],
+                         static_cast<float>(geo::kStripColX0 + i * geo::kStripColW),
+                         static_cast<float>(geo::kStripTop + geo::kStripPadT),
+                         static_cast<float>(geo::kStripColX0 + (i + 1) * geo::kStripColW),
+                         static_cast<float>(geo::kStripCaptureY + geo::kStripCaptureDescent)});
+
     // The two level meters are not clickable, but a control drawn on top of one is a control
     // drawn on top of the thing it is supposed to sit beside, so they are in the check as
     // obstacles.
@@ -920,6 +976,13 @@ bool auditText(FontStack &fonts)
                     geo::kIrRowW - geo::kIrTextDX - 10.0f});
 
     // Settings page.
+    // The strip. Two kinds of string sharing one column's width.
+    for (int i = 0; i < kChannelCount; ++i)
+        fits.push_back({"strip bank name", Font::Title, geo::kStripBankNameSize,
+                        kChannelDefaultName[i], static_cast<float>(geo::kStripTextW)});
+    fits.push_back({"strip capture", Font::Body, geo::kStripCaptureSize, kStripFitCapture,
+                    static_cast<float>(geo::kStripTextW)});
+
     fits.push_back({"settings heading", Font::Title, geo::kSettingsHeadingSize, "MIDI Learn",
                     static_cast<float>(geo::kMidiRowW)});
     for (int i = 0; i < kMidiLearnRowCount; ++i)
@@ -1247,11 +1310,11 @@ int main(int argc, char **argv)
     if (cairo_surface_t *head = images.get("head")) {
         const int bw = cairo_image_surface_get_width(head);
         const int bh = cairo_image_surface_get_height(head);
-        if (bw != geo::kWinW || bh != geo::kWinH) {
+        if (bw != geo::kWinW || bh != geo::kHeadArtH) {
             fprintf(stderr,
                     "panelrender: head.png is %dx%d but geometry.h says %dx%d — regenerate the "
-                    "art or update kWinW/kWinH (and gui/geometry.sh) together\n",
-                    bw, bh, geo::kWinW, geo::kWinH);
+                    "art or update kWinW/kHeadArtH (and gui/geometry.sh) together\n",
+                    bw, bh, geo::kWinW, geo::kHeadArtH);
             ++missing;
         }
     }

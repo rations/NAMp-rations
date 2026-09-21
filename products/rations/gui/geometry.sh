@@ -22,11 +22,19 @@
 # it reproduces those four bands exactly.
 
 # ---- Canvas -----------------------------------------------------------------
-# Exactly the trimmed size of the amp-head art (head + drop shadow). Choosing
-# the art's own size means the default window is a pixel-exact 1:1 blit with no
-# resampling at all; anything else would soften the panel at its default size.
+# THE ART AND THE PAGE ARE TWO DIFFERENT HEIGHTS, and only one of them is about
+# the art. HEAD_W/HEAD_H below is the trimmed size of the amp-head art (head +
+# drop shadow), and is the number this pipeline enforces: the art is blitted at
+# its own size so the panel is a pixel-exact 1:1 blit with no resampling at all.
+#
+# WIN_H is the head PAGE, which is that art plus the status strip drawn under
+# it — the four banks' current captures and the five pedal lamps. The amp is not
+# stretched to fill it. Mirrored from kWinH in src/geometry.h by hand, as the
+# note at the top of this file says the canvas size is; the art's own height is
+# gated by make_assets.sh and this one is not, so it is the one to check by eye
+# when either moves.
 WIN_W=1133
-WIN_H=403
+WIN_H=513
 
 # Host resizing range, as a multiple of the canvas. The art is the resolution
 # ceiling: the head is 1133 px wide in the source, so above 1.0 the panel is
@@ -58,6 +66,7 @@ PEAK_COLOR="#FF3B30"    # meter peak marker
 # something to downsample from at SCALE_MAX. head.png is the exception: the
 # source art has no more detail to give, so it is stored 1:1 and is the reason
 # SCALE_MAX is 1.5 rather than 2.
+# This is the ART, not the window: see WIN_H above.
 HEAD_W=1133; HEAD_H=403
 # The speaker cabinet, stored at its own trimmed size. It is drawn far smaller
 # than this (see CAB_* in src/geometry.h): the editor canvas is the amp head's

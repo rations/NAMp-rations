@@ -36,7 +36,7 @@
 #     drag readout is only drawn while the button is held, so a screenshot has to be taken from a
 #     second process while the drag is still in flight.
 #
-# The window size doubles as the page identity, since every page brings its own: head 1133x403,
+# The window size doubles as the page identity, since every page brings its own: head 1133x513,
 # cabinet 640x460, pedalboard 662x681, settings 640x524 (at scale 1.0). So --size is both how the
 # window is found and how you say which page you expect to be looking at. Keep these in step with
 # geometry.h's kPageSizes -- the settings and pedalboard figures here were both stale once, which
@@ -79,7 +79,7 @@ repo=$(cd "$root/../.." && pwd)
 build="${RATIONS_BUILD_DIR:-$repo/build}"
 export DISPLAY="${DISPLAY:-:0}"
 
-size="1133x403"
+size="1133x513"
 settle=8
 
 while [ "$#" -gt 0 ]; do

@@ -77,10 +77,35 @@ constexpr int kPageCount = 2;
 //     never an assumption baked into the drawing code, because the bundle has to
 //     keep working under a host that grants any size it likes.
 
-// The head page IS the trimmed size of head.png, so at scale 1.0 the panel is a
-// pixel-exact blit with no resampling. This one is not free to change.
+// THE HEAD ART AND THE HEAD PAGE ARE TWO DIFFERENT HEIGHTS, and the distinction
+// is load-bearing rather than bookkeeping.
+//
+// kHeadArtH IS the trimmed size of head.png, so at scale 1.0 the panel is a
+// pixel-exact blit with no resampling. That one is not free to change: the art
+// audit in tools/panelrender.cpp fails if the PNG's own trim disagrees with it.
+//
+// kWinH is the PAGE, which is the art plus the status strip drawn underneath
+// it. The amp is not stretched to fill the taller page — the art is blitted at
+// its own size at the top and the strip occupies the band below it.
+//
+// The rack's own deck is measured from kWinH (rack/rackgeometry.h), so a taller
+// head page moves the strip of hosted plug-ins down with it and needs no change
+// there: kWindowH is written as the head page plus kRackH and stays correct.
 constexpr int kWinW = 1133;
-constexpr int kWinH = 403;
+constexpr int kHeadArtH = 403;
+
+// The strip's own height. Spelled as a literal here, and re-derived from the
+// row inside it by the static_assert in the strip's block further down: the row
+// constants depend on the typography block, which is declared long after
+// kPageSizes needs this number.
+//
+// SHORTER THAN THE AMP PLUG-IN'S 110, because this strip carries one row and
+// that one carries two. The pedalboard is not in this product — the rack hosts
+// other people's pedals instead of containing five — so there is no row of
+// pedal lamps to make room for, and inventing one here would be a row about a
+// feature this binary does not have.
+constexpr int kStripH = 66;
+constexpr int kWinH = kHeadArtH + kStripH; // 469
 
 // --- The setup page's two columns -------------------------------------------
 // The page is the window's width, and it is divided once, vertically, DOWN THE
@@ -806,7 +831,9 @@ static_assert(kSlimIconCX - kSlimIconW / 2 - 4 > kWordmarkInkRight,
 constexpr int kSlimKnobR = 42;
 constexpr int kSlimOverlayW = 220, kSlimOverlayH = 212;
 constexpr int kSlimOverlayX = kFaceCX - kSlimOverlayW / 2;
-constexpr int kSlimOverlayY = (kWinH - kSlimOverlayH) / 2;
+// Centred on the AMP, not on the page: the card belongs to the faceplate it
+// dims, and centring it on art-plus-strip would push it down onto the strip.
+constexpr int kSlimOverlayY = (kHeadArtH - kSlimOverlayH) / 2; // 95
 constexpr int kSlimKnobCX = kFaceCX;
 constexpr int kSlimKnobCY = kSlimOverlayY + 96;
 constexpr int kSlimTitleSize = 18;
@@ -967,6 +994,104 @@ constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
 // lamps are meant to sit somewhere else, delete this.
 static_assert(kLedCY == kPageButtonY + kPageButtonH / 2,
               "the channel lamps no longer line up with the page buttons");
+
+// --- The status strip, under the faceplate ----------------------------------
+// WHAT THE STRIP IS FOR: the one thing a player could not see without leaving
+// this page — which capture each of the four banks is on.
+//
+// A channel dial sweeps a bank of up to 64 captures and each one is a different
+// gain stage, but the faceplate has no permanent room to name it: the band
+// under the four channel dials belongs to the bat switches, which is why
+// drawKnob lends that row to the readout only while the dial is held. The
+// answer is a fact the editor already has; it had nowhere to be written down.
+//
+// So the strip is a band BELOW the art rather than a rearrangement of it.
+// Nothing on the faceplate moves and the photograph is not stretched.
+//
+// ONE ROW, WHERE THE AMP PLUG-IN HAS TWO. Its strip carries a second row of
+// five pedal lamps; this product has no pedalboard, because the rack hosts
+// other people's pedals instead of containing its own. The rack's deck below
+// already reports what is loaded and whether it is in circuit, so a second row
+// here would be that deck's job done worse.
+//
+// It is on the head page only. The setup page has its own canvas and its own
+// subject.
+constexpr int kStripTop = kHeadArtH; // 403
+constexpr int kStripPadT = 16;
+constexpr int kStripPadB = 16;
+
+// The strip's two colours and its one string. Local here rather than in the
+// shared palette because they describe one region of one page. The edge is the
+// faceplate's gold at a fraction of its weight: a full-strength rule there
+// reads as a second piece of piping and competes with the real one 70 units
+// above it, and what it has to do is say the band below is not the photograph.
+//
+// It is deliberately the SAME edge the amp plug-in draws, and not the rack
+// deck's own kRackTopEdge. This band is part of the editor — one logical
+// canvas, the amp's own colours — and the rack's hairline below it is what
+// says where the editor stops and the host's chrome begins. Two different
+// edges is the point; two of the same would read as one 66-unit box.
+constexpr uint32_t kStripEdgeColor = kGold;
+constexpr int kStripEdgeAlpha = 90;
+constexpr int kStripDividerAlpha = 40;
+constexpr int kStripEdgeH = 1;
+// A capture name is drawn at full accent once the engine has reached the
+// capture the dial is pointing at, and at this alpha while it is still sliding
+// towards it. Same colour either way: the name is not in doubt, only whether
+// the ears have arrived at it yet.
+constexpr int kStripCatchingUpAlpha = 120;
+// What a channel with no bank loaded says.
+inline constexpr const char *kStripNoCapture = "\xE2\x80\x94"; // U+2014 EM DASH
+
+// The four banks, the page's full width in four equal columns.
+//
+// FULL WIDTH AND NOT UNDER THE DIALS, which is the one thing about this row
+// that looks wrong until the numbers are in front of you. Aligning each column
+// with the dial it reports gives each name kKnobPitch — 94 units. That is the
+// width the drag readout already has, and it is why that readout has to throw
+// away everything before the last " - " to say anything at all. Four equal
+// columns give 267, which holds a name.
+constexpr int kStripBankCount = kChannelCount;      // 4
+constexpr int kStripColW = kWinW / kStripBankCount; // 283
+constexpr int kStripColGutter = 16;
+constexpr int kStripTextW = kStripColW - kStripColGutter; // 267
+// The spare unit of 1133 falls outside the columns rather than inside one of
+// them, so the four are identical and the row is symmetric about the page.
+constexpr int kStripColX0 = (kWinW - kStripBankCount * kStripColW) / 2; // 0
+constexpr int kStripColCX[kStripBankCount] = {
+    kStripColX0 + 0 * kStripColW + kStripColW / 2, kStripColX0 + 1 * kStripColW + kStripColW / 2,
+    kStripColX0 + 2 * kStripColW + kStripColW / 2,
+    kStripColX0 + 3 * kStripColW + kStripColW / 2}; // 141, 424, 707, 990
+
+// Michroma for the channel name, because it is a panel legend and every panel
+// legend on this amp is Michroma. Roboto for the capture, because it is a FILE
+// NAME: variable length, certain to be elided, and legibility under elision is
+// the whole reason the body face is kept at all.
+constexpr int kStripBankNameSize = kKnobLabelSize;                           // 12, Michroma
+constexpr int kStripCaptureSize = kFileRowTextSize;                          // 12, Roboto
+constexpr int kStripBankNameY = kStripTop + kStripPadT + kStripBankNameSize; // 431
+constexpr int kStripCaptureGap = 18;
+constexpr int kStripCaptureY = kStripBankNameY + kStripCaptureGap; // 449
+// Roboto 12's ink below the baseline, rounded up.
+constexpr int kStripCaptureDescent = 4;
+
+// The strip's height is spelled in two places — once at the top of this file
+// where kPageSizes needs it, and once here where the row is. This is what stops
+// them drifting.
+static_assert(kWinH == kHeadArtH + kStripH,
+              "the head page is the art plus the strip, and nothing else");
+static_assert(kStripH == kStripCaptureY + kStripCaptureDescent + kStripPadB - kStripTop,
+              "kStripH and the row inside the strip have drifted apart");
+static_assert(kStripBankNameY - kStripBankNameSize > kHeadArtH,
+              "the strip's names are drawn over the faceplate art");
+static_assert(kStripBankCount * kStripColW <= kWinW, "the bank columns no longer fit the page");
+static_assert(kStripTextW > 0 && kStripTextW < kStripColW,
+              "a bank column has no room left for a name inside its gutter");
+static_assert(kStripTop >= kFaceB, "the strip has come up onto the faceplate");
+// The Slim card dims and covers the whole page while it is open, but the card
+// itself belongs to the amp above.
+static_assert(kSlimOverlayY + kSlimOverlayH <= kHeadArtH,
+              "the Slim card hangs off the amp and onto the strip");
 
 // The way back, drawn top-left on every page that is not the head. Its position
 // is the same on all three, and it is deliberately clear of every page's own

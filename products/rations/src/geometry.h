@@ -62,10 +62,31 @@ constexpr int kPageCount = 4;
 //     old behaviour and is why every page is still drawn centred on its own
 //     canvas rather than pinned to a corner.
 
-// The head page IS the trimmed size of head.png, so at scale 1.0 the panel is a
-// pixel-exact blit with no resampling. This one is not free to change.
+// THE HEAD ART AND THE HEAD PAGE ARE TWO DIFFERENT HEIGHTS, and the distinction
+// is load-bearing rather than bookkeeping.
+//
+// kHeadArtH IS the trimmed size of head.png, so at scale 1.0 the panel is a
+// pixel-exact blit with no resampling. That one is not free to change: the art
+// audit in tools/panelrender.cpp fails if the PNG's own trim disagrees with it.
+//
+// kWinH is the PAGE, which is the art plus the status strip drawn underneath
+// it. The amp is not stretched to fill the taller page — the art is blitted at
+// its own size at the top and the strip occupies the band below it.
+//
+// These two were one constant, and every use of it meant one of the two things
+// by accident. Splitting them is what lets the page grow without the photograph
+// growing with it.
 constexpr int kWinW = 1133;
-constexpr int kWinH = 403;
+constexpr int kHeadArtH = 403;
+
+// The strip's own height. Spelled as a literal here, and re-derived from the
+// rows inside it by the static_assert in the strip's block further down: the
+// row constants depend on the typography block and on the page-button row, both
+// of which are declared long after kPageSizes needs this number. That is the
+// same arrangement kSettingsMinViewH and kSettingsDefaultViewH below already
+// use, and the assert is what stops the two spellings drifting apart.
+constexpr int kStripH = 110;
+constexpr int kWinH = kHeadArtH + kStripH; // 513
 
 // The cabinet: art aspect 1483/872 = 1.7007, drawn as wide as the page allows
 // with the two IR rows STACKED underneath it and a back button above.
@@ -183,9 +204,9 @@ constexpr double pageScaleMin(Page p)
 // A LOWER FLOOR WAS NOT ENOUGH, and that is a measurement rather than a change
 // of mind. The floor was written to make the whole page fit in a short window;
 // what it could not do is make the whole page fit in a short window ON A HOST
-// THAT WILL NOT RESIZE. Every other page is 403 units tall or less, so the
-// letterbox path — fit the page in whatever window exists and centre it — always
-// had room. This one is 928, and when the fitted scale came out below the floor
+// THAT WILL NOT RESIZE. The other three pages are 681 units tall at the most,
+// so the letterbox path — fit the page in whatever window exists and centre it —
+// always had room. This one is 1184, and when the fitted scale came out below the floor
 // it was clamped UP to the floor, which put mOffY negative and cut the top and
 // bottom off the page. The sections at the ends are the capture loaders and the
 // output mode: the two a user needs most and the two that went missing.
@@ -743,7 +764,9 @@ static_assert(kSlimIconCX - kSlimIconW / 2 - 4 > kWordmarkInkRight,
 constexpr int kSlimKnobR = 42;
 constexpr int kSlimOverlayW = 220, kSlimOverlayH = 212;
 constexpr int kSlimOverlayX = kFaceCX - kSlimOverlayW / 2;
-constexpr int kSlimOverlayY = (kWinH - kSlimOverlayH) / 2;
+// Centred on the AMP, not on the page: the card belongs to the faceplate it
+// dims, and centring it on art-plus-strip would push it down onto the strip.
+constexpr int kSlimOverlayY = (kHeadArtH - kSlimOverlayH) / 2; // 95
 constexpr int kSlimKnobCX = kFaceCX;
 constexpr int kSlimKnobCY = kSlimOverlayY + 96;
 constexpr int kSlimTitleSize = 18;
@@ -879,6 +902,197 @@ constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
 // lamps are meant to sit somewhere else, delete this.
 static_assert(kLedCY == kPageButtonY + kPageButtonH / 2,
               "the channel lamps no longer line up with the page buttons");
+
+// --- The status strip, under the faceplate ----------------------------------
+// WHAT THE STRIP IS FOR: the two things a player could not see without leaving
+// this page. Which capture each of the four banks is on, and which pedals are
+// engaged.
+//
+// Neither was a gap in the panel so much as a gap in the FURNITURE. A channel
+// dial sweeps a bank of up to 64 captures and each one is a different gain
+// stage, but the faceplate has no permanent room to name it: the band under the
+// four channel dials belongs to the bat switches, which is why drawKnob lends
+// that row to the readout only while the dial is held (see the note there). And
+// the five pedals are a page away, so knowing whether Delay is on meant opening
+// a window mid-song. Both answers are facts the editor already has; they had
+// nowhere to be written down.
+//
+// So the strip is a band BELOW the art rather than a rearrangement of it.
+// Nothing on the faceplate moves, the photograph is not stretched, and the
+// strip is the one part of this page that is drawn rather than photographed.
+//
+// It is on the head page only. The other three pages have their own canvases
+// and their own subjects, and a status line about the amp on the cabinet page
+// would be furniture about somewhere else.
+constexpr int kStripTop = kHeadArtH; // 403
+constexpr int kStripPadT = 16;
+constexpr int kStripPadB = 16;
+
+// The strip's own two colours and its one string. Local here rather than in the shared palette
+// for the reason the rack's strip keeps its own: they describe one region of one page, and a
+// name in palette.h is a claim that something else may reasonably reach for it.
+//
+// The edge is the faceplate's gold at a fraction of its weight. A full-strength rule there reads
+// as a second piece of piping and competes with the real one 70 units above it; what this has to
+// do is say the band below is not part of the photograph.
+constexpr uint32_t kStripEdgeColor = kGold;
+constexpr int kStripEdgeAlpha = 90;
+constexpr int kStripDividerAlpha = 40;
+constexpr int kStripEdgeH = 1;
+// A capture name is drawn at full accent once the engine has reached the capture the dial is
+// pointing at, and at this alpha while it is still sliding towards it. Same colour either way:
+// the name is not in doubt, only whether the ears have arrived at it yet.
+constexpr int kStripCatchingUpAlpha = 120;
+// What a channel with no bank loaded says. An em dash and not "Select a capture...": that string
+// is an instruction on a row a user can click, and row A is a readout.
+inline constexpr const char *kStripNoCapture = "\xE2\x80\x94"; // U+2014 EM DASH
+
+// Row A: the four banks, the page's full width in four equal columns.
+//
+// FULL WIDTH AND NOT UNDER THE DIALS, which is the one thing about this row
+// that looks wrong until the numbers are in front of you. Aligning each column
+// with the dial it reports would be the obvious arrangement and gives each name
+// kKnobPitch — 94 units — to live in. That is the width the drag readout
+// already has, and it is why the readout has to use shortCaptureLabel() and
+// throw away everything before the last " - " to say anything at all. A bank of
+// captures names its files by a long fixed prefix and a short varying suffix,
+// exactly as an IR pack does (see the kIrRow block above, where the same fact
+// was measured on 256 real files), so 94 units is not a small label — it is no
+// label. Four equal columns give 267, which holds a name.
+constexpr int kStripBankCount = kChannelCount;      // 4
+constexpr int kStripColW = kWinW / kStripBankCount; // 283
+constexpr int kStripColGutter = 16;
+constexpr int kStripTextW = kStripColW - kStripColGutter; // 267
+// The spare unit of 1133 falls outside the columns rather than inside one of
+// them, so the four are identical and the row is symmetric about the page.
+constexpr int kStripColX0 = (kWinW - kStripBankCount * kStripColW) / 2; // 0
+constexpr int kStripColCX[kStripBankCount] = {
+    kStripColX0 + 0 * kStripColW + kStripColW / 2, kStripColX0 + 1 * kStripColW + kStripColW / 2,
+    kStripColX0 + 2 * kStripColW + kStripColW / 2,
+    kStripColX0 + 3 * kStripColW + kStripColW / 2}; // 141, 424, 707, 990
+
+// Michroma for the channel name, because it is a panel legend and every panel
+// legend on this amp is Michroma. Roboto for the capture, because it is a FILE
+// NAME: variable length, certain to be elided, and legibility under elision is
+// the whole reason the body face is kept at all. kFileRowTextSize is the size
+// the IR rows already give the same kind of string.
+constexpr int kStripBankNameSize = kKnobLabelSize;                           // 12, Michroma
+constexpr int kStripCaptureSize = kFileRowTextSize;                          // 12, Roboto
+constexpr int kStripBankNameY = kStripTop + kStripPadT + kStripBankNameSize; // 431
+constexpr int kStripCaptureGap = 18;
+constexpr int kStripCaptureY = kStripBankNameY + kStripCaptureGap; // 449
+// Roboto 12's ink below the baseline, rounded up. Used to keep the row clear of
+// what is under it without measuring a string that is not known until run time.
+constexpr int kStripCaptureDescent = 4;
+
+// Row B: the five pedals, centred and NARROWER than the page.
+//
+// Narrower because it carries less: five words and five lamps against four
+// columns of file name. Stretching it to the full width would space the cells
+// 226 apart and the row would read as five unrelated things rather than as one
+// pedalboard. Centred because a narrower row has to be anchored to something,
+// and the page's own centre line is the only thing here that is not arbitrary.
+//
+// THE LAMP IS TO THE RIGHT OF ITS NAME, which is the opposite hand to the
+// utility row above — where every lamp precedes the switch it reports, and the
+// note there explains why that side was chosen. This row is not that row: there
+// is no switch to be beside, only a word, and a word is read left to right and
+// answered at its end. Lamp-then-name would put five lamps in a column down the
+// left and five ragged words after them; name-then-lamp puts the five answers
+// on one line, which is what a glance at this row is asking for.
+constexpr int kStripPedalNameSize = 11; // one cap-even step down from row A
+constexpr int kStripLedR = kTopLedR;    // 7; the utility row's lamp, not the channel row's
+constexpr int kStripNameToLedGap = 8;
+// Wide enough for the longest of the five names at kStripPedalNameSize. MEASURED
+// by tools/panelrender.cpp's text audit, not computed from the font's nominal
+// width — the pedal-face legends below record what happened the last time an
+// allowance here was worked out instead of measured.
+constexpr int kStripPedalNameW = 80;
+constexpr int kStripCellPadX = 8;
+constexpr int kStripPedalCellW =
+    kStripCellPadX + kStripPedalNameW + kStripNameToLedGap + 2 * kStripLedR + kStripCellPadX; // 118
+constexpr int kStripPedalCellH = 26;
+constexpr int kStripPedalGap = 14;
+constexpr int kStripPedalPitch = kStripPedalCellW + kStripPedalGap; // 132
+constexpr int kStripPedalGroupW =
+    kPedalCount * kStripPedalCellW + (kPedalCount - 1) * kStripPedalGap; // 646
+constexpr int kStripPedalGroupX = (kWinW - kStripPedalGroupW) / 2;       // 243
+constexpr int kStripRowGap = 22;
+constexpr int kStripPedalCellTop = kStripCaptureY + kStripRowGap;        // 471
+constexpr int kStripPedalCY = kStripPedalCellTop + kStripPedalCellH / 2; // 484
+constexpr int kStripPedalNameDY = 4; // baseline off the cell's centre line
+
+// A cell's own left edge, and the two things inside it. The name is
+// left-aligned against the pad and the lamp is inset from the RIGHT edge, so
+// the lamps land on kStripPedalPitch however the names happen to measure.
+constexpr int kStripPedalCellX(int pedal)
+{
+    return kStripPedalGroupX + pedal * kStripPedalPitch;
+}
+// The name's RIGHT edge, because the name is right-aligned against the lamp and not
+// left-aligned in the cell. Measured on the rendered row rather than reasoned about: the five
+// names are 50 to 80 units wide, so left-aligning them in a 118-unit cell leaves a short one
+// like "Boost" 45 units clear of its own lamp and 30 from the NEXT pedal's name — a lamp nearer
+// the word it does not report than the one it does, which is the failure the utility row's own
+// proximity assert exists to prevent. Right-aligned, every lamp is exactly kStripNameToLedGap
+// from its own name whatever that name measures, and the lamps still land on kStripPedalPitch
+// because the cell they are inset from does.
+constexpr int kStripPedalNameRight(int pedal)
+{
+    return kStripPedalCellX(pedal) + kStripPedalCellW - kStripCellPadX - 2 * kStripLedR -
+           kStripNameToLedGap;
+}
+// The left bound the name may not cross, which is what the art audit measures kStripPedalNameW
+// against.
+constexpr int kStripPedalNameLeft(int pedal)
+{
+    return kStripPedalCellX(pedal) + kStripCellPadX;
+}
+constexpr int kStripPedalLedCX(int pedal)
+{
+    return kStripPedalCellX(pedal) + kStripPedalCellW - kStripCellPadX - kStripLedR;
+}
+
+// The strip's height and the rows inside it are spelled in two places — once at
+// the top of this file where kPageSizes needs the number, and once here where
+// the rows are. This is what stops them drifting.
+static_assert(kWinH == kHeadArtH + kStripH,
+              "the head page is the art plus the strip, and nothing else");
+static_assert(kStripH == kStripPedalCellTop + kStripPedalCellH + kStripPadB - kStripTop,
+              "kStripH and the rows inside the strip have drifted apart");
+static_assert(kStripBankNameY - kStripBankNameSize > kHeadArtH,
+              "row A's names are drawn over the faceplate art");
+static_assert(kStripCaptureY + kStripCaptureDescent < kStripPedalCellTop,
+              "the capture names and the pedal row have run together");
+static_assert(kStripBankCount * kStripColW <= kWinW, "the bank columns no longer fit the page");
+static_assert(kStripTextW > 0 && kStripTextW < kStripColW,
+              "a bank column has no room left for a name inside its gutter");
+static_assert(kStripPedalGroupW < kWinW && kStripPedalGroupX > 0,
+              "the pedal row is meant to be centred and NARROWER than the page");
+static_assert(kStripCellPadX + kStripPedalNameW + kStripNameToLedGap + 2 * kStripLedR +
+                      kStripCellPadX ==
+                  kStripPedalCellW,
+              "a pedal cell's parts no longer add up to its width — the lamp has left the cell");
+// The utility row's proximity rule, applied to a row whose lamps are on the
+// other side. Right-aligning the name makes both sides of it constants rather
+// than functions of whatever the name measures: a lamp is always
+// kStripNameToLedGap from its own name, and never nearer than a cell's two pads
+// plus the gap from the next one. 8 against 30.
+static_assert(kStripNameToLedGap < 2 * kStripCellPadX + kStripPedalGap,
+              "a pedal lamp is no nearer its own name than the next pedal's");
+static_assert(kStripPedalNameRight(0) - kStripPedalNameLeft(0) == kStripPedalNameW,
+              "the room left for a pedal name is not the allowance the art audit measures");
+// The faceplate's own lowest click targets are the page buttons and the channel
+// lamps, which share the line kLedCY sits on. The strip must clear them, and it
+// is asserted rather than eyeballed because the strip is the first thing ever
+// drawn below the art and there is nothing else to catch it coming up.
+static_assert(kStripPedalCellTop > kPageButtonY + kPageButtonH,
+              "the pedal cells have reached the page buttons' click targets");
+static_assert(kStripTop >= kFaceB, "the strip has come up onto the faceplate");
+// The Slim card dims and covers the whole page while it is open, but the card
+// itself belongs to the amp above.
+static_assert(kSlimOverlayY + kSlimOverlayH <= kHeadArtH,
+              "the Slim card hangs off the amp and onto the strip");
 
 // The way back, drawn top-left on every page that is not the head. Its position
 // is the same on all three, and it is deliberately clear of every page's own

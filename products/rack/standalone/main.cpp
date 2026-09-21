@@ -84,7 +84,7 @@ constexpr uint32 kUiTickMs = 33;
 // The size the editor comes up at is the editor's own (its head page at scale 1.0); these are only
 // the last resort for a view that refuses to report one.
 constexpr int kFallbackW = 1133;
-constexpr int kFallbackH = 403;
+constexpr int kFallbackH = 469; // the head ART is 403; the page is that plus the status strip
 
 Rations::EventLoop *gEventLoop = nullptr;
 

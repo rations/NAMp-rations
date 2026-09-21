@@ -26,7 +26,10 @@
 # the art's own size means the default window is a pixel-exact 1:1 blit with no
 # resampling at all; anything else would soften the panel at its default size.
 WIN_W=1133
-WIN_H=403
+# The head PAGE, which is the art plus the status strip drawn under it (the four banks and the
+# capture each is on). The ART's own height is HEAD_H below and is still 403; mirrored from
+# kWinH in src/geometry.h by hand, as the note at the top of this file says the canvas is.
+WIN_H=469
 
 # Host resizing range, as a multiple of the canvas. The art is the resolution
 # ceiling: the head is 1133 px wide in the source, so above 1.0 the panel is
@@ -58,6 +61,7 @@ PEAK_COLOR="#FF3B30"    # meter peak marker
 # something to downsample from at SCALE_MAX. head.png is the exception: the
 # source art has no more detail to give, so it is stored 1:1 and is the reason
 # SCALE_MAX is 1.5 rather than 2.
+# This is the ART, not the window: see WIN_H above.
 HEAD_W=1133; HEAD_H=403
 # The speaker cabinet, stored at its own trimmed size. It is drawn far smaller
 # than this (see CAB_* in src/geometry.h): the editor canvas is the amp head's
