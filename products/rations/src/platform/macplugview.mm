@@ -907,8 +907,10 @@ void MacPlugView::redraw()
 //   -desth-y, destw, desth)`).
 //
 // The destination rectangle is in POINTS while the image is in device pixels,
-// which is what makes a Retina Mac land 1:1: a 2266x806 image drawn into a
-// 1133x403 point rect on a 2x backing store is one image pixel per screen pixel.
+// which is what makes a Retina Mac land 1:1: a 2266x1026 image drawn into a
+// 1133x513 point rect on a 2x backing store is one image pixel per screen pixel.
+// (513 is the head PAGE — the faceplate art plus the status strip under it — and
+// nothing here depends on the figure; the view is drawn at whatever size it is.)
 void MacPlugView::macDraw(void *cgContext)
 {
     CGContextRef ctx = static_cast<CGContextRef>(cgContext);
