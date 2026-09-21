@@ -66,6 +66,20 @@ endif()
 # at that one site now.
 
 
+# A build type, because an empty one is not a neutral default here. Under a single-configuration
+# generator CMake then defines neither NDEBUG nor _DEBUG, and the SDK's base/source/fdebug.h
+# refuses to compile without one of the four it names -- a hard error inside the SDK's own sources,
+# raised well after a configure that reported no problem, and naming no file this repository wrote.
+# The rack has had this since it was written; rations did not, which made the DEFAULT product the
+# one that broke for anyone who configured by hand rather than through a script.
+#
+# Not FORCE-ing over an existing value: the guard is on CMAKE_CONFIGURATION_TYPES as well, so a
+# multi-config generator -- where the build type is chosen at build time and this variable is
+# meaninglessly empty by design -- is left alone rather than given a value it would ignore.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
 # Objective-C++, and it belongs HERE rather than in the platform split below,
 # which is where every other platform decision in this file lives. Three files
 # in this build are .mm: the editor's NSView, and the SDK's own module_mac.mm,

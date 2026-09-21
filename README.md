@@ -355,12 +355,24 @@ git submodule update --init NeuralAmpModelerCore AudioDSPTools eigen rations-ped
 git submodule update --init vst3sdk
 git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
 
-cmake -S . -B build                              # NAMp Rations (the default)
+# NAMp Rations (the default)
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
-cmake -S . -B build-rack -DNAMP_PRODUCT=rack     # NAMp Rack, and the five pedals with it
+# NAMp Rack, and the five pedals with it
+cmake -S . -B build-rack -G Ninja -DCMAKE_BUILD_TYPE=Release -DNAMP_PRODUCT=rack
 cmake --build build-rack
 ```
+
+Both products default to `Release` when no build type is given, and the flag is spelled out above
+anyway, because the value is not one to leave implicit. An empty `CMAKE_BUILD_TYPE` under a
+single-configuration generator defines neither `NDEBUG` nor `_DEBUG`, and the VST3 SDK's
+`fdebug.h` then stops the build with `DEVELOPMENT, RELEASE, _DEBUG, or NDEBUG must be defined!` —
+inside the SDK's own sources, after a configure that reported no problem, naming no file this
+repository wrote. The default is what keeps that from being the first thing a fresh checkout does;
+writing the flag out is what keeps a release build from resting on a default. `-G Ninja` is
+convention rather than requirement: it is what every script and CI path here uses, and Make builds
+the same tree.
 
 The four dependencies — the VST3 SDK, NeuralAmpModelerCore, AudioDSPTools and Eigen — are
 submodules at the repository root, shared by both products at one pinned version each. The pedals
