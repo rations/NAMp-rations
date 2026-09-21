@@ -10,8 +10,8 @@
 // module said 0.2.0 while every class still answered 0.1.0.1.
 #define MAJOR_VERSION_STR "0"
 #define MAJOR_VERSION_INT 0
-#define SUB_VERSION_STR "4"
-#define SUB_VERSION_INT 4
+#define SUB_VERSION_STR "5"
+#define SUB_VERSION_INT 5
 #define RELEASE_NUMBER_STR "0"
 #define RELEASE_NUMBER_INT 0
 #define BUILD_NUMBER_STR "1"

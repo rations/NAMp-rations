@@ -30,7 +30,7 @@ cmake_minimum_required(VERSION 3.25.0)
 # 11.0 floor and the one-slice-per-configure rule, are written out at that site.
 
 project(smtg-rations
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "Rations four-channel neural amp head VST3"
 )
 
