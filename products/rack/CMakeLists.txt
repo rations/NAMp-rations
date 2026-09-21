@@ -638,6 +638,46 @@ if(NAMPRACK_BUILD_VST3_BUNDLE)
         RESOURCES ${NAMP_IMG_PATHS}
         OUTPUT_SUBDIRECTORY img
     )
+
+    # Put the Windows DLL inside its own bundle.
+    #
+    # smtg_target_make_plugin_package() assigns the output directory inside
+    #     foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES}) ...
+    # and that list is EMPTY for every single-config generator, so under Ninja the loop body never
+    # runs: Contents/Resources is created and filled inside the bundle while the DLL itself lands
+    # at the top of the build tree. Nothing fails, and the result is a bundle the loader rejects
+    # with "Module not found" -- measured here, not inferred, by running the SDK validator against
+    # the cross-built bundle.
+    #
+    # The amp plug-in carries the same workaround and has since before the two trees were merged.
+    # This target did not, which is the shape of gap the merge exists to close: the same SDK bug,
+    # fixed in one tree and not the other, in a target whose whole purpose is to give the validator
+    # something to load. It is never packaged, so what it cost was the check rather than a release.
+    #
+    # The path is read back from the properties the SDK itself set rather than spelled out, so it
+    # cannot drift from the layout module_win32.cpp's loader expects. That loader also requires the
+    # inner DLL to be named exactly like the bundle folder -- NAMp-Rack-Amp.vst3 inside
+    # NAMp-Rack-Amp.vst3/Contents/x86_64-win/ -- which is what the SUFFIX/PREFIX already produce.
+    if(WIN32)
+        get_target_property(NAMPRACK_AMP_PKG_PATH NampRackAmp SMTG_PLUGIN_PACKAGE_PATH)
+        get_target_property(NAMPRACK_AMP_PKG_CONTENTS NampRackAmp SMTG_PLUGIN_PACKAGE_CONTENTS)
+        get_target_property(NAMPRACK_AMP_WIN_ARCH NampRackAmp SMTG_WIN_ARCHITECTURE_NAME)
+
+        # smtg_target_set_vst_win_architecture_name() derives this from CMAKE_GENERATOR_PLATFORM, a
+        # Visual Studio concept that is simply unset under Ninja + MinGW; it then falls into its
+        # else() and yields x86_64-win by accident rather than by decision. Asserted so a future SDK
+        # change cannot silently move the bundle out from under the resource path resolver, which
+        # walks up two levels from the loaded module.
+        if(NOT NAMPRACK_AMP_WIN_ARCH STREQUAL "x86_64-win")
+            message(FATAL_ERROR
+                "[NAMp-Rack] the SDK chose architecture folder "
+                "'${NAMPRACK_AMP_WIN_ARCH}', expected 'x86_64-win'. The bundle layout and the "
+                "resource path resolver both assume the latter.")
+        endif()
+
+        set_target_properties(NampRackAmp PROPERTIES LIBRARY_OUTPUT_DIRECTORY
+            "${NAMPRACK_AMP_PKG_PATH}/${NAMPRACK_AMP_PKG_CONTENTS}/${NAMPRACK_AMP_WIN_ARCH}")
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1175,13 @@ rather than merely the code under it.")
         foreach(_tsan rations_racecheck namp_chaincheck)
             target_link_options(${_tsan} PRIVATE -fsanitize=thread)
         endforeach()
+        # ...and INTERFACE on the library, which is not a tidier way of saying the same thing.
+        # An instrumented archive carries calls to __tsan_read8 and its siblings into every target
+        # that links it, so naming only the two gate executables above left rackrender,
+        # namp_hostcheck and namp-rack itself failing at link with thousands of undefined
+        # references -- which is to say this option could not complete a build at all, and the
+        # host's race gate was reachable only by naming its target.
+        target_link_options(NampRackHost INTERFACE -fsanitize=thread)
         target_compile_definitions(namp_chaincheck PRIVATE NAMPRACK_ALLOC_HARNESS=0)
     endif()
 endif()
