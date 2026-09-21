@@ -1094,7 +1094,29 @@ void auditInteraction(host::ChainBuilder &builder, RackView &view, RackModel &mo
               "an input endpoint is chosen as its own row");
 
         model.picker().open = false;
+
+        // THE JACK SHAPE: one row, there to be read, nothing to choose. The pill has to be gone
+        // rather than merely inert, and gone at the hit test as well as in the paint — a control
+        // that draws nothing and still swallows the click under it is the same bug wearing a
+        // different coat. Driven by what the backend offers, so this is the Linux case proved on a
+        // machine that is not Linux-specific about it.
+        static const std::vector<AudioDeviceRow> jack = {
+            {"JACK", "", "the running JACK server", "chosen when the server was started", true,
+             false},
+        };
+        model.setAudioDevices(&jack);
+        check(!model.audioChoosable(), "a list with no selectable row is not a choice");
+        view.mouseMove(rackgeo::kAudioX + 10.0f, rackgeo::kAudioY + rackgeo::kToggleH * 0.5f);
+        check(model.hover().part != HitTarget::Part::Audio,
+              "the Audio pill does not hover when there is no device to choose");
+        act = click(view, rackgeo::kAudioX + 10.0f, rackgeo::kAudioY + rackgeo::kToggleH * 0.5f);
+        check(!model.picker().open, "...and does not open the overlay either");
+
+        model.setAudioDevices(&devices);
+        check(model.audioChoosable(), "one selectable row is enough to bring it back");
+
         model.setAudioDevices(nullptr);
+        check(!model.audioChoosable(), "and no list at all is not a choice");
     }
 
     //--- the picker ---------------------------------------------------------

@@ -72,6 +72,15 @@ constexpr uint32_t kIconColor = 0x9A9490; // control glyphs at rest
 constexpr uint32_t kIconHot = 0xFFFFFF;   // ...and under the pointer
 constexpr uint32_t kDangerColor = 0xFF3B30;
 
+// THE FOOTER'S STATUS LINE IS NOT CHROME, so it is not painted in the colour chrome is painted in.
+// The pedal count, the rack latency and the device that is sounding are the three facts a player
+// checks mid-session at arm's length, and kOffColor is 0x6A6460 on a 0x0E0D0D deck — a contrast
+// ratio written for a label that is deliberately receding, which is the opposite of what these
+// three are for. The accent is the same green the live cable and the engaged LEDs already use, so
+// "this is what is running" keeps one colour across the whole strip. What stays red is a dropout:
+// that is the one thing on the line that is not a fact about the setup but a fault in it.
+constexpr uint32_t kFooterStatusColor = Rations::geo::kAccent;
+
 //--- header --------------------------------------------------------------
 constexpr float kHeaderH = 30.0f;
 constexpr float kMargin = 14.0f;

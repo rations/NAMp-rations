@@ -433,6 +433,22 @@ public:
     {
         return mAudioDevices;
     }
+    // Whether the device list is a CHOICE, which is not the same question as whether it is empty.
+    // Under JACK the server owns the device and the rate and the block size, all three chosen when
+    // it was started, so the list is exactly one row that is there to be read; under WASAPI or ASIO
+    // every row is a decision the user can take here. The header's Audio pill hangs off this rather
+    // than off a platform macro, because what decides it is what the backend offers and not which
+    // operating system it happens to be offering it on.
+    bool audioChoosable() const
+    {
+        if (!mAudioDevices)
+            return false;
+        for (const AudioDeviceRow &row : *mAudioDevices) {
+            if (row.selectable)
+                return true;
+        }
+        return false;
+    }
 
     void setSearchPaths(const std::vector<SearchPathRow> *paths)
     {

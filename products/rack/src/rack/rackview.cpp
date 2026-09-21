@@ -544,9 +544,15 @@ void RackView::drawHeader(Canvas &c)
              mModel->picker().open && mModel->picker().mode == PickerState::Mode::Paths,
              hover.part == HitTarget::Part::Scan, scanLabel);
 
-    drawPill(c, Rect(kAudioX, kAudioY, kAudioW, kToggleH),
-             mModel->picker().open && mModel->picker().mode == PickerState::Mode::Devices,
-             hover.part == HitTarget::Part::Audio, "Audio");
+    // ONLY WHERE THERE IS A DEVICE TO CHOOSE. A button that opens a list of one row nobody can
+    // click is worse than no button: it reads as a setting that is broken rather than as a setting
+    // that does not exist here. Under JACK the device, the rate and the block size were all settled
+    // when the server was started and the footer already says which server is sounding, so the
+    // question is answered and there is nothing to ask.
+    if (mModel->audioChoosable())
+        drawPill(c, Rect(kAudioX, kAudioY, kAudioW, kToggleH),
+                 mModel->picker().open && mModel->picker().mode == PickerState::Mode::Devices,
+                 hover.part == HitTarget::Part::Audio, "Audio");
 
     const bool list = mModel->viewMode() == ViewMode::List;
     drawPill(c, Rect(kToggleX, kToggleY, kToggleSegW, kToggleH), list,
@@ -834,7 +840,7 @@ void RackView::drawNodes(Canvas &c)
 void RackView::drawFooter(Canvas &c)
 {
     c.setFontSize(kSmallSize);
-    c.setColor(kOffColor);
+    c.setColor(kFooterStatusColor);
 
     char text[128];
     const uint32_t latency = mModel->totalLatency();
@@ -877,6 +883,10 @@ void RackView::drawFooter(Canvas &c)
     // visible where they act, while a card view has to say that a cable is a drop target.
     float rightStart = kRackW - kMargin;
     if (mModel->viewMode() == ViewMode::Nodes) {
+        // Dim on purpose, and the one thing on this line that stays that way: it is instruction
+        // rather than status, it is the same sentence every time the card view is up, and a reader
+        // who has taken it in once should be able to stop seeing it.
+        c.setColor(kOffColor);
         const char *hint = kFooterNodesHint;
         const float w = c.stringWidth(hint);
         rightStart = kRackW - kMargin - w;
@@ -906,7 +916,7 @@ void RackView::drawFooter(Canvas &c)
         return;
     // Red once there have been any: a dropout is the number the live gate is written against, so it
     // is not something to mention in passing.
-    c.setColor(dropouts > 0 ? kDangerColor : kOffColor);
+    c.setColor(dropouts > 0 ? kDangerColor : kFooterStatusColor);
     c.drawString(c.clipToWidth(status, gapW).c_str(), gapX, kRackH - 9.0f);
 }
 
@@ -1409,7 +1419,9 @@ HitTarget RackView::hitTest(float x, float y) const
         hit.part = HitTarget::Part::Scan;
         return hit;
     }
-    if (Rect(kAudioX, kAudioY, kAudioW, kToggleH).contains(x, y)) {
+    // Hit-tested on the same condition it is drawn on, so a pill that is not there cannot be
+    // hovered or clicked at the place it would have been.
+    if (mModel->audioChoosable() && Rect(kAudioX, kAudioY, kAudioW, kToggleH).contains(x, y)) {
         hit.part = HitTarget::Part::Audio;
         return hit;
     }
