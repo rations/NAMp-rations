@@ -170,7 +170,7 @@ One archive, one script, all three parts.
 
 ```
 tar xf NAMp-*-linux-x86_64.tar.gz
-cd NAMp-*/
+cd NAMp-*/          # extracts to NAMp-<version>/
 ./install.sh
 ```
 
@@ -379,6 +379,11 @@ one per product:
 scripts/makedist-linux.sh      # -> dist/NAMp-<v>-linux-x86_64.tar.gz
 scripts/makedist-windows.sh    # -> dist/NAMp-<v>-windows-x86_64.zip, with NAMp-install.exe in it
 ```
+
+Both extract to a plain `NAMp-<v>/`: the platform tag is a fact about the download rather than
+about the folder it leaves behind. A Linux build made on a machine whose glibc is newer than the
+release baseline is still named `-DEVBUILD` as a file, which is where it can be published by
+mistake.
 
 Each configures and builds both products — two build directories, for the reason above — and calls
 `products/*/scripts/stage-{linux,windows}.sh` to gate and stage them into one tree. The per-artefact

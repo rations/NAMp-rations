@@ -544,7 +544,12 @@ else
   namp_dist_pe_assert_no_timestamp "$PKGDIR/NAMp-install.exe" "NAMp-install.exe"
 fi
 
-PKGNAME="NAMp-${VERSION}${MARK}-windows-x86_64"
+# TWO NAMES, for the reason makedist-linux.sh gives at the same place: the directory is the product
+# and its version, and the platform tag belongs to the download. -NOSOURCE stays on the file for the
+# same reason -DEVBUILD does there, and it matters more here -- an archive carrying it is a GPLv3
+# breach if it is published, and publishing is something done to a file.
+PKGNAME="NAMp-${VERSION}"
+ARCHIVE="NAMp-${VERSION}${MARK}-windows-x86_64"
 mv "$PKGDIR" "$STAGEDIR/$PKGNAME"
 # The epoch makes the ZIP reproducible, not just the binaries in it -- see namp_dist_zip.
-namp_dist_zip "$STAGEDIR" "$PKGNAME" "$REPO/dist/${PKGNAME}.zip" "$(namp_dist_epoch "$REPO")"
+namp_dist_zip "$STAGEDIR" "$PKGNAME" "$REPO/dist/${ARCHIVE}.zip" "$(namp_dist_epoch "$REPO")"

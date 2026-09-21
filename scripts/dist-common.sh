@@ -255,10 +255,16 @@ namp_dist_abi_baseline() {
 # actually being developed.
 #
 # So a development-machine run does everything, reports the overshoot in full, and then writes its
-# tarball under a name carrying -DEVBUILD -- inside and out, since the staged directory is renamed
-# too. There is no flag that turns the report off and none that produces a clean release name from
-# an overshooting build: the difference is in the filename, where it cannot be lost by someone
-# uploading the wrong file a month later.
+# tarball under a FILE name carrying -DEVBUILD. There is no flag that turns the report off and none
+# that produces a clean release name from an overshooting build: the difference is in the filename,
+# where it cannot be lost by someone uploading the wrong file a month later.
+#
+# THE EXTRACTED DIRECTORY NO LONGER CARRIES IT, and that is a narrowing of this mark rather than a
+# weakening of it. What the rule is written against is the wrong file being published, and a file
+# is what gets published -- the directory only exists on the machine of whoever already downloaded
+# it, where the question has been settled. Carrying the mark in both places bought nothing for that
+# failure and cost every ordinary user a folder named after a machine detail. The directory is the
+# product and its version; see namp_dist_tarball.
 namp_dist_mark() {
     local over="${NAMP_DIST_ABI_OVER:-0}"
     # Either this process saw the overshoot itself, or a stage script in a child process recorded
@@ -395,20 +401,29 @@ namp_dist_stamp_tree() {
 }
 
 # --- the tarball ------------------------------------------------------------
+#
+# THE FOLDER NAME AND THE FILE NAME ARE TWO ARGUMENTS, not one, and that is the whole shape of this
+# helper. What a user ends up living with is the directory the archive extracts to, which wants to
+# be the product and its version and nothing else; what a packager has to tell apart in a download
+# folder is the file, which wants the architecture and any mark saying this one is not releasable.
+# Folding them into one string served the file and made the directory carry a machine detail that
+# means nothing once it is unpacked. macOS has always done it this way -- makedist-mac.sh stages
+# NAMp-rations-<version>/ and dittos it into NAMp-rations-<version>-macos-<arch>.zip -- so this is
+# the two other platforms catching up rather than a new idea. The caller passes the archive path in
+# full, which is also what namp_dist_zip below has always taken.
 namp_dist_tarball() {
-    local stagedir="$1" pkgname="$2" outdir="$3" epoch="${4:-}" tarball
-    mkdir -p "$outdir"
-    tarball="$outdir/${pkgname}.tar.gz"
+    local stagedir="$1" rootname="$2" tarball="$3" epoch="${4:-}"
+    mkdir -p "$(dirname "$tarball")"
     rm -f "$tarball"
     if [ -n "$epoch" ]; then
-        namp_dist_stamp_tree "$stagedir/$pkgname" "$epoch"
+        namp_dist_stamp_tree "$stagedir/$rootname" "$epoch"
         # --sort=name for a defined order, --owner/--group/--numeric-owner to take the packager's
         # identity out, --mtime to override what is on disk, and `gzip -n` because gzip writes its
         # OWN timestamp into its header and tar -z gives no way to say otherwise.
         tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
-            -cf - -C "$stagedir" "$pkgname" | gzip -n > "$tarball"
+            -cf - -C "$stagedir" "$rootname" | gzip -n > "$tarball"
     else
-        tar -czf "$tarball" -C "$stagedir" "$pkgname"
+        tar -czf "$tarball" -C "$stagedir" "$rootname"
     fi
     echo ""
     echo "Packaged: $tarball"
@@ -422,11 +437,11 @@ namp_dist_tarball() {
 # makes it reproducible -- there is no flag to pass. -c takes the directory and stores it with its
 # own name at the archive root, which is what an extract-anywhere release wants.
 namp_dist_zip() {
-    local stagedir="$1" pkgname="$2" zip="$3" epoch="${4:-}"
+    local stagedir="$1" rootname="$2" zip="$3" epoch="${4:-}"
     rm -f "$zip"
     mkdir -p "$(dirname "$zip")"
-    [ -z "$epoch" ] || namp_dist_stamp_tree "$stagedir/$pkgname" "$epoch"
-    ( cd "$stagedir" && python3 -m zipfile -c "$zip" "$pkgname" )
+    [ -z "$epoch" ] || namp_dist_stamp_tree "$stagedir/$rootname" "$epoch"
+    ( cd "$stagedir" && python3 -m zipfile -c "$zip" "$rootname" )
     echo ""
     echo "Packaged: $zip"
     echo ""

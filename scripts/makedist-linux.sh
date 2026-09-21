@@ -360,7 +360,14 @@ contains ASIO code. If that matters to you, the Windows download explains it in
 full.
 EOF
 
-PKGNAME="NAMp-${VERSION}$(namp_dist_mark)-linux-${ARCH}"
+# WHAT EXTRACTS, AND WHAT IS UPLOADED. They are two names because they answer to two different
+# people. The directory is what a user is left with after `tar xf`, and NAMp-<version> is all of
+# what they need from it; "-linux-x86_64" is a fact about the download and not about the folder,
+# and it was being carried around forever by everyone who unpacked one. The file keeps both that
+# and namp_dist_mark's -DEVBUILD, because the file is the thing that can be published by mistake.
+# Called once: the mark prints the overshoot report to stderr as a side effect.
+PKGNAME="NAMp-${VERSION}"
+ARCHIVE="NAMp-${VERSION}$(namp_dist_mark)-linux-${ARCH}"
 mv "$PKGDIR" "$STAGEDIR/$PKGNAME"
 # The epoch makes the TARBALL reproducible, not just the binaries in it -- see namp_dist_tarball.
-namp_dist_tarball "$STAGEDIR" "$PKGNAME" "$REPO/dist" "$(namp_dist_epoch "$REPO")"
+namp_dist_tarball "$STAGEDIR" "$PKGNAME" "$REPO/dist/${ARCHIVE}.tar.gz" "$(namp_dist_epoch "$REPO")"
