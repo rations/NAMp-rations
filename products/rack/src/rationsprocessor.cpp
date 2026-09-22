@@ -2,6 +2,7 @@
 
 #include "rationsprocessor.h"
 #include "platform/respath.h"
+#include "platform/rtdenormal.h"
 #include "statestream.h"
 
 #include "base/source/fstreamer.h"
@@ -19,19 +20,11 @@
 
 // Flush-to-zero / denormals-are-zero, re-armed on every process() call: a host is not required to
 // set FTZ/DAZ on its audio threads, and subnormals in the model and filter paths would stall the
-// CPU and blow the real-time deadline.
-#if defined(__SSE__) || defined(__x86_64__)
-#include <pmmintrin.h>
-#include <xmmintrin.h>
-#define RATIONS_HAVE_SSE_DENORMAL 1
-#endif
-
+// CPU and blow the real-time deadline. Which bits that means, and on which instruction set, is
+// platform/rtdenormal.h's business and nothing else's.
 static inline void rations_set_denormal_mode(void)
 {
-#ifdef RATIONS_HAVE_SSE_DENORMAL
-    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-    _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-#endif
+    Rations::rtSetDenormalMode();
 }
 
 using namespace Steinberg;
