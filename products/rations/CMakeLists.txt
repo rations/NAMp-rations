@@ -1175,6 +1175,13 @@ target_include_directories(rations_pedalcheck
     PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${NAMP_PRODUCT_DIR}/deps ${AUDIO_DSP_TOOLS_DIR} ${VST3_SDK_DIR})
 target_compile_features(rations_pedalcheck PRIVATE cxx_std_17)
 target_compile_options(rations_pedalcheck PRIVATE -Wall -Wextra -O2)
+# It reaches the pedalboard's vendored WDL by naming deps/ itself rather than by linking the DSP
+# headers target, so the reason that target carries WDL_ALLOW_UNSIGNED_DEFAULT_CHAR does not reach
+# here and wdltypes.h fails to compile on AArch64, where plain char is unsigned. Same macro, same
+# justification; see the comment on it in cmake/nampcore.cmake. Not fixed by linking that target
+# instead: this tool is deliberately at C++17 with no NAM in its graph, and pulling it in to import
+# one define would change what is being measured.
+target_compile_definitions(rations_pedalcheck PRIVATE WDL_ALLOW_UNSIGNED_DEFAULT_CHAR)
 
 # midilearn.cpp comes along because the settings page's text is not decoration:
 # what a binding reads as is what the audit has to measure, so the tool formats

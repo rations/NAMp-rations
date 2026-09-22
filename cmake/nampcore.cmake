@@ -209,6 +209,31 @@ function(namp_add_dsp archive headers)
 
     add_library(${headers} INTERFACE)
     target_compile_definitions(${headers} INTERFACE NAM_ENABLE_A2_FAST)
+
+    # WDL states, as a negative-sized typedef in wdltypes.h, that plain `char` must be SIGNED:
+    #
+    #     typedef char wdl_assert_failed_unsigned_char[((char)-1) > 0 ? -1 : 1];
+    #
+    # That holds on x86 and does not hold on AArch64, where the procedure call standard makes
+    # plain char unsigned. So every translation unit that reaches AudioDSPTools' vendored WDL --
+    # which is every one that includes the resampler, directly or not -- fails to compile on ARM
+    # with an array of negative size, and that is what stopped the first aarch64 CI build while
+    # the x86_64 job of the same run went green. WDL supplies this macro as the supported way to
+    # say the assumption is not needed, so no upstream file is edited.
+    #
+    # Defining it is only honest because the vendored subset was read rather than assumed. Three
+    # WDL headers reach the include graph through AudioDSPTools -- wdltypes.h, heapbuf.h,
+    # ptrlist.h -- and four more are vendored beside the rations pedalboard -- those two plus
+    # denormal.h and verbengine.h. Every `char` in all of them is a cast for memcpy/memset, a
+    # `const char*` diagnostic string, a byte in wdl_bswap_copy's byte-reversal buffer, or the
+    # truth value WDL_bool. Not one of them compares a char against zero, sign-extends one, or
+    # indexes a table with one. The assertion exists for WDL's string and UTF-8 handling, and
+    # none of that code is compiled here.
+    #
+    # Unconditional rather than gated on the architecture, because a gate would buy nothing: the
+    # typedef can only ever fire where char is unsigned, so on x86 it is inert either way and no
+    # x86 build could ever catch the subset growing a file that does care.
+    target_compile_definitions(${headers} INTERFACE WDL_ALLOW_UNSIGNED_DEFAULT_CHAR)
     target_include_directories(${headers} INTERFACE
         ${NAM_CORE_DIR}
         ${NAM_CORE_DIR}/NAM
