@@ -227,10 +227,19 @@ jobs:
           git config --global --add safe.directory /src
           git config --global --add safe.directory '*'
 
+          # NO `| head -1` HERE, however tempting. Under `set -o pipefail` the
+          # pipeline takes the exit status of the leftmost failure, and `head`
+          # closing the pipe after one line kills the writer with SIGPIPE --
+          # status 141, which errexit then treats as fatal. `ldd` is a shell
+          # script with several lines of output and loses that race reliably,
+          # so the whole build died on a banner, after printing it, with a bare
+          # "exit code 141" and no other clue. Measured, not deduced: the same
+          # two lines reproduce it locally. Printing the full output costs a
+          # few log lines and cannot fail.
           echo "== toolchain and ABI floor =="
-          cc --version | head -1
-          cmake --version | head -1
-          ldd --version | head -1
+          cc --version
+          cmake --version
+          ldd --version
           uname -m
 
           scripts/makedist-linux.sh
