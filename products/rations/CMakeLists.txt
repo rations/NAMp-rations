@@ -654,6 +654,55 @@ if(NAMP_WINDOWS)
 endif()
 
 # ---------------------------------------------------------------------------
+# The Linux bundle's architecture folder is asserted, for the same reason the
+# Windows one above is, against a trap of a different shape.
+#
+# smtg_get_linux_architecture_name() reads the CROSS_COMPILE *environment
+# variable* first and only falls back to `uname -m`. A cross build that sets a
+# toolchain but not that variable therefore stamps a foreign binary into the
+# folder named after the BUILD machine -- an aarch64 .so inside
+# Contents/x86_64-linux/. That bundle configures, compiles, links, packages and
+# installs without a single complaint, and then loads in no host on either
+# architecture, because module_linux.cpp's loader builds the folder name from
+# the running machine's uname().machine and looks only there.
+#
+# Read back from LIBRARY_OUTPUT_DIRECTORY rather than by calling the SDK's
+# function again: the property is what the SDK actually used, and a second call
+# would only re-derive the same guess.
+#
+# Two separate questions, because they fail differently. The folder must be one
+# this project ships -- a typo or a new SDK spelling is caught here rather than
+# by a user whose plug-in list is empty. And it must agree with
+# CMAKE_SYSTEM_PROCESSOR, which is the cross-build trap above: CMake knows the
+# TARGET architecture, the SDK derived one from the environment, and a
+# disagreement between them is exactly the silent case -- in either direction,
+# since a stale CROSS_COMPILE in a native shell fails the same way round.
+if(NAMP_LINUX)
+    get_target_property(RATIONS_LINUX_OUTDIR Rations LIBRARY_OUTPUT_DIRECTORY)
+    get_filename_component(RATIONS_LINUX_ARCH "${RATIONS_LINUX_OUTDIR}" NAME)
+
+    if(NOT RATIONS_LINUX_ARCH MATCHES "^(x86_64|aarch64)-linux$")
+        message(FATAL_ERROR
+            "[Rations] the SDK chose architecture folder '${RATIONS_LINUX_ARCH}', which is not "
+            "one this project ships. Expected 'x86_64-linux' or 'aarch64-linux'. The bundle "
+            "layout and the packaging scripts both assume one of those two.")
+    endif()
+
+    if(NOT RATIONS_LINUX_ARCH STREQUAL "${CMAKE_SYSTEM_PROCESSOR}-linux")
+        message(FATAL_ERROR
+            "[Rations] the SDK chose architecture folder '${RATIONS_LINUX_ARCH}', but CMake is "
+            "building for '${CMAKE_SYSTEM_PROCESSOR}'. The folder and the binary inside it would "
+            "name different architectures, and the bundle would load nowhere. The SDK takes the "
+            "folder from the CROSS_COMPILE environment variable if it is set and from `uname -m` "
+            "if it is not, so the two ways to reach here are a cross build that never exported "
+            "CROSS_COMPILE, and a native build that inherited a stale one. Set it to your "
+            "toolchain's prefix, or unset it and build natively.")
+    endif()
+
+    message(STATUS "[Rations] bundle binary -> ${RATIONS_LINUX_OUTDIR}")
+endif()
+
+# ---------------------------------------------------------------------------
 # The macOS bundle's Info.plist.
 #
 # Written here because nothing else writes it. The SDK's smtg_target_set_bundle()

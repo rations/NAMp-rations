@@ -678,6 +678,41 @@ if(NAMPRACK_BUILD_VST3_BUNDLE)
         set_target_properties(NampRackAmp PROPERTIES LIBRARY_OUTPUT_DIRECTORY
             "${NAMPRACK_AMP_PKG_PATH}/${NAMPRACK_AMP_PKG_CONTENTS}/${NAMPRACK_AMP_WIN_ARCH}")
     endif()
+
+    # The Linux architecture folder, asserted for the same reason and against a trap of a different
+    # shape. smtg_get_linux_architecture_name() reads the CROSS_COMPILE *environment variable*
+    # first and only falls back to `uname -m`, so a cross build that sets a toolchain but not that
+    # variable stamps a foreign binary into the folder named after the BUILD machine. That bundle
+    # configures, compiles, links and installs without a complaint and then loads in no host on
+    # either architecture, because module_linux.cpp's loader builds the folder name from the
+    # running machine's uname().machine and looks only there.
+    #
+    # This particular bundle is a development artefact and is never packaged, so what a mistake
+    # here costs is the check rather than a release -- but it is the same check the shipped
+    # bundles need, and having it in both places is how the two stay the same check.
+    if(NAMP_LINUX)
+        get_target_property(NAMPRACK_AMP_LINUX_OUTDIR NampRackAmp LIBRARY_OUTPUT_DIRECTORY)
+        get_filename_component(NAMPRACK_AMP_LINUX_ARCH "${NAMPRACK_AMP_LINUX_OUTDIR}" NAME)
+
+        if(NOT NAMPRACK_AMP_LINUX_ARCH MATCHES "^(x86_64|aarch64)-linux$")
+            message(FATAL_ERROR
+                "[NAMp-Rack] the SDK chose architecture folder "
+                "'${NAMPRACK_AMP_LINUX_ARCH}', which is not one this project ships. Expected "
+                "'x86_64-linux' or 'aarch64-linux'.")
+        endif()
+
+        if(NOT NAMPRACK_AMP_LINUX_ARCH STREQUAL "${CMAKE_SYSTEM_PROCESSOR}-linux")
+            message(FATAL_ERROR
+                "[NAMp-Rack] the SDK chose architecture folder "
+                "'${NAMPRACK_AMP_LINUX_ARCH}', but CMake is building for "
+                "'${CMAKE_SYSTEM_PROCESSOR}'. The folder and the binary inside it would name "
+                "different architectures, and the bundle would load nowhere. The SDK takes the "
+                "folder from the CROSS_COMPILE environment variable if it is set and from "
+                "`uname -m` if it is not, so the two ways to reach here are a cross build that "
+                "never exported CROSS_COMPILE, and a native build that inherited a stale one. "
+                "Set it to your toolchain's prefix, or unset it and build natively.")
+        endif()
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
