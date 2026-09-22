@@ -1,0 +1,357 @@
+# Linux build, gates and release package, on both architectures this project ships.
+#
+# WHY THIS EXISTS AT ALL, GIVEN THAT LINUX IS THE DEVELOPMENT MACHINE. x86_64
+# Linux is built and gated on the author's own box every day and does not need a
+# runner to prove it works. aarch64 does: there is no ARM hardware here, not a
+# Raspberry Pi, not an Orange Pi, not an arm64 laptop. Nothing about the ARM
+# build can be compiled, run, listened to or measured locally, so it is in
+# exactly the position macOS is in -- provable only on a runner of its own
+# architecture -- and it is handled the same way.
+#
+# x86_64 rides along rather than being the point. It costs one extra job and it
+# buys the thing that makes the aarch64 job mean anything: a SECOND render of
+# the same pages, from the same sources, with the same compiler and the same
+# cairo, differing only in instruction set. Without it the ARM render would have
+# nothing to be compared against except a developer's machine, which differs in
+# a dozen ways at once. It also gives x86_64 Linux its first CI, which until now
+# was the one shipped platform with none.
+#
+# WHY A DEBIAN CONTAINER ON AN UBUNTU RUNNER, WHICH LOOKS LIKE A CONTRADICTION.
+# `runs-on:` names the VIRTUAL MACHINE, not the build environment. GitHub hosts
+# three operating systems -- Ubuntu, Windows Server and macOS -- and there is no
+# Debian runner for any architecture, so the label is not a choice between
+# distributions; it is the only Linux machine on offer.
+#
+# Nothing Ubuntu supplies reaches the artifact. The compiler, glibc, libstdc++,
+# cairo, pixman, FreeType, fontconfig, libX11, JACK, lv2, lilv and suil -- every
+# byte compiled in or linked against -- comes from debian:12. Ubuntu contributes
+# the kernel, Docker, the git that does the checkout and the Actions agent, none
+# of which link into anything. By every measure namp_dist_abi_baseline takes,
+# this is a Debian 12 build, the same kind the release machine produces.
+#
+# That matters because the ABI ceiling is a condition on the TARBALL. Debian 12
+# is glibc 2.36, which is NAMP_BASELINE_GLIBC verbatim, and its cmake is 3.25.1
+# against a repository floor of 3.25.0. A bare ubuntu-24.04 runner is glibc 2.39
+# and would overshoot the ceiling on every build, marking every tarball
+# -DEVBUILD; ubuntu-22.04-arm is glibc 2.35 but ships cmake 3.22, below the
+# floor, and its label is being retired. The container is what makes the
+# artifact publishable rather than merely built.
+#
+# The one genuine Ubuntu residue is the host kernel, since a container shares
+# it. That affects nothing about a compile, and the shipped binaries run against
+# whatever kernel the user's board has regardless. Removing Ubuntu from the loop
+# entirely needs a self-hosted arm64 Debian runner, which needs ARM hardware,
+# which is the constraint this whole workflow exists to work around. If a board
+# ever arrives it is one line of `runs-on:` and the container step can go.
+#
+# WHAT THIS DOES NOT COVER, and on ARM it is a larger gap than on any other
+# platform:
+#
+#   1. Every capture-dependent proof. rations_offline, ir-gate.sh,
+#      rations_switchcheck and most of rations_midicheck need .nam banks, and
+#      neither product ships any. So the 1e-6 convergence proofs the rules
+#      require for the crossfade and the channel switch are UNMEASURED on
+#      aarch64 -- and those are precisely the proofs a fused-multiply-add
+#      contraction difference could move. This is the single largest unknown in
+#      the ARM port. It closes on a board with real captures, or under emulation
+#      with captures, and not here.
+#   2. No live audio, no JACK server, no xrun count. The rules want repeated
+#      channel switching at the smallest buffer with zero xruns; that needs a
+#      machine with a sound card.
+#   3. No CPU-cost number. Whether a given capture runs in real time on a Pi 4,
+#      a Pi 5 or an Orange Pi 5 is a measurement nobody here can take, and no
+#      claim about it belongs in the README until somebody does.
+#   4. ThreadSanitizer on aarch64 is unverified. Debian 12 arm64 has libtsan and
+#      it should work, but TSan wants a particular virtual-address layout and
+#      nobody has run it on an arm64 runner from this tree. Treat the first run
+#      as the experiment, not as the gate.
+name: Linux
+
+# WHEN THIS RUNS. Every push on every branch except commits that cannot change
+# the answer. The list says what to IGNORE rather than what to match, on purpose:
+# a forgotten entry here means a run that was not needed, which is free, where a
+# forgotten entry in a match list means a change that silently stops being
+# checked.
+#
+# EVERY ENTRY BELOW WAS CHECKED TO RESOLVE against the tree as it stands. The
+# macOS workflow carried eight entries that matched nothing for five stages,
+# because they were written before the two products moved under products/, and
+# nobody noticed because a dead ignore fails in the safe direction.
+#
+# Note what is NOT ignored and is in the macOS list: products/rack/**, both
+# stage-linux.sh scripts and scripts/makedist-linux.sh. macOS builds the amp
+# plug-in alone; this workflow builds both products, the five pedals and the
+# package, so all of that is live code here.
+on:
+  push:
+    branches: ['**']
+    paths-ignore: &docs_only
+      - '**.md'
+      - 'products/rations/docs/**'
+      - 'LICENSE'
+      - 'NOTICE'
+      - '.gitignore'
+      # Windows-only: the NSIS installer, the cross toolchain, the dependency
+      # sysroot builder, the Windows packaging and the GPLv3 Corresponding
+      # Source assembler. None of them is reachable from a Linux build.
+      - 'installer/**'
+      - 'cmake/toolchain-mingw-w64.cmake'
+      - 'scripts/build-win-deps.sh'
+      - 'scripts/makedist-windows.sh'
+      - 'scripts/corresponding-source.sh'
+      - 'products/rations/scripts/stage-windows.sh'
+      - 'products/rack/scripts/stage-windows.sh'
+      # macOS-only, and all three live under the one product that has a macOS build.
+      - 'products/rations/scripts/build-mac-deps.sh'
+      - 'products/rations/scripts/makedist-mac.sh'
+      - 'products/rations/scripts/mac-syntax-check.sh'
+      - '.github/workflows/macos.yml'
+      # Art GENERATORS. They write into resources/, which is tracked; running
+      # one is a commit to resources/ and that does trigger a build.
+      - 'products/rations/gui/**'
+      - 'products/rack/gui/**'
+  pull_request:
+    paths-ignore: *docs_only
+  workflow_dispatch:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.arch }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Both architectures always run to completion. When one fails and the
+      # other does not, that difference IS the finding, and cancelling the
+      # sibling would throw away the half that says what changed.
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-24.04-arm is a GitHub-hosted arm64 runner, free for public
+          # repositories. ubuntu-22.04-arm exists but is being retired, and its
+          # cmake is 3.22 -- below this repository's 3.25.0 floor -- so it could
+          # not configure the build even before the deprecation mattered.
+          #
+          # Unlike the macOS labels, which expire on a rolling schedule and
+          # whose failure mode is a job that QUEUES FOREVER rather than one that
+          # is rejected, these two are current. Check them against the table in
+          # https://github.com/actions/runner-images before changing either.
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+          - runner: ubuntu-24.04
+            arch: x86_64
+
+    # ACTION VERSIONS ARE THE LOWEST MAJOR THAT RUNS ON NODE 24, matching the
+    # macOS workflow and for the same reason: node 20 is deprecated on the
+    # runners, and every major above the one that fixes that carries unrelated
+    # behaviour changes. One of them would break this workflow outright --
+    # download-artifact@v8 "will no longer attempt to unzip all downloads", and
+    # the panel-diff job downloads two renders and expects them extracted. So
+    # the pins are checkout v5, upload-artifact v6, download-artifact v7, and
+    # the upload/download pair is kept off the v7/v8 direct-upload change, which
+    # the two actions have to agree about.
+    steps:
+      - uses: actions/checkout@v5
+
+      # CHECKOUT AND SUBMODULES RUN ON THE HOST, not in the container, and the
+      # split is deliberate. The container has no git, no Actions agent and no
+      # node; putting the checkout inside it means installing git before
+      # anything can be fetched and fighting the injected-node problem that a
+      # job-level `container:` brings. Only the build and the gates need the old
+      # ABI, so only they go inside.
+      #
+      # THREE LINES, NEVER `--recursive`. The SDK carries seven submodules and
+      # this build needs four; doc, tutorials and vstgui4 are deliberately left
+      # unchecked-out because nothing here builds VSTGUI. Two of the top-level
+      # submodules also declare nested copies of trees the root already has --
+      # AudioDSPTools its own eigen, rations-pedals its own vst3sdk -- so
+      # --recursive would fetch a second ~1.5 GB SDK the build never reads.
+      #
+      # rations-pedals is in the first line and is NOT in the macOS workflow's:
+      # the pedals ship beside the rack, the rack is Linux, and macOS has no
+      # rack. Without it the pedal count gate in the rack's stage script fails.
+      - name: Submodules
+        run: |
+          git submodule update --init NeuralAmpModelerCore AudioDSPTools eigen rations-pedals
+          git submodule update --init vst3sdk
+          git -C vst3sdk submodule update --init base cmake pluginterfaces public.sdk
+
+      # ONE STEP DOES THE WHOLE BUILD, because makedist-linux.sh IS the whole
+      # build. It configures and builds both products, builds the five pedals,
+      # and runs every stage gate on the way past: the SDK validator on the
+      # plug-in and on each pedal, the export lists, STB_GNU_UNIQUE, the link
+      # assertions (the plug-in must not link JACK, the standalone must, the
+      # rack must export nothing), the resource roll-call, the pedal count and
+      # the glibc/libstdc++/CXXABI baseline. Then it writes the tarball. There
+      # is no CI-specific packaging code here and there must not be -- a gate
+      # that only runs in CI is a gate that is not run before a release.
+      #
+      # The script needs no captures, no JACK server and no X display; both
+      # stage scripts say so in their own headers, which is why this works on a
+      # headless runner unchanged.
+      #
+      # PANELRENDER RUNS INSIDE THE CONTAINER TOO, and that is not incidental.
+      # The panel diff's question is whether the two INSTRUCTION SETS rasterise
+      # the same. Running the renderer on the Ubuntu host would link Ubuntu's
+      # cairo, pixman and FreeType on one side and nothing consistent on the
+      # other, and the diff would be measuring distributions instead.
+      - name: Build, gate and package inside Debian 12
+        run: |
+          docker run --rm -i \
+            -v "$PWD:/src" -w /src \
+            "debian:12" \
+            bash -euo pipefail -s <<'CONTAINER'
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+
+          # Build tools, then one dev package per pkg_check_modules() entry in
+          # the two products. Read out of the CMakeLists rather than recalled:
+          # cairo, cairo-ft and cairo-xlib all come from libcairo2-dev.
+          # python3 is for scripts/panel-diff.sh, which decodes the PNGs with
+          # the standard library and needs no image toolkit; file, nm, objdump,
+          # strings and strip are what the ABI and export gates run on, and
+          # binutils arrives with build-essential.
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git ca-certificates \
+            file python3 \
+            libcairo2-dev libfreetype-dev libfontconfig-dev libx11-dev \
+            libjack-jackd2-dev lv2-dev liblilv-dev libsuil-dev
+
+          # THE CONTAINER IS root AND THE CHECKOUT IS NOT, so every git call in
+          # the tree would die on "dubious ownership" -- which would take out
+          # namp_dist_epoch (the tarball's reproducible mtimes come from HEAD's
+          # commit date) and namp_dist_release_version. Silent-ish and
+          # confusing, so it is dealt with up front.
+          git config --global --add safe.directory /src
+          git config --global --add safe.directory '*'
+
+          echo "== toolchain and ABI floor =="
+          cc --version | head -1
+          cmake --version | head -1
+          ldd --version | head -1
+          uname -m
+
+          scripts/makedist-linux.sh
+
+          echo "== editor pages, rendered where the libraries are =="
+          mkdir -p panels
+          ./build/panelrender       panels/rations products/rations/resources 1.0
+          ./build-rack/panelrender  panels/rack    products/rack/resources    1.0
+          ls -l panels
+          CONTAINER
+
+      # The container ran as root, so everything it wrote is root-owned and the
+      # upload action -- which does not -- cannot read it.
+      - name: Hand the workspace back to the runner
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" .
+
+      # Named by architecture because the panel-diff job pattern-matches on it
+      # and then indexes the two directories by name.
+      - name: Upload panel renders
+        uses: actions/upload-artifact@v6
+        with:
+          name: panels-${{ matrix.arch }}
+          path: panels/
+          if-no-files-found: error
+
+      # THE TARBALL IS AN ARTIFACT AND NOT A RELEASE, for now, and that is a
+      # decision rather than an oversight: the aarch64 build has never run on
+      # real hardware, so it goes to testers by hand until it has. A name
+      # carrying -DEVBUILD means the ABI gate overshot and the build is not
+      # publishable at all -- that mark is the gate's own output and the one
+      # thing to look for first in a run's artifact list.
+      - name: Upload the release package
+        uses: actions/upload-artifact@v6
+        with:
+          name: NAMp-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # DO THE TWO INSTRUCTION SETS DRAW THE SAME PANEL?
+  #
+  # This is the one question this workflow can answer that no other check can,
+  # and it is worth stating why it is worth asking. Both jobs build from the
+  # same sources, in the same debian:12 image, with the same GCC and the same
+  # cairo, pixman and FreeType down to the package version. Every variable is
+  # pinned except the instruction set. So any difference in the rendered pages
+  # is an ARITHMETIC difference, and the specific one to worry about is fused
+  # multiply-add: aarch64 contracts a*b+c into a single FMA with one rounding
+  # where x86_64 without -mfma rounds twice, and the dial trigonometry is full
+  # of exactly that shape.
+  #
+  # THE THRESHOLDS ARE NOT SET YET, AND THAT IS WHAT THE TWO ABSURD NUMBERS
+  # BELOW MEAN. This project's rule is that a threshold is MEASURED and never
+  # chosen, and nobody has yet seen an aarch64 render of these pages. So the
+  # first run reports its per-page figures and gates on nothing.
+  #
+  # They are set to values no render could reach rather than left unset, because
+  # panel-diff.sh requires all three of its environment variables with ${VAR:?}
+  # and exits 1 on the first one missing. A report-only job that forgot them
+  # would abort before printing a single number, which is the exact opposite of
+  # reporting -- and with continue-on-error on top, it would do that silently
+  # and go green. Measured, not assumed: that is what the script does when
+  # called without them.
+  #
+  # continue-on-error is deliberately NOT used here for the same reason. With
+  # the caps out of reach the only way these steps can fail is a render that is
+  # missing or unreadable, and that must fail the job rather than be swallowed.
+  #
+  # TO FINISH THIS JOB, and it is two lines per step:
+  #   1. read the per-page totals out of the first green run's log;
+  #   2. set PANEL_MAX_PIXELS ABOVE the measured worst case with margin, and
+  #      PANEL_MAX_DELTA AT the measured value.
+  #
+  # The two thresholds are set by different rules and that is not an
+  # inconsistency. PIXELS gets margin so the gate reports a regression rather
+  # than its own noise floor. DELTA does not: 1/255 is not a measurement that
+  # could drift, it is what rounding means, and a delta of 2 is ink where there
+  # was none -- a rasterisation change, not arithmetic -- which no margin should
+  # let through. It is the sharper of the two.
+  #
+  # DO NOT COPY THE MACOS NUMBERS ACROSS. That pair measured 35 differing pixels
+  # of 1.9M at delta 1, on a different compiler and a different pair of ISAs.
+  # Borrowing a figure measured elsewhere is exactly what the rule forbids.
+  # ---------------------------------------------------------------------------
+  panel-diff:
+    name: panel diff (aarch64 vs x86_64)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Nothing to install: panel-diff.sh reads the PNGs with the Python
+      # standard library, and nothing in this job needs a container, because it
+      # compares bytes that were produced in one.
+      - name: Download both renders
+        uses: actions/download-artifact@v7
+        with:
+          pattern: panels-*
+          path: panels
+
+      # REPORT-ONLY. See the block above for what the two caps mean and for the
+      # two lines that finish this.
+      - name: Compare the amp's four pages
+        env:
+          PANEL_MAX_PIXELS: 999999999   # not a threshold: "no gate yet"
+          PANEL_MAX_DELTA: 255          # not a threshold: "no gate yet"
+          PANEL_PAGES: head cabinet pedalboard settings
+        run: |
+          ls -R panels
+          scripts/panel-diff.sh \
+            panels/panels-aarch64 rations panels/panels-x86_64 rations aarch64 x86_64
+
+      # The rack's editor is a different design with its own two pages, not a
+      # subset of the amp's four, so it is a second comparison and not a longer
+      # page list on the first.
+      - name: Compare the rack's two pages
+        env:
+          PANEL_MAX_PIXELS: 999999999   # not a threshold: "no gate yet"
+          PANEL_MAX_DELTA: 255          # not a threshold: "no gate yet"
+          PANEL_PAGES: head setup
+        run: |
+          scripts/panel-diff.sh \
+            panels/panels-aarch64 rack panels/panels-x86_64 rack aarch64 x86_64
