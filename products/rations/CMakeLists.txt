@@ -139,10 +139,31 @@ if(NOT TARGET sdk)
             "'git submodule update --init' or set -DVST3_SDK_DIR=<path>")
     endif()
 
-    # Headless SDK: core libraries plus the validator (part of the hosting
-    # examples), no VSTGUI (we draw the editor ourselves), no plug-in examples.
+    # Headless SDK: core libraries plus the validator, no VSTGUI (we draw the
+    # editor ourselves), no plug-in examples, and no hosting examples either.
+    #
+    # THE VALIDATOR IS NOT GATED BY SMTG_ENABLE_VST3_HOSTING_EXAMPLES, which is
+    # what this line used to assume -- it said "validator" and forced the option
+    # ON to keep it. Read rather than recalled: vst3sdk/CMakeLists.txt adds
+    # public.sdk/samples/vst-hosting UNCONDITIONALLY, and inside it only
+    # editorhost/CMakeLists.txt and audiohost/CMakeLists.txt open with
+    # if(SMTG_ENABLE_VST3_HOSTING_EXAMPLES). The validator's own CMakeLists has
+    # no such guard, so it builds either way. moduleinfotool lives under
+    # vst-utilities and is not gated at all.
+    #
+    # What the option was really buying was editorhost and audiohost, and
+    # editorhost is a GTK application: on Linux its CMakeLists does
+    # pkg_check_modules(GTK3 REQUIRED gtk+-3.0) and the same for gtkmm-3.0. So a
+    # build machine without those two dev packages could not CONFIGURE this
+    # project at all, however headless the rest of it is -- which is how a
+    # Debian 12 container found out, having no reason to carry GTK.
+    #
+    # One file from editorhost is still compiled into several targets here --
+    # source/usediids.cpp, referenced by path further down. That is a source
+    # file on disk and does not need the editorhost TARGET to exist, so it is
+    # unaffected by this.
     set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "editor is drawn directly" FORCE)
-    set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES ON CACHE BOOL "validator" FORCE)
+    set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "editorhost wants GTK; the validator is not gated by this" FORCE)
     set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "plug-in examples not needed" FORCE)
     set(SMTG_RUN_VST_VALIDATOR OFF CACHE BOOL "run manually instead" FORCE)
     set(SMTG_CREATE_PLUGIN_LINK OFF CACHE BOOL "install manually instead" FORCE)
