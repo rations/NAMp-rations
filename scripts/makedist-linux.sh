@@ -4,7 +4,7 @@
 # ONE DOWNLOAD, THREE THINGS IN IT, AND ONE install.sh THAT INSTALLS THEM ALL.
 #
 #   plugin/NAMp-rations.vst3   the amp as a plug-in for your DAW
-#   plugin/rations.lv2         the same plug-in again, as LV2
+#   plugin/NAMp-rations.lv2    the same plug-in again, as LV2
 #   rack/namp-rack             the same amp as a standalone application, with a rack that hosts
 #                              other people's plug-ins around it
 #   pedals/Rations*.vst3       the five pedals, as ordinary plug-ins any host will find
@@ -71,7 +71,7 @@ echo
 # failure mode created by splitting the work in two, so it is checked where the two meet.
 namp_dist_require_dirs "$PKGDIR" "the release package" \
   plugin/NAMp-rations.vst3 \
-  plugin/rations.lv2 \
+  plugin/NAMp-rations.lv2 \
   pedals
 namp_dist_require_files "$PKGDIR" "the release package" \
   rack/namp-rack \
@@ -96,7 +96,7 @@ cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 # only when you answer yes.
 #
 #   plugin/NAMp-rations.vst3  -> ~/.vst3                                 (the plug-in, for a DAW)
-#   plugin/rations.lv2        -> ~/.lv2                                  (the same plug-in as LV2)
+#   plugin/NAMp-rations.lv2   -> ~/.lv2                                  (the same plug-in as LV2)
 #   pedals/Rations*.vst3      -> ~/.vst3                                 (the five pedals)
 #   rack/namp-rack            -> ~/.local/bin                            (the standalone)
 #   rack/desktop/*.desktop    -> ~/.local/share/applications             (its menu entry)
@@ -114,9 +114,33 @@ EOF
   namp_install_preamble plugin desktop
   cat <<'EOF'
 
+# THE LV2 FOLDER WAS rations.lv2 BEFORE 0.6.0, and an upgrade that left it behind would leave TWO
+# bundles claiming one plug-in URI. lilv -- which Ardour, Carla and most Linux hosts load LV2
+# through -- keeps whichever has the higher lv2:minorVersion/microVersion and, on a TIE, whichever
+# it happens to find first, which can be the OLD one. Measured against the system lilv 0.24.26 with
+# a 0.5 and a 0.6 bundle side by side: minor 10 against 12 gave the host the new folder, and the
+# same pair tied at 12 gave it rations.lv2, with "Duplicate plugin ... NAMp-rations.lv2/ (ignored)".
+# The reference sources are lilv 0.28.0 and reach the same outcome by another route
+# (lilv_world_compare_versions in world.c, "Ignoring duplicate version"); the version skew is why
+# the measurement, not the source, is what this rests on. A host with a loader of its own may
+# simply list the plug-in twice. So the old folder is removed, on install and on uninstall --
+# but only when its manifest names THIS plug-in, because a directory called rations.lv2 is not by
+# itself evidence of whose it is. The URI is read from the new bundle's own manifest rather than
+# written out again here, so the two cannot drift apart.
+namp_remove_legacy_lv2() {
+  local old="$LV2_DIR/rations.lv2" uri
+  [ -f "$old/manifest.ttl" ] || return 0
+  uri="$(grep -m1 -x '<[^>#]*>' "$HERE/plugin/NAMp-rations.lv2/manifest.ttl" || true)"
+  if [ -n "$uri" ] && grep -qxF "$uri" "$old/manifest.ttl"; then
+    rm -rf "$old"
+    echo "Removed $old - this plug-in's folder name before 0.6.0."
+  fi
+}
+
 if [ "${1:-}" = "--uninstall" ]; then
   rm -rf "$VST3_DIR/NAMp-rations.vst3"
-  rm -rf "$LV2_DIR/rations.lv2"
+  rm -rf "$LV2_DIR/NAMp-rations.lv2"
+  namp_remove_legacy_lv2
   rm -f "$BIN_DIR/namp-rack"
   for _p in "$HERE"/pedals/*.vst3; do
     [ -d "$_p" ] || continue
@@ -150,9 +174,11 @@ cp -r "$HERE/plugin/NAMp-rations.vst3" "$VST3_DIR/"
 # THE LV2. A copy under /usr/lib/lv2 or /usr/local/lib/lv2 would SHADOW this one, and the only
 # symptom is a host running a version you did not install. Say so rather than leaving it to be
 # discovered.
-rm -rf "$LV2_DIR/rations.lv2"
-cp -r "$HERE/plugin/rations.lv2" "$LV2_DIR/"
-for SHADOW in /usr/local/lib/lv2/rations.lv2 /usr/lib/lv2/rations.lv2; do
+namp_remove_legacy_lv2
+rm -rf "$LV2_DIR/NAMp-rations.lv2"
+cp -r "$HERE/plugin/NAMp-rations.lv2" "$LV2_DIR/"
+for SHADOW in /usr/local/lib/lv2/NAMp-rations.lv2 /usr/lib/lv2/NAMp-rations.lv2 \
+              /usr/local/lib/lv2/rations.lv2 /usr/lib/lv2/rations.lv2; do
   if [ -e "$SHADOW" ]; then
     echo "Note: $SHADOW exists and will be used INSTEAD of the copy just installed."
     echo "      Remove it (it needs root) if you want this one."
@@ -177,7 +203,7 @@ refresh
 
 echo "Installed:"
 echo "  plug-in     $VST3_DIR/NAMp-rations.vst3"
-echo "  lv2         $LV2_DIR/rations.lv2"
+echo "  lv2         $LV2_DIR/NAMp-rations.lv2"
 echo "  pedals      $VST3_DIR  ($PEDAL_N plug-ins)"
 echo "  standalone  $BIN_DIR/namp-rack"
 echo "  launcher    $APP_DIR/namp-rack.desktop"
@@ -202,7 +228,7 @@ NAMp ${VERSION} - a four-channel Neural Amp Modeler amp head, for Linux
 One amp, three ways to run it, and one install script that installs all of them.
 
     plugin/NAMp-rations.vst3   the amp as a plug-in, for your DAW
-    plugin/rations.lv2         the same plug-in again, as LV2
+    plugin/NAMp-rations.lv2    the same plug-in again, as LV2
     rack/namp-rack             the same amp standalone, in its own window on
                                JACK, with a rack that hosts other people's VST3
                                and LV2 plug-ins before and after it
@@ -221,7 +247,7 @@ Install
 Everything goes under your home directory and nothing needs root:
 
     ~/.vst3/NAMp-rations.vst3          the plug-in
-    ~/.lv2/rations.lv2                 the LV2 build
+    ~/.lv2/NAMp-rations.lv2            the LV2 build
     ~/.vst3/Rations*.vst3              the five pedals
     ~/.local/bin/namp-rack             the standalone
     ~/.local/share/applications/       its menu entry, with an icon

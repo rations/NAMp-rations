@@ -191,7 +191,7 @@ The LV2 stack — used under the ISC Licence (NAMp Rack on Linux):
 
 -------------------------------------------------------------------------------
 
-LV2 as a plug-in FORMAT (NAMp Rations' rations.lv2, Linux):
+LV2 as a plug-in FORMAT (NAMp Rations' NAMp-rations.lv2, Linux):
 
   LV2 1.18, https://lv2plug.in/     ISC licence, as reproduced above.
 
@@ -204,7 +204,7 @@ LV2 as a plug-in FORMAT (NAMp Rations' rations.lv2, Linux):
 
   lilv and its serd / sord / zix dependencies are used by rations_lv2check, which is
   a TEST rig: it asks the reference discovery library what a host would see in the
-  built bundle. Nothing in rations.lv2 links any of them.
+  built bundle. Nothing in NAMp-rations.lv2 links any of them.
 
   WHAT IS DELIBERATELY NOT READ: the guitarix sources are the largest body of LV2
   X11 UI code available to this project's author, and they are GPL, so they are
@@ -339,8 +339,8 @@ and likewise not redistributed here), as does NAMp Rations' development standalo
 The VST3 bundle does NOT link it, and the release script checks that rather than
 asserting it; nothing on Windows links it at all.
 
-rations.lv2's UI half links the same graphics stack the VST3 editor does, for the
-plain reason that it IS that editor. Its DSP half links none of it — it draws
+NAMp-rations.lv2's UI half links the same graphics stack the VST3 editor does, for
+the plain reason that it IS that editor. Its DSP half links none of it — it draws
 nothing — and the release script checks that too.
 
 On Windows there is no system copy of any of them, so the Windows releases

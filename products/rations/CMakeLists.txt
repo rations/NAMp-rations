@@ -1193,7 +1193,12 @@ target_include_directories(panelrender PRIVATE ${VST3_SDK_DIR})
 target_compile_options(panelrender PRIVATE -Wall)
 
 # ---------------------------------------------------------------------------
-# The LV2 build: rations.lv2, a second FORMAT rather than a second plug-in.
+# The LV2 build: NAMp-rations.lv2, a second FORMAT rather than a second plug-in.
+#
+# Named to match NAMp-rations.vst3 beside it, so the two formats of one plug-in are recognisably
+# one plug-in in a directory listing. It was rations.lv2 until 0.6.0; the folder name is not part
+# of an LV2 plug-in's identity (the URI is), so a saved session does not notice the rename, and
+# the installer removes the old folder -- see the note on it in scripts/makedist-linux.sh.
 #
 # Both shared objects host the very same C++ objects a VST3 DAW loads -- one a
 # RationsProcessor driven through IAudioProcessor, the other a RationsController
@@ -1217,9 +1222,9 @@ if(NAMP_LINUX AND RATIONS_LV2_FOUND)
     # Reported rather than assumed: any version-sensitive fact has to record the
     # version it was checked against, and the system package and the pristine
     # reference checkout under ~/third_party/source-lv2 are not the same release.
-    message(STATUS "LV2 ${RATIONS_LV2_VERSION} found - building rations.lv2")
+    message(STATUS "LV2 ${RATIONS_LV2_VERSION} found - building NAMp-rations.lv2")
 
-    set(RATIONS_LV2_BUNDLE "${CMAKE_BINARY_DIR}/lv2/rations.lv2")
+    set(RATIONS_LV2_BUNDLE "${CMAKE_BINARY_DIR}/lv2/NAMp-rations.lv2")
 
     # --- the TTL generator -------------------------------------------------
     # Not a hand-written pair of .ttl files: an LV2 bundle states every
@@ -1385,5 +1390,5 @@ if(NAMP_LINUX AND RATIONS_LV2_FOUND)
         message(STATUS "lilv not found - skipping rations_lv2check")
     endif()
 elseif(NAMP_LINUX)
-    message(STATUS "LV2 headers not found (lv2.pc) - skipping rations.lv2")
+    message(STATUS "LV2 headers not found (lv2.pc) - skipping NAMp-rations.lv2")
 endif()

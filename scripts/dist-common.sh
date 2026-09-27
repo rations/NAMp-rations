@@ -653,7 +653,7 @@ fi
 namp_missing_libs() {
   local f who
   for f in "$HERE"/plugin/NAMp-rations.vst3/Contents/*-linux/*.so \
-           "$HERE"/plugin/rations.lv2/*.so \
+           "$HERE"/plugin/NAMp-rations.lv2/*.so \
            "$HERE"/pedals/*.vst3/Contents/*-linux/*.so \
            "$HERE"/rack/namp-rack; do
     [ -f "$f" ] || continue

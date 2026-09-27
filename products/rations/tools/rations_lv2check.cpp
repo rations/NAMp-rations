@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// rations_lv2check — what a host actually sees in the INSTALLED rations.lv2, and whether it runs.
+// rations_lv2check — what a host actually sees in the INSTALLED NAMp-rations.lv2, and whether it
+// runs.
 //
 // Every check here is one the ordinary build cannot make, because the questions are about a
 // bundle rather than about a binary: whether the Turtle parses, whether the manifest offers the

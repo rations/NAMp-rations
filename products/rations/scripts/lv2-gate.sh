@@ -51,8 +51,12 @@ set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 repo=$(cd "$root/../.." && pwd)
 build="${RATIONS_BUILD_DIR:-$repo/build}"
-bundle="$build/lv2/rations.lv2"
-installed="$HOME/.lv2/rations.lv2"
+bundle="$build/lv2/NAMp-rations.lv2"
+installed="$HOME/.lv2/NAMp-rations.lv2"
+# The folder was rations.lv2 before 0.6.0. Left in place it is a second bundle claiming the same
+# URI, and on a version tie lilv keeps whichever it met first -- so this gate could test the OLD
+# one and pass. Removed, as the release installer removes it, only when it names this plug-in.
+legacy="$HOME/.lv2/rations.lv2"
 
 captures="${RATIONS_TEST_CAPTURES:-}"
 do_install=1
@@ -116,7 +120,13 @@ if [ "$do_install" -eq 1 ]; then
     rm -rf "$installed"
     cp -r "$bundle" "$installed" || exit 1
     echo "  $installed"
-    for shadow in /usr/local/lib/lv2/rations.lv2 /usr/lib/lv2/rations.lv2; do
+    uri="$(grep -m1 -x '<[^>#]*>' "$bundle/manifest.ttl" || true)"
+    if [ -f "$legacy/manifest.ttl" ] && [ -n "$uri" ] && grep -qxF "$uri" "$legacy/manifest.ttl"; then
+        rm -rf "$legacy"
+        echo "  removed $legacy (the folder name before 0.6.0)"
+    fi
+    for shadow in /usr/local/lib/lv2/NAMp-rations.lv2 /usr/lib/lv2/NAMp-rations.lv2 \
+                  /usr/local/lib/lv2/rations.lv2 /usr/lib/lv2/rations.lv2; do
         [ -e "$shadow" ] && bad "a copy at $shadow will shadow the one under test; remove it"
     done
 fi

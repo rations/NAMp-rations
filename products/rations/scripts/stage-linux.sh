@@ -14,7 +14,7 @@
 #   NAMp-rations.vst3   the plug-in, for a DAW. It links cairo, FreeType, fontconfig and libX11
 #                       and NOTHING else - in particular it does not link JACK, which is checked
 #                       below rather than assumed.
-#   rations.lv2         the same plug-in again, as LV2, for a host that wants that format. It is
+#   NAMp-rations.lv2    the same plug-in again, as LV2, for a host that wants that format. It is
 #                       not a second plug-in and not a second copy of the DSP: both shared objects
 #                       inside it host the very same RationsProcessor and RationsEditorView the
 #                       VST3 bundle carries, wrapped for LV2's four callbacks (lv2/rationslv2.h
@@ -99,14 +99,14 @@ strip --strip-unneeded "$PLUGIN_SO"
 # producing a ONE-product tarball that claims to hold two. (It claimed to hold three until the
 # standalone stopped being packaged; the check is restated for the new count rather than relaxed,
 # because it is exactly the check that catches this class of edit.)
-LV2BUNDLE="$BUILD/lv2/rations.lv2"
+LV2BUNDLE="$BUILD/lv2/NAMp-rations.lv2"
 if [ ! -d "$LV2BUNDLE" ]; then
-  echo "rations.lv2 was not built - install the LV2 development files (lv2-dev)" >&2
+  echo "NAMp-rations.lv2 was not built - install the LV2 development files (lv2-dev)" >&2
   echo "and re-run, or the release would ship the VST3 only." >&2
   exit 1
 fi
 cp -r "$LV2BUNDLE" "$PKGDIR/"
-PKGLV2="$PKGDIR/rations.lv2"
+PKGLV2="$PKGDIR/NAMp-rations.lv2"
 strip --strip-unneeded "$PKGLV2/rations.so" "$PKGLV2/rations_ui.so"
 
 # --- gates ------------------------------------------------------------------
@@ -127,30 +127,30 @@ namp_dist_no_unique "$PLUGIN_SO" "the VST3 bundle"
 # module entry point, so anything else in the dynamic table is a symbol a second plug-in in the
 # same host process can be merged with. This tree ships the VST3 and the LV2 of the SAME plug-in
 # on Linux, so a host with both installed is exactly that collision path.
-namp_dist_exports_exactly "$PKGLV2/rations.so"    "rations.lv2/rations.so"    lv2_descriptor
-namp_dist_exports_exactly "$PKGLV2/rations_ui.so" "rations.lv2/rations_ui.so" lv2ui_descriptor
-namp_dist_no_unique "$PKGLV2/rations.so"    "rations.lv2/rations.so"
-namp_dist_no_unique "$PKGLV2/rations_ui.so" "rations.lv2/rations_ui.so"
+namp_dist_exports_exactly "$PKGLV2/rations.so"    "NAMp-rations.lv2/rations.so"    lv2_descriptor
+namp_dist_exports_exactly "$PKGLV2/rations_ui.so" "NAMp-rations.lv2/rations_ui.so" lv2ui_descriptor
+namp_dist_no_unique "$PKGLV2/rations.so"    "NAMp-rations.lv2/rations.so"
+namp_dist_no_unique "$PKGLV2/rations_ui.so" "NAMp-rations.lv2/rations_ui.so"
 
 # NEITHER HALF MAY LINK JACK, and the DSP half may not link the editor's libraries either: it
 # draws nothing, and a headless host has to be able to run it with no X server present at all.
-namp_dist_must_not_link "$PKGLV2/rations.so" 'libjack' "rations.lv2/rations.so" \
+namp_dist_must_not_link "$PKGLV2/rations.so" 'libjack' "NAMp-rations.lv2/rations.so" \
   "Nothing in this archive may."
-namp_dist_must_not_link "$PKGLV2/rations.so" 'libX11|libcairo' "rations.lv2/rations.so" \
+namp_dist_must_not_link "$PKGLV2/rations.so" 'libX11|libcairo' "NAMp-rations.lv2/rations.so" \
   "The DSP half draws nothing."
 
 # THE BUNDLE'S CONTENTS. Its Turtle and the five load-bearing resources, which the UI loads from
 # the bundle_path a host hands it rather than from any computed location.
-namp_dist_require_files "$PKGLV2" "rations.lv2" \
+namp_dist_require_files "$PKGLV2" "NAMp-rations.lv2" \
   manifest.ttl rations.ttl \
   fonts/Michroma-Regular.ttf fonts/Roboto-Regular.ttf \
   img/head.png img/cabinet.png img/dial.png img/File.svg
 
 # THE RUNTIME CEILING. Every shipped ELF, against the declared release baseline.
 namp_dist_abi_baseline "NAMp-rations.vst3"        "$PLUGIN_SO"
-namp_dist_abi_baseline "rations.lv2/rations.so"    "$PKGLV2/rations.so"
-namp_dist_abi_baseline "rations.lv2/rations_ui.so" "$PKGLV2/rations_ui.so"
+namp_dist_abi_baseline "NAMp-rations.lv2/rations.so"    "$PKGLV2/rations.so"
+namp_dist_abi_baseline "NAMp-rations.lv2/rations_ui.so" "$PKGLV2/rations_ui.so"
 
 echo "staged the plug-in:"
 echo "  plugin/NAMp-rations.vst3"
-echo "  plugin/rations.lv2"
+echo "  plugin/NAMp-rations.lv2"

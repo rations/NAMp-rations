@@ -178,19 +178,22 @@ cd NAMp-*/          # extracts to NAMp-<version>/
 | goes to | what |
 |---|---|
 | `~/.vst3/NAMp-rations.vst3` | the plug-in, VST3 |
-| `~/.lv2/rations.lv2` | the plug-in, LV2 |
+| `~/.lv2/NAMp-rations.lv2` | the plug-in, LV2 |
 | `~/.vst3/RationsBoost.vst3` … `RationsReverb.vst3` | the five pedals |
 | `~/.local/bin/namp-rack` | the program |
 | `~/.local/share/applications/namp-rack.desktop` | its menu entry |
 | `~/.local/share/icons/hicolor/<size>/apps/namp-rack.png` | its icon, at 48, 64, 128 and 256 |
 
-Nothing needs root and nothing lands outside your home directory. Then rescan plug-ins in your
-DAW. `./install.sh --uninstall` removes every one of those again.
+Nothing lands outside your home directory, and none of it needs root — the only thing that can
+is installing a missing library, which the script offers and does only if you say yes. Then rescan
+plug-ins in your DAW. `./install.sh --uninstall` removes every one of those again.
 
 **The VST3 and the LV2 are the same amp twice** and are interchangeable — your host will find both
 if both are installed, so use whichever it handles best and ignore the other. If a host shows you
-an older version of the LV2, check for `rations.lv2` under `/usr/lib/lv2` or `/usr/local/lib/lv2`:
-a copy there shadows the one in your home directory. The install script says so if it finds one.
+an older version of the LV2, check for `NAMp-rations.lv2` — or `rations.lv2`, its name before
+0.6.0 — under `/usr/lib/lv2` or `/usr/local/lib/lv2`: a copy there shadows the one in your home
+directory. The install script says so if it finds one, and it removes an old `~/.lv2/rations.lv2`
+itself, because two folders holding the same plug-in leave the host to pick one.
 
 **The pedals go to `~/.vst3`** because that is one of the folders the Rack's own scan looks in, so
 they appear in its plug-in list after a rescan — and so does every other VST3 you already have
