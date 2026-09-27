@@ -17,11 +17,26 @@
 
 cmake_minimum_required(VERSION 3.25.0)
 
+if(NOT NAMP_VERSION)
+    message(FATAL_ERROR "NAMP_VERSION is not set. Configure from the repository root, which reads "
+                        "the VERSION file there: cmake -S . -B build")
+endif()
+
 project(namp-rack
-    VERSION 0.6.0
+    VERSION ${NAMP_VERSION}
     DESCRIPTION "NAMp-Rack — plug-in host with a four-channel NAM amp head"
     LANGUAGES C CXX
 )
+
+# The release version's three numbers, for src/version.h. They come from the VERSION file at the
+# repository root, through project() above; see the note on that file in the root CMakeLists.
+# Directory scope rather than per target, so no target that includes version.h can be built
+# without them -- and if one somehow were, version.h stops the build with #error rather than
+# compiling a plug-in with no version in it.
+add_compile_definitions(
+    NAMP_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    NAMP_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    NAMP_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 
 # Set by the repository-root dispatcher, along with NAMP_REPO_ROOT and NAMP_CORE_DIR -- the three
 # directories this file cannot find on its own. It kept its own copy of this one under a third

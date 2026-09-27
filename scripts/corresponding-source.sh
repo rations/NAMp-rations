@@ -50,7 +50,7 @@ die() { namp_dist_die "$*"; }
 COMMIT="$(git -C "$REPO" rev-parse HEAD)"
 DIRTY=""
 git -C "$REPO" diff --quiet HEAD -- 2>/dev/null || DIRTY="yes"
-VERSION="$(namp_dist_version "$REPO/products/rack/CMakeLists.txt")"
+VERSION="$(namp_dist_release_version "$REPO")"
 
 # The five graphics tarballs, by the names scripts/build-win-deps.sh fetches. Read from that script
 # rather than restated here, so a version bump there cannot leave this list behind describing a

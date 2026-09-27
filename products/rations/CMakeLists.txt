@@ -29,10 +29,25 @@ cmake_minimum_required(VERSION 3.25.0)
 # add_subdirectory() and so cannot say "before project()" about anything. The reasoning, and the
 # 11.0 floor and the one-slice-per-configure rule, are written out at that site.
 
+if(NOT NAMP_VERSION)
+    message(FATAL_ERROR "NAMP_VERSION is not set. Configure from the repository root, which reads "
+                        "the VERSION file there: cmake -S . -B build")
+endif()
+
 project(smtg-rations
-    VERSION 0.6.0
+    VERSION ${NAMP_VERSION}
     DESCRIPTION "Rations four-channel neural amp head VST3"
 )
+
+# The release version's three numbers, for src/version.h. They come from the VERSION file at the
+# repository root, through project() above; see the note on that file in the root CMakeLists.
+# Directory scope rather than per target, so no target that includes version.h can be built
+# without them -- and if one somehow were, version.h stops the build with #error rather than
+# compiling a plug-in with no version in it.
+add_compile_definitions(
+    NAMP_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    NAMP_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    NAMP_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 
 # NAMP_PRODUCT_DIR, NAMP_REPO_ROOT and NAMP_CORE_DIR are set by the repository-root dispatcher and
 # are how this file names the three directories it cannot find on its own: itself, the root that

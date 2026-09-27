@@ -53,37 +53,24 @@ namp_dist_die() {
     exit 1
 }
 
-# The project() version, which is the first VERSION line in the product's lists file. Read rather
-# than duplicated, and read the SAME way every other release path reads it, so two releases of one
-# product cannot be tagged differently from one another.
-namp_dist_version() {
-    local lists="$1" v
-    v="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$lists" | head -1)"
-    [ -n "$v" ] || namp_dist_die "could not read the project version from $lists"
-    printf '%s' "$v"
-}
-
-# THE RELEASE VERSION, AND THE ASSERTION THAT THERE IS ONLY ONE OF IT.
+# THE RELEASE VERSION: the VERSION file at the repository root, which is the only place it is set.
+# The build reads the same file (see the root CMakeLists), so the number in a package's name, in its
+# installer and in every binary inside it cannot disagree.
 #
-# The release is one package holding both products, so it has one version number -- and the two
-# products each carry their own project() version in their own lists file. Those two numbers
-# agreeing is a fact to check, not an arrangement to trust: they are in different files, edited by
-# different hands on different days, and a package labelled 0.3.0 whose plug-in half says 0.2.9 is
-# wrong in a way that survives every other check here and only surfaces in a host's plug-in list,
-# months later, as a version nobody can account for.
+# This replaced reading each product's project() line and asserting the two agreed. That assertion
+# was real protection while there were two numbers to agree, but it covered two of the FOUR places
+# the version lived: nothing checked the two version.h headers, and the first 0.6.0 commit left the
+# rack's at 0.5. One source is better than any number of checks between several.
 #
-# This is the same class of drift the whole repository exists to end. The two trees were kept in
-# step by hand for twenty-six commits and a parameter default fell out of step silently; a version
-# number is cheaper to check than that was and there is no reason to find out the hard way twice.
+# Validated exactly as the root CMakeLists validates it -- three plain decimals, no leading zeros --
+# so a file CMake would refuse is refused here too, instead of naming a package after it.
 namp_dist_release_version() {
-    local repo="$1" v_rations v_rack
-    v_rations="$(namp_dist_version "$repo/products/rations/CMakeLists.txt")"
-    v_rack="$(namp_dist_version "$repo/products/rack/CMakeLists.txt")"
-    [ "$v_rations" = "$v_rack" ] || namp_dist_die "the two products disagree about the version:
-  products/rations/CMakeLists.txt  $v_rations
-  products/rack/CMakeLists.txt     $v_rack
-They ship in ONE package, so they need ONE version. Bump whichever is behind and re-run."
-    printf '%s' "$v_rations"
+    local repo="$1" v
+    [ -f "$repo/VERSION" ] || namp_dist_die "there is no VERSION file at $repo - it holds the release version, x.y.z"
+    v="$(head -n1 "$repo/VERSION" | tr -d '[:space:]')"
+    grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' <<<"$v" ||
+        namp_dist_die "VERSION says '$v'. It must be x.y.z: three plain decimal numbers, none with a leading zero."
+    printf '%s' "$v"
 }
 
 # ONE ARCHITECTURE FOLDER, AND IT IS THE LINUX ONE.

@@ -91,6 +91,35 @@ set(NAMP_CORE_INCLUDES
     ${NAMP_CORE_DIR}/standalone
     ${NAMP_CORE_DIR}/deps/tonestack)
 
+# THE RELEASE VERSION, IN ONE PLACE: the file VERSION beside this one, holding x.y.z and nothing
+# else. Both products pass it to their own project(), which is what moduleinfo.json, the macOS
+# Info.plist and the LV2 bundle's version derive from, and hand its three numbers to the compiler
+# as NAMP_VERSION_MAJOR/MINOR/PATCH, which is what each product's src/version.h turns into the
+# version a plug-in reports to a host. Every release script reads the same file.
+#
+# It used to be four places -- a project() line in each product and a version.h in each -- with
+# only the first two checked against each other. On the first bump after version.h's own comment
+# warned that nothing kept it in step, the rack's copy was left at 0.5 inside a 0.6.0 release.
+#
+# Each part must be a plain decimal with no leading zero, because it becomes a C integer literal:
+# 08 is not an integer in C, and 010 is eight.
+#
+# CMAKE_CONFIGURE_DEPENDS makes an edit to the file re-run CMake on the next build by itself.
+# Without it the version is read once, at configure time, and a bumped file would build the old
+# number into everything until somebody reconfigured by hand.
+set(NAMP_VERSION_FILE "${NAMP_REPO_ROOT}/VERSION")
+if(NOT EXISTS "${NAMP_VERSION_FILE}")
+    message(FATAL_ERROR "There is no VERSION file at the repository root. It holds the release "
+                        "version, x.y.z, and both products read it.")
+endif()
+file(STRINGS "${NAMP_VERSION_FILE}" NAMP_VERSION LIMIT_COUNT 1)
+string(STRIP "${NAMP_VERSION}" NAMP_VERSION)
+if(NOT NAMP_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "VERSION says '${NAMP_VERSION}'. It must be x.y.z: three plain decimal "
+                        "numbers, none with a leading zero, and nothing else on the line.")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${NAMP_VERSION_FILE}")
+
 set(NAMP_PRODUCT_DIR "${NAMP_REPO_ROOT}/products/${NAMP_PRODUCT}")
 if(NOT EXISTS "${NAMP_PRODUCT_DIR}/CMakeLists.txt")
     file(GLOB _namp_products RELATIVE "${NAMP_REPO_ROOT}/products" "${NAMP_REPO_ROOT}/products/*")
