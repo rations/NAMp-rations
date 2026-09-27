@@ -89,8 +89,11 @@ cp "$REPO/NOTICE" "$REPO/LICENSE" "$REPO/README.md" "$PKGDIR/"
 {
   cat <<'EOF'
 #!/usr/bin/env bash
-# Install (or remove) NAMp for the current user -- all of it, in one go. Nothing here needs root,
-# and nothing is installed outside your home directory.
+# Install (or remove) NAMp for the current user -- all of it, in one go. Nothing is installed
+# outside your home directory. Before copying anything it checks that this machine can load what it
+# is about to install, and if a library is missing it says which, and who needs it. On a system
+# with apt it also offers to install the packages -- that step, and only that step, uses sudo, and
+# only when you answer yes.
 #
 #   plugin/NAMp-rations.vst3  -> ~/.vst3                                 (the plug-in, for a DAW)
 #   plugin/rations.lv2        -> ~/.lv2                                  (the same plug-in as LV2)
@@ -132,6 +135,9 @@ EOF
   echo "Delete them by hand if you want them gone."
   exit 0
 fi
+EOF
+  namp_install_runtime_check "$ARCH"
+  cat <<'EOF'
 
 mkdir -p "$VST3_DIR" "$LV2_DIR" "$BIN_DIR" "$APP_DIR"
 
@@ -180,9 +186,12 @@ echo "In a DAW: rescan plug-ins. The VST3 and the LV2 are the same amp in two wr
 echo "use whichever your host prefers and ignore the other - there is nothing to choose"
 echo "between them in sound or in features."
 echo
-echo "Standalone: start a JACK server first, or run a PipeWire desktop, which provides one."
+echo "Standalone: it plays through JACK, so a JACK server has to be running - jackd2,"
+echo "started with qjackctl or 'jackd -d alsa', on a PulseAudio or plain ALSA system. On a"
+echo "PipeWire desktop, PipeWire is the server: start it as 'pw-jack namp-rack'."
 EOF
   namp_install_path_note namp-rack
+  namp_install_runtime_report
 } > "$PKGDIR/install.sh"
 chmod +x "$PKGDIR/install.sh"
 
@@ -333,15 +342,32 @@ not heard.
 
 Requirements
 ------------
+./install.sh checks these before it copies anything: it says which libraries are
+missing and what needs them, and on Debian, Devuan, Raspberry Pi OS and Ubuntu it
+offers to install them.
+
 The plug-in, the LV2 and the pedals need cairo, freetype2, fontconfig and libX11,
 which a desktop Linux install already has. None of them links JACK.
 
 The standalone needs those plus lilv and suil (for hosting LV2 plug-ins) and the
-JACK client library, with a running JACK server. On Debian/Devuan/Ubuntu:
+JACK client library, and it plays through a running JACK server. With PulseAudio,
+or with no sound server at all, that server is jackd2. On Debian/Devuan/Ubuntu:
 
     sudo apt install jackd2 liblilv-0-0 libsuil-0-0
 
-On a PipeWire desktop, "pipewire-jack" provides the JACK library and server.
+On Ubuntu, liblilv-0-0 and libsuil-0-0 are in the universe repository.
+
+On a PipeWire desktop, PipeWire is the JACK server, through its pipewire-jack
+package (pipewire-audio-client-libraries on Ubuntu 22.04). Debian and Ubuntu do
+not put its JACK library where programs look by default, so either start the
+standalone as
+
+    pw-jack namp-rack
+
+or let every JACK program use PipeWire, which also makes the menu entry work:
+
+    sudo cp /usr/share/doc/pipewire/examples/ld.so.conf.d/pipewire-jack-*.conf /etc/ld.so.conf.d/
+    sudo ldconfig
 
 Nothing here needs a -dev package; those are only for building from source.
 
