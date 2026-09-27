@@ -17,11 +17,26 @@
 
 cmake_minimum_required(VERSION 3.25.0)
 
+if(NOT NAMP_VERSION)
+    message(FATAL_ERROR "NAMP_VERSION is not set. Configure from the repository root, which reads "
+                        "the VERSION file there: cmake -S . -B build")
+endif()
+
 project(namp-rack
-    VERSION 0.5.0
+    VERSION ${NAMP_VERSION}
     DESCRIPTION "NAMp-Rack — plug-in host with a four-channel NAM amp head"
     LANGUAGES C CXX
 )
+
+# The release version's three numbers, for src/version.h. They come from the VERSION file at the
+# repository root, through project() above; see the note on that file in the root CMakeLists.
+# Directory scope rather than per target, so no target that includes version.h can be built
+# without them -- and if one somehow were, version.h stops the build with #error rather than
+# compiling a plug-in with no version in it.
+add_compile_definitions(
+    NAMP_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    NAMP_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    NAMP_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 
 # Set by the repository-root dispatcher, along with NAMP_REPO_ROOT and NAMP_CORE_DIR -- the three
 # directories this file cannot find on its own. It kept its own copy of this one under a third
@@ -208,10 +223,27 @@ if(NOT TARGET sdk)
             "'git submodule update --init' or set -DVST3_SDK_DIR=<path>")
     endif()
 
-    # Headless SDK: core libraries plus the validator (part of the hosting examples), no VSTGUI
-    # (the editor is drawn directly), no plug-in examples.
+    # Headless SDK: core libraries plus the validator, no VSTGUI (the editor is drawn directly),
+    # no plug-in examples, and no hosting examples either.
+    #
+    # THE VALIDATOR IS NOT GATED BY SMTG_ENABLE_VST3_HOSTING_EXAMPLES, which is what this line
+    # used to assume -- it said "validator" and forced the option ON to keep it. Read rather than
+    # recalled: vst3sdk/CMakeLists.txt adds public.sdk/samples/vst-hosting UNCONDITIONALLY, and
+    # inside it only editorhost/CMakeLists.txt and audiohost/CMakeLists.txt open with
+    # if(SMTG_ENABLE_VST3_HOSTING_EXAMPLES). The validator's own CMakeLists has no such guard, so
+    # it builds either way. moduleinfotool lives under vst-utilities and is not gated at all.
+    #
+    # What the option was really buying was editorhost and audiohost, and editorhost is a GTK
+    # application: on Linux its CMakeLists does pkg_check_modules(GTK3 REQUIRED gtk+-3.0) and the
+    # same for gtkmm-3.0. So a build machine without those two dev packages could not CONFIGURE
+    # this project at all, however headless the rest of it is -- which is how a Debian 12
+    # container found out, having no reason to carry GTK.
+    #
+    # One file from editorhost is still compiled into several targets here -- source/usediids.cpp,
+    # referenced by path further down. That is a source file on disk and does not need the
+    # editorhost TARGET to exist, so it is unaffected by this.
     set(SMTG_ENABLE_VSTGUI_SUPPORT OFF CACHE BOOL "editor is drawn directly" FORCE)
-    set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES ON CACHE BOOL "validator" FORCE)
+    set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF CACHE BOOL "editorhost wants GTK; the validator is not gated by this" FORCE)
     set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF CACHE BOOL "plug-in examples not needed" FORCE)
     set(SMTG_RUN_VST_VALIDATOR OFF CACHE BOOL "run manually instead" FORCE)
     set(SMTG_CREATE_PLUGIN_LINK OFF CACHE BOOL "install manually instead" FORCE)
@@ -677,6 +709,41 @@ if(NAMPRACK_BUILD_VST3_BUNDLE)
 
         set_target_properties(NampRackAmp PROPERTIES LIBRARY_OUTPUT_DIRECTORY
             "${NAMPRACK_AMP_PKG_PATH}/${NAMPRACK_AMP_PKG_CONTENTS}/${NAMPRACK_AMP_WIN_ARCH}")
+    endif()
+
+    # The Linux architecture folder, asserted for the same reason and against a trap of a different
+    # shape. smtg_get_linux_architecture_name() reads the CROSS_COMPILE *environment variable*
+    # first and only falls back to `uname -m`, so a cross build that sets a toolchain but not that
+    # variable stamps a foreign binary into the folder named after the BUILD machine. That bundle
+    # configures, compiles, links and installs without a complaint and then loads in no host on
+    # either architecture, because module_linux.cpp's loader builds the folder name from the
+    # running machine's uname().machine and looks only there.
+    #
+    # This particular bundle is a development artefact and is never packaged, so what a mistake
+    # here costs is the check rather than a release -- but it is the same check the shipped
+    # bundles need, and having it in both places is how the two stay the same check.
+    if(NAMP_LINUX)
+        get_target_property(NAMPRACK_AMP_LINUX_OUTDIR NampRackAmp LIBRARY_OUTPUT_DIRECTORY)
+        get_filename_component(NAMPRACK_AMP_LINUX_ARCH "${NAMPRACK_AMP_LINUX_OUTDIR}" NAME)
+
+        if(NOT NAMPRACK_AMP_LINUX_ARCH MATCHES "^(x86_64|aarch64)-linux$")
+            message(FATAL_ERROR
+                "[NAMp-Rack] the SDK chose architecture folder "
+                "'${NAMPRACK_AMP_LINUX_ARCH}', which is not one this project ships. Expected "
+                "'x86_64-linux' or 'aarch64-linux'.")
+        endif()
+
+        if(NOT NAMPRACK_AMP_LINUX_ARCH STREQUAL "${CMAKE_SYSTEM_PROCESSOR}-linux")
+            message(FATAL_ERROR
+                "[NAMp-Rack] the SDK chose architecture folder "
+                "'${NAMPRACK_AMP_LINUX_ARCH}', but CMake is building for "
+                "'${CMAKE_SYSTEM_PROCESSOR}'. The folder and the binary inside it would name "
+                "different architectures, and the bundle would load nowhere. The SDK takes the "
+                "folder from the CROSS_COMPILE environment variable if it is set and from "
+                "`uname -m` if it is not, so the two ways to reach here are a cross build that "
+                "never exported CROSS_COMPILE, and a native build that inherited a stale one. "
+                "Set it to your toolchain's prefix, or unset it and build natively.")
+        endif()
     endif()
 endif()
 

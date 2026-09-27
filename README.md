@@ -122,7 +122,8 @@ examined takes that throwaway process with it and is recorded as bad rather than
 single broken plug-in on your disk cannot stop the Rack starting.
 
 **Audio.** On **Linux** it is a JACK client — start a JACK server first (qjackctl, or
-`jackd -R -d alsa -r 48000 -p 256`), or run a PipeWire desktop, which provides one. With no server
+`jackd -R -d alsa -r 48000 -p 256`), or on a PipeWire desktop start it as `pw-jack namp-rack`, because
+Debian and Ubuntu do not put PipeWire's JACK library where programs look by default. With no server
 it still opens, so you can set your captures and your rack up, but it makes no sound and says so.
 On **Windows** it opens **ASIO** first, because that is what your interface's own driver exposes
 and what the latency depends on, and falls back to WASAPI on a machine with no ASIO driver.
@@ -177,19 +178,22 @@ cd NAMp-*/          # extracts to NAMp-<version>/
 | goes to | what |
 |---|---|
 | `~/.vst3/NAMp-rations.vst3` | the plug-in, VST3 |
-| `~/.lv2/rations.lv2` | the plug-in, LV2 |
+| `~/.lv2/NAMp-rations.lv2` | the plug-in, LV2 |
 | `~/.vst3/RationsBoost.vst3` … `RationsReverb.vst3` | the five pedals |
 | `~/.local/bin/namp-rack` | the program |
 | `~/.local/share/applications/namp-rack.desktop` | its menu entry |
 | `~/.local/share/icons/hicolor/<size>/apps/namp-rack.png` | its icon, at 48, 64, 128 and 256 |
 
-Nothing needs root and nothing lands outside your home directory. Then rescan plug-ins in your
-DAW. `./install.sh --uninstall` removes every one of those again.
+Nothing lands outside your home directory, and none of it needs root — the only thing that can
+is installing a missing library, which the script offers and does only if you say yes. Then rescan
+plug-ins in your DAW. `./install.sh --uninstall` removes every one of those again.
 
 **The VST3 and the LV2 are the same amp twice** and are interchangeable — your host will find both
 if both are installed, so use whichever it handles best and ignore the other. If a host shows you
-an older version of the LV2, check for `rations.lv2` under `/usr/lib/lv2` or `/usr/local/lib/lv2`:
-a copy there shadows the one in your home directory. The install script says so if it finds one.
+an older version of the LV2, check for `NAMp-rations.lv2` — or `rations.lv2`, its name before
+0.6.0 — under `/usr/lib/lv2` or `/usr/local/lib/lv2`: a copy there shadows the one in your home
+directory. The install script says so if it finds one, and it removes an old `~/.lv2/rations.lv2`
+itself, because two folders holding the same plug-in leave the host to pick one.
 
 **The pedals go to `~/.vst3`** because that is one of the folders the Rack's own scan looks in, so
 they appear in its plug-in list after a rescan — and so does every other VST3 you already have
@@ -208,8 +212,12 @@ deleted at any time and is rebuilt by a rescan.
 **Requirements:** the plug-in, the LV2 and the pedals need cairo, freetype2, fontconfig and libX11,
 which a desktop Linux install already has. The program needs those plus lilv and suil, the JACK
 client library and a running JACK server. On Debian / Devuan / Ubuntu:
-`sudo apt install jackd2 liblilv-0-0 libsuil-0-0`. On a PipeWire desktop, `pipewire-jack` provides
-both the library and the server.
+`sudo apt install jackd2 liblilv-0-0 libsuil-0-0` (on Ubuntu the last two are in universe).
+`./install.sh` checks all of this before it copies anything, names whatever is missing and what
+needs it, and on a system with apt offers to install it. On a PipeWire desktop, `pipewire-jack` is
+the JACK server, but its library is not on the default path on Debian or Ubuntu: start the program
+with `pw-jack namp-rack`, or copy `/usr/share/doc/pipewire/examples/ld.so.conf.d/pipewire-jack-*.conf`
+into `/etc/ld.so.conf.d/` and run `sudo ldconfig`, which is what Debian's own PipeWire README says.
 
 ### Rations Pedals on their own
 

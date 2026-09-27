@@ -59,14 +59,20 @@ for _tool in lipo codesign xattr ditto otool nm strip; do
     echo "$_tool not found; this script only runs on macOS." >&2; exit 1; }
 done
 
-# The project() version, which is the first VERSION line in the top-level lists
-# file. Read rather than duplicated, and read the SAME way stage-linux.sh and
-# stage-windows.sh read it, so the three releases cannot be tagged differently
-# from one another.
-VERSION="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' \
-  "$PRODUCT/CMakeLists.txt" | head -1)"
-if [ -z "$VERSION" ]; then
-  echo "could not read the project version from CMakeLists.txt" >&2
+# The release version, from the VERSION file at the repository root -- the one
+# place it is set, and the file the build itself reads. Validated as the Linux
+# and Windows scripts validate it (scripts/dist-common.sh), which this script
+# does not source, so that a version CMake would refuse is refused here too.
+# head, tr and grep -E only, and only POSIX forms of them: these are BSD's here.
+if [ ! -f "$REPO/VERSION" ]; then
+  echo "there is no VERSION file at $REPO - it holds the release version, x.y.z" >&2
+  exit 1
+fi
+VERSION="$(head -n 1 "$REPO/VERSION" | tr -d '[:space:]')"
+if ! printf '%s' "$VERSION" |
+     grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+  echo "VERSION says '$VERSION'. It must be x.y.z: three plain decimal numbers," >&2
+  echo "none with a leading zero." >&2
   exit 1
 fi
 

@@ -53,37 +53,24 @@ namp_dist_die() {
     exit 1
 }
 
-# The project() version, which is the first VERSION line in the product's lists file. Read rather
-# than duplicated, and read the SAME way every other release path reads it, so two releases of one
-# product cannot be tagged differently from one another.
-namp_dist_version() {
-    local lists="$1" v
-    v="$(sed -n 's/^[[:space:]]*VERSION[[:space:]][[:space:]]*\([0-9][0-9.]*\).*/\1/p' "$lists" | head -1)"
-    [ -n "$v" ] || namp_dist_die "could not read the project version from $lists"
-    printf '%s' "$v"
-}
-
-# THE RELEASE VERSION, AND THE ASSERTION THAT THERE IS ONLY ONE OF IT.
+# THE RELEASE VERSION: the VERSION file at the repository root, which is the only place it is set.
+# The build reads the same file (see the root CMakeLists), so the number in a package's name, in its
+# installer and in every binary inside it cannot disagree.
 #
-# The release is one package holding both products, so it has one version number -- and the two
-# products each carry their own project() version in their own lists file. Those two numbers
-# agreeing is a fact to check, not an arrangement to trust: they are in different files, edited by
-# different hands on different days, and a package labelled 0.3.0 whose plug-in half says 0.2.9 is
-# wrong in a way that survives every other check here and only surfaces in a host's plug-in list,
-# months later, as a version nobody can account for.
+# This replaced reading each product's project() line and asserting the two agreed. That assertion
+# was real protection while there were two numbers to agree, but it covered two of the FOUR places
+# the version lived: nothing checked the two version.h headers, and the first 0.6.0 commit left the
+# rack's at 0.5. One source is better than any number of checks between several.
 #
-# This is the same class of drift the whole repository exists to end. The two trees were kept in
-# step by hand for twenty-six commits and a parameter default fell out of step silently; a version
-# number is cheaper to check than that was and there is no reason to find out the hard way twice.
+# Validated exactly as the root CMakeLists validates it -- three plain decimals, no leading zeros --
+# so a file CMake would refuse is refused here too, instead of naming a package after it.
 namp_dist_release_version() {
-    local repo="$1" v_rations v_rack
-    v_rations="$(namp_dist_version "$repo/products/rations/CMakeLists.txt")"
-    v_rack="$(namp_dist_version "$repo/products/rack/CMakeLists.txt")"
-    [ "$v_rations" = "$v_rack" ] || namp_dist_die "the two products disagree about the version:
-  products/rations/CMakeLists.txt  $v_rations
-  products/rack/CMakeLists.txt     $v_rack
-They ship in ONE package, so they need ONE version. Bump whichever is behind and re-run."
-    printf '%s' "$v_rations"
+    local repo="$1" v
+    [ -f "$repo/VERSION" ] || namp_dist_die "there is no VERSION file at $repo - it holds the release version, x.y.z"
+    v="$(head -n1 "$repo/VERSION" | tr -d '[:space:]')"
+    grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' <<<"$v" ||
+        namp_dist_die "VERSION says '$v'. It must be x.y.z: three plain decimal numbers, none with a leading zero."
+    printf '%s' "$v"
 }
 
 # ONE ARCHITECTURE FOLDER, AND IT IS THE LINUX ONE.
@@ -158,18 +145,42 @@ namp_dist_exports_all() {
     done
 }
 
+# THE DEPENDENCY LIST IS CAPTURED WHOLE, AND ONLY THEN SEARCHED. These two gates were written as
+# `ldd ... | grep -q`, and under `set -o pipefail` that is a race: grep -q exits at its first
+# match, and if the loader behind ldd has a line left to write it dies of SIGPIPE, which pipefail
+# reports as the pipeline FAILING. For must_link that is a false failure -- a release stopped with
+# "namp-rack does not link libjack" about a binary that does, which is how this was found, with a
+# Windows build loading the machine. For must_not_link it is worse, because the test is inverted:
+# a match becomes a pass, and a plug-in that DOES link JACK ships. Measured with both processes
+# pinned to one CPU, which forces a context switch between the loader's writes: 1896 of 2000 false
+# "does not link", and 129 of 1000 false passes on a binary that links libjack. After this change,
+# none in either. stage-linux.sh met the same trap with `strings | grep -q` and says so.
+#
+# ldd itself exits 0 when a library is missing -- that is a "not found" line to search, not an
+# error -- and 1 only when it cannot read the file at all. That case used to produce empty output,
+# which must_not_link passed. It now stops the release instead.
+namp_dist_ldd() {
+    local elf="$1" out
+    out="$(ldd "$elf" 2>&1)" ||
+        namp_dist_die "ldd could not read $elf - it is not a dynamic executable this machine can load:
+$out"
+    printf '%s\n' "$out"
+}
+
 namp_dist_must_not_link() {
-    local elf="$1" pattern="$2" label="$3" why="$4"
-    if ldd "$elf" | grep -qiE "$pattern"; then
+    local elf="$1" pattern="$2" label="$3" why="$4" deps
+    deps="$(namp_dist_ldd "$elf")" || exit 1
+    if grep -qiE "$pattern" <<<"$deps"; then
         echo "$label links $pattern. $why" >&2
-        ldd "$elf" | grep -iE "$pattern" >&2
+        grep -iE "$pattern" <<<"$deps" >&2
         exit 1
     fi
 }
 
 namp_dist_must_link() {
-    local elf="$1" pattern="$2" label="$3" why="$4"
-    ldd "$elf" | grep -qiE "$pattern" || namp_dist_die "$label does not link $pattern. $why"
+    local elf="$1" pattern="$2" label="$3" why="$4" deps
+    deps="$(namp_dist_ldd "$elf")" || exit 1
+    grep -qiE "$pattern" <<<"$deps" || namp_dist_die "$label does not link $pattern. $why"
 }
 
 namp_dist_require_files() {
@@ -570,6 +581,231 @@ case ":\$PATH:" in
 esac
 echo
 echo "To remove it again:  ./install.sh --uninstall"
+EOF
+}
+
+# --- can this machine run what is about to be installed? --------------------
+# $1 is the architecture the package was built for, baked into the installer because the installer
+# cannot know it any other way: it is the same script in every package.
+#
+# Two questions, asked in order, before anything is copied.
+#
+# WRONG PACKAGE. An aarch64 bundle on an x86_64 machine installs cleanly and then never loads: a
+# host skips a bundle whose binary it cannot open, and says nothing. The same happens on a Raspberry
+# Pi running a 32-bit OS on its 64-bit kernel -- uname -m names the KERNEL and says aarch64 there,
+# while every library on the system is 32-bit -- so the word size of the userland is asked too, with
+# getconf, which is part of glibc and therefore present wherever these binaries could run at all.
+#
+# MISSING LIBRARIES. Asked of the dynamic loader, through ldd, and NOT of the package manager. A
+# tester's namp-rack did not start until libsuil-0-0 was installed, and INSTALL.txt already said to
+# install it -- eighty lines down, which is where the check belongs instead. ldd rather than
+# `dpkg -s` for three reasons:
+#   * it asks the question that decides whether a program starts. A package can be installed while
+#     its library is not on the loader's path, and on Debian, Devuan and Ubuntu that is exactly the
+#     state of PipeWire's libjack: pipewire-jack puts it in pipewire-0.3/jack/ and ships the
+#     ld.so.conf.d entry that would publish it only as an EXAMPLE under /usr/share/doc. Read out of
+#     the Contents index of Debian 12, Debian 13, Ubuntu 22.04 and Ubuntu 24.04; every one does it.
+#   * it works on every glibc distribution, whatever its package manager;
+#   * it has no list to keep in step with the build. Whatever the binaries were linked against,
+#     the loader reports.
+#
+# What is then DONE about a missing library depends on the package manager, and only apt is acted
+# on. The soname-to-package table below was read out of the same four Contents indexes rather than
+# recalled, and all six names are identical in all four -- none of these libraries was renamed by
+# the 64-bit time_t transition. Every other distribution is told the library names and left to its
+# own package manager, because a table for dnf or pacman would be a guess, and a guess that runs
+# under sudo is not an acceptable failure mode for an installer.
+#
+# JACK has three honest answers and the installer must not pick the wrong one. On a machine running
+# PulseAudio or plain JACK -- including Devuan, which has no systemd and often no PipeWire at all --
+# the library is libjack-jackd2-0, and that is the default. Only when a pipewire process is actually
+# running for this user is the PipeWire route given instead, because installing jackd2's library
+# there produces a program that STARTS and then talks to a JACK server that does not exist: silence
+# that looks like success, the worst outcome available. The running process is asked with pgrep,
+# not with `systemctl --user`, so the test means the same thing without systemd. The PipeWire route
+# is printed and never executed: its two options are the two that Debian's own README.Debian for
+# pipewire gives (pw-jack, or the ld.so.conf.d copy plus ldconfig), and no machine this was written
+# on runs PipeWire, so it has never been run from here.
+#
+# JACK's LIBRARY is installed and its SERVER is not. The library is what stops the program
+# starting; jackd2 would bring a debconf dialogue and, through its Recommends, qjackctl and Qt, and
+# which JACK server someone runs is their decision. The closing note names it instead.
+#
+# Nothing here fails the install. The plug-ins need only cairo, FreeType and X11, so a machine
+# missing lilv can still use them; the files are installed either way and what will not start is
+# said at the end, by name.
+namp_install_runtime_check() {
+    printf 'PKG_ARCH="%s"\n' "$1"
+    cat <<'EOF'
+
+namp_wrong_machine() {
+  local kern bits
+  kern="$(uname -m)"
+  bits="$(getconf LONG_BIT 2>/dev/null || echo '?')"
+  if [ "$kern" != "$PKG_ARCH" ]; then
+    echo "This package is for $PKG_ARCH, and this machine is $kern." >&2
+    echo "Download the linux-$kern package instead. Nothing has been installed." >&2
+    return 0
+  fi
+  if [ "$bits" != 64 ]; then
+    echo "This machine has a 64-bit processor but runs a $bits-bit operating system, and" >&2
+    echo "NAMp is 64-bit only - there is no 32-bit build. On a Raspberry Pi, that means" >&2
+    echo "the 64-bit Raspberry Pi OS. Nothing has been installed." >&2
+    return 0
+  fi
+  return 1
+}
+
+if namp_wrong_machine; then
+  exit 1
+fi
+
+# One "soname<TAB>who needs it" line per library the loader cannot find.
+namp_missing_libs() {
+  local f who
+  for f in "$HERE"/plugin/NAMp-rations.vst3/Contents/*-linux/*.so \
+           "$HERE"/plugin/NAMp-rations.lv2/*.so \
+           "$HERE"/pedals/*.vst3/Contents/*-linux/*.so \
+           "$HERE"/rack/namp-rack; do
+    [ -f "$f" ] || continue
+    case "$f" in
+      "$HERE"/rack/*)   who="the standalone (namp-rack)" ;;
+      "$HERE"/pedals/*) who="the pedals" ;;
+      *)                who="the plug-in" ;;
+    esac
+    { ldd "$f" 2>/dev/null || true; } |
+      awk -v W="$who" '$2 == "=>" && $3 == "not" { print $1 "\t" W }'
+  done | sort -u
+}
+
+namp_list_missing() {
+  printf '%s\n' "$1" | awk -F '\t' '
+    { if ($1 in who) who[$1] = who[$1] ", " $2; else who[$1] = $2 }
+    END { for (s in who) printf "    %-20s needed by %s\n", s, who[s] }' | sort
+}
+
+namp_apt_package() {
+  case "$1" in
+    libX11.so.6)      echo libx11-6 ;;
+    libcairo.so.2)    echo libcairo2 ;;
+    libfreetype.so.6) echo libfreetype6 ;;
+    libjack.so.0)     echo libjack-jackd2-0 ;;
+    liblilv-0.so.0)   echo liblilv-0-0 ;;
+    libsuil-0.so.0)   echo libsuil-0-0 ;;
+  esac
+}
+
+namp_pipewire_running() {
+  command -v pgrep >/dev/null 2>&1 && pgrep -x -u "$(id -u)" pipewire >/dev/null 2>&1
+}
+
+if command -v ldd >/dev/null 2>&1; then
+  MISSING="$(namp_missing_libs)"
+else
+  MISSING=""
+  echo "Note: ldd is not available, so whether this machine has the libraries NAMp"
+  echo "needs could not be checked. INSTALL.txt lists them under Requirements."
+  echo
+fi
+
+if [ -n "$MISSING" ]; then
+  echo "Some libraries NAMp needs are not installed on this machine:"
+  namp_list_missing "$MISSING"
+  echo
+
+  PKGS=""
+  UNMAPPED=""
+  PW_JACK=0
+  for SO in $(printf '%s\n' "$MISSING" | cut -f1 | sort -u); do
+    if [ "$SO" = libjack.so.0 ] && namp_pipewire_running; then
+      PW_JACK=1
+      continue
+    fi
+    P="$(namp_apt_package "$SO")"
+    if [ -n "$P" ]; then PKGS="$PKGS $P"; else UNMAPPED="$UNMAPPED $SO"; fi
+  done
+  HAVE_APT=0
+  if command -v apt-get >/dev/null 2>&1; then HAVE_APT=1; fi
+
+  if [ "$PW_JACK" = 1 ]; then
+    echo "PipeWire is running as your sound server, so JACK should come from PipeWire"
+    echo "rather than from a separate JACK library. Install PipeWire's JACK support if it"
+    echo "is not already there (the package is pipewire-jack; on Ubuntu 22.04 it is"
+    echo "pipewire-audio-client-libraries), and then EITHER start the standalone with"
+    echo
+    echo "    pw-jack namp-rack"
+    echo
+    echo "OR let every JACK program use PipeWire, which also makes the menu entry work:"
+    echo
+    echo "    sudo cp /usr/share/doc/pipewire/examples/ld.so.conf.d/pipewire-jack-*.conf /etc/ld.so.conf.d/"
+    echo "    sudo ldconfig"
+    echo
+  fi
+
+  if [ -n "$PKGS" ] && [ "$HAVE_APT" = 1 ]; then
+    if [ "$PW_JACK" = 1 ]; then
+      echo "The rest are in these packages:"
+    else
+      echo "They are in these packages:"
+    fi
+    echo
+    echo "    sudo apt-get install$PKGS"
+    echo
+    if [ "$(id -u)" -eq 0 ]; then
+      SUDO=""
+    elif command -v sudo >/dev/null 2>&1; then
+      SUDO="sudo"
+    else
+      SUDO="-"
+    fi
+    # Only ever asked at a terminal: piped or scripted, the command above is the whole answer.
+    if [ -t 0 ] && [ -t 1 ] && [ "$SUDO" != "-" ]; then
+      ANSWER=""
+      read -r -p "Install them now? [Y/n] " ANSWER || ANSWER=n
+      case "$ANSWER" in
+        [nN]*) echo ;;
+        *)
+          # $SUDO and $PKGS unquoted on purpose: the first may be empty, the second is a list.
+          if ! $SUDO apt-get install $PKGS; then
+            echo
+            echo "apt could not install them. If it could not FIND a package, run"
+            echo "'sudo apt-get update' and try again; on Ubuntu, liblilv-0-0 and libsuil-0-0"
+            echo "are in the universe repository, which has to be enabled."
+          fi
+          echo
+          MISSING="$(namp_missing_libs)"
+          ;;
+      esac
+    fi
+  fi
+
+  # Whatever the table above does not cover: every library on a system without apt, and on one
+  # with it any library the table has no entry for -- a dependency of a dependency, say, which is
+  # still reported by ldd and would otherwise be listed with no advice at all.
+  if [ "$HAVE_APT" = 0 ] && [ -n "$PKGS$UNMAPPED" ]; then
+    echo "Install whatever provides them with your distribution's package manager, then"
+    echo "run ./install.sh again."
+    echo
+  elif [ -n "$UNMAPPED" ]; then
+    echo "Install whatever package provides$UNMAPPED, then run ./install.sh again."
+    echo
+  fi
+fi
+EOF
+}
+
+# The closing half: said after the files are in place, so it is the last thing on the screen.
+namp_install_runtime_report() {
+    cat <<'EOF'
+if [ -n "$MISSING" ]; then
+  echo
+  echo "STILL MISSING - what needs these will not start until they are installed:"
+  namp_list_missing "$MISSING"
+  if [ "${PW_JACK:-0}" = 1 ]; then
+    echo "(libjack.so.0 is the exception: 'pw-jack namp-rack' starts it without it, as above.)"
+  fi
+  echo "Run ./install.sh again afterwards to check."
+fi
 EOF
 }
 

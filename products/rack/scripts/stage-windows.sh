@@ -107,7 +107,7 @@ cmake -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DNAMPRACK_WIN_ASIO="$WANT_ASIO" -S "$REPO"
 cmake --build "$BUILD" --parallel "$(nproc)"
 
-VERSION="$(namp_dist_version "$PRODUCT/CMakeLists.txt")"
+VERSION="$(namp_dist_release_version "$REPO")"
 
 PKGDIR="$STAGE/rack"
 PEDALDIR="$STAGE/pedals"
