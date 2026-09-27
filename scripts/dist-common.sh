@@ -158,18 +158,42 @@ namp_dist_exports_all() {
     done
 }
 
+# THE DEPENDENCY LIST IS CAPTURED WHOLE, AND ONLY THEN SEARCHED. These two gates were written as
+# `ldd ... | grep -q`, and under `set -o pipefail` that is a race: grep -q exits at its first
+# match, and if the loader behind ldd has a line left to write it dies of SIGPIPE, which pipefail
+# reports as the pipeline FAILING. For must_link that is a false failure -- a release stopped with
+# "namp-rack does not link libjack" about a binary that does, which is how this was found, with a
+# Windows build loading the machine. For must_not_link it is worse, because the test is inverted:
+# a match becomes a pass, and a plug-in that DOES link JACK ships. Measured with both processes
+# pinned to one CPU, which forces a context switch between the loader's writes: 1896 of 2000 false
+# "does not link", and 129 of 1000 false passes on a binary that links libjack. After this change,
+# none in either. stage-linux.sh met the same trap with `strings | grep -q` and says so.
+#
+# ldd itself exits 0 when a library is missing -- that is a "not found" line to search, not an
+# error -- and 1 only when it cannot read the file at all. That case used to produce empty output,
+# which must_not_link passed. It now stops the release instead.
+namp_dist_ldd() {
+    local elf="$1" out
+    out="$(ldd "$elf" 2>&1)" ||
+        namp_dist_die "ldd could not read $elf - it is not a dynamic executable this machine can load:
+$out"
+    printf '%s\n' "$out"
+}
+
 namp_dist_must_not_link() {
-    local elf="$1" pattern="$2" label="$3" why="$4"
-    if ldd "$elf" | grep -qiE "$pattern"; then
+    local elf="$1" pattern="$2" label="$3" why="$4" deps
+    deps="$(namp_dist_ldd "$elf")" || exit 1
+    if grep -qiE "$pattern" <<<"$deps"; then
         echo "$label links $pattern. $why" >&2
-        ldd "$elf" | grep -iE "$pattern" >&2
+        grep -iE "$pattern" <<<"$deps" >&2
         exit 1
     fi
 }
 
 namp_dist_must_link() {
-    local elf="$1" pattern="$2" label="$3" why="$4"
-    ldd "$elf" | grep -qiE "$pattern" || namp_dist_die "$label does not link $pattern. $why"
+    local elf="$1" pattern="$2" label="$3" why="$4" deps
+    deps="$(namp_dist_ldd "$elf")" || exit 1
+    grep -qiE "$pattern" <<<"$deps" || namp_dist_die "$label does not link $pattern. $why"
 }
 
 namp_dist_require_files() {
