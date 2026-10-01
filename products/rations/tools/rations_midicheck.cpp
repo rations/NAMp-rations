@@ -576,8 +576,8 @@ int main(int argc, char **argv)
 
     // A learned footswitch has to reach the channel that is actually SOUNDING, not merely the
     // parameter, and this tool asserts exactly that — so the four channels have to have something
-    // to sound. With nothing loaded every channel is ramped silence and the assertion would pass
-    // against four identical nothings.
+    // to sound. With nothing loaded every channel passes the same dry input through and the
+    // assertion would pass against four identical signals.
     opt.captures = RationsTools::captureRoot(opt.captures);
     if (opt.captures.empty()) {
         RationsTools::printCaptureUsage("rations_midicheck");

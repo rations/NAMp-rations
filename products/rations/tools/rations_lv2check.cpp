@@ -1094,8 +1094,9 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
         seqOut->atom.size = static_cast<uint32_t>(atomOut.size() - sizeof(LV2_Atom));
         lilv_instance_run(instance, kBlock);
     }
-    // Nothing is loaded, so the amp is at its ramped-silence gate and the output must be silent —
-    // which is also the check that run() wrote the buffers at all rather than leaving them alone.
+    // Nothing is loaded, so the amp passes its input through, and the input is silence: the output
+    // must be silent too — which is also the check that run() wrote the buffers at all rather than
+    // leaving them alone.
     bool silent = true;
     for (uint32_t i = 0; i < kBlock; ++i)
         silent = silent && audioOutL[i] == 0.0f && audioOutR[i] == 0.0f;
@@ -1113,12 +1114,17 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
     // of the instance. Four banks that could not be switched between, a dial that could not sweep
     // its bank, and no control on the panel that did anything.
     //
-    // Bypass is the one that needs no captures. With nothing loaded the amp is at its
-    // ramped-silence gate, so bypass OUT is silence and bypass IN is the dry input — a difference
-    // no default can produce, reached only by the host writing a port.
+    // Bypass is the one that needs no captures. With nothing loaded the amp passes its input
+    // through, as the parent plug-in does, so on its own bypass would make no difference to hear.
+    // Output gain is what separates them: it trims the wet path and nothing else, so with it at
+    // its -40 dB floor bypass OUT is the input a hundred times down and bypass IN is the input
+    // itself — a difference no default can produce, reached only by the host writing two ports.
     const int bypassPort = static_cast<int>(kPortControlFirst); // kBypassId is the first control
     check(controlPortParam(0) == kBypassId, "the first control port is no longer Bypass; this "
                                             "check names it by position");
+    const int outputGainPort = static_cast<int>(kPortControlFirst) + 2;
+    check(controlPortParam(2) == kOutputGainId, "the third control port is no longer Output gain; "
+                                                "this check names it by position");
     const auto runSine = [&](int blocks, double &rms) {
         double sum = 0.0;
         int counted = 0;
@@ -1142,9 +1148,21 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
         rms = counted > 0 ? std::sqrt(sum / counted) : 0.0;
     };
 
+    // First the thing a cabinet-only instance depends on: nothing loaded, bypass off, every
+    // control at its default, and the input comes out. Not bit-exact, because the tone stack is
+    // in at its defaults; within a few dB of the 0.177 input is the difference from a gate that
+    // shut (silence) or a stage that never ran.
+    double rmsPassThrough = 0.0;
+    gPortValues[bypassPort] = 0.0f;
+    runSine(64, rmsPassThrough);
+    checkf(rmsPassThrough > 0.177 * 0.7 && rmsPassThrough < 0.177 * 1.4,
+           "with nothing loaded the input did not pass through (output rms %.6f against an input "
+           "rms of about 0.177): an instance used only for its cabinet would be silent",
+           rmsPassThrough);
+
     double rmsBypassOut = 0.0;
     double rmsBypassIn = 0.0;
-    gPortValues[bypassPort] = 0.0f;
+    gPortValues[outputGainPort] = static_cast<float>(controlSpec(2).min);
     runSine(64, rmsBypassOut);
     gPortValues[bypassPort] = 1.0f;
     runSine(64, rmsBypassIn);
@@ -1155,7 +1173,9 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
            "(output rms %.6f against an input rms of about 0.177): the host's control ports are "
            "not reaching the plug-in at all",
            rmsBypassIn);
-    checkf(rmsBypassIn > rmsBypassOut * 100.0 + 1e-6,
+    // -40 dB is a factor of 100; 20 leaves room for the tone stack without letting a bypass that
+    // did nothing (a factor of 1) through.
+    checkf(rmsBypassIn > rmsBypassOut * 20.0 + 1e-6,
            "the bypass control port made no difference (out %.6f, in %.6f)", rmsBypassOut,
            rmsBypassIn);
     // And back again, so what is being measured is the port and not a one-way latch.
@@ -1164,6 +1184,7 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
     checkf(rmsAgain < rmsBypassIn * 0.5,
            "bypass could be switched on and not off again (on %.6f, off again %.6f)", rmsBypassIn,
            rmsAgain);
+    gPortValues[outputGainPort] = static_cast<float>(controlSpec(2).def);
 
     // The state round trip. A fresh instance with nothing loaded still has a full blob — the
     // shared controls, the trims, the pedalboard, the output section — so this exercises the same

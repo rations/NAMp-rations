@@ -113,7 +113,8 @@ private:
     void sendMidiTable();     // message thread only
     void allocateBuffers();   // message thread only
     // Load one channel's bank from a folder (isDirectory) or a single file. An empty path clears
-    // the channel, which the rack answers with ramped silence. Message thread only — file I/O.
+    // the channel, which the rack answers by passing its input through dry. Message thread only —
+    // file I/O.
     void loadCaptureSource(int channel, const std::string &path, bool isDirectory);
     // Publish the output section to the rack. Safe from EITHER thread - it is nothing but atomic
     // stores - which it has to be, because a radio click on the settings page arrives as a host

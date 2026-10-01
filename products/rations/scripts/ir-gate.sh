@@ -26,9 +26,9 @@ root="${RATIONS_IR_DIR:-$HOME/Impulse-Responses}"
 build="${RATIONS_BUILD_DIR:-$(cd "$(dirname "$0")/../../.." && pwd)/build}"
 bundle="$build/VST3/Release/NAMp-rations.vst3"
 tool="$build/rations_ircheck"
-# The cabinet stage is measured through the whole chain, so the channels have to be sounding
-# something: with no captures loaded the rack outputs ramped silence and every blend measurement
-# would be taken on nothing. The plug-in ships no captures, so this has to say where they are.
+# The cabinet stage is measured through the whole chain, so the channels have to be sounding an
+# amp: with no captures loaded the rack passes the DI through dry and every blend measurement would
+# be taken on that instead. The plug-in ships no captures, so this has to say where they are.
 captures="${RATIONS_TEST_CAPTURES:-$(cd "$(dirname "$0")/.." && pwd)/captures}"
 
 V="$root/Celestion Vintage 30 - 2002 Mesa Boogie Traditional 4x12 - SM57"

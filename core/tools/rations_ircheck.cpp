@@ -352,8 +352,8 @@ int main(int argc, char **argv)
     }
 
     // The cabinet stage is what this tool measures, but it measures it through the whole chain, so
-    // the channels still have to be sounding something: with no captures loaded the rack outputs
-    // ramped silence and every blend measurement would be taken on nothing.
+    // the channels still have to be sounding an amp: with no captures loaded the rack passes the
+    // DI through dry and every blend measurement would be taken on that instead.
     opt.captures = RationsTools::captureRoot(opt.captures);
     if (opt.captures.empty()) {
         RationsTools::printCaptureUsage("rations_ircheck");
@@ -519,6 +519,56 @@ int main(int argc, char **argv)
             ++failures;
     }
 
+    // --- the cabinet on its own, with no capture loaded anywhere ---------------------------------
+    // The parent plug-in passes its input through when no model is loaded, so one instance can be
+    // a cabinet and nothing else in a chain of other plug-ins. That only works if a channel with
+    // no capture assigned passes its input through dry instead of gating to silence: the IR then
+    // convolves the DI rather than nothing. Every channel is cleared the way the settings page
+    // clears one, and the clear is given time to reach the audio thread, which polls for it.
+    {
+        printf("== no capture loaded\n");
+        bool cleared = true;
+        for (int c = 0; c < Rations::kChannelCount; ++c)
+            cleared =
+                RationsTools::sendCaptureLoad(hostContext, component, c, "", false) && cleared;
+        cleared = sendIr(hostContext, component, 0, "") && cleared;
+        cleared = sendIr(hostContext, component, 1, "") && cleared;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        renderer.run(0.0); // settle the dry gate's ramp before measuring
+
+        const std::vector<float> dry = renderer.run(0.0);
+        const double inRms = rms(renderer.signal, renderer.flushSamples);
+        const double dryRms = rms(dry, 0);
+        // Not bit-exact: the tone stack is still in, at its defaults. It is close to flat there,
+        // so a few dB is the margin against "the amp gated to silence" (hundreds of dB), not a
+        // claim about the tone stack.
+        const bool passes = cleared && std::fabs(toDb(dryRms) - toDb(inRms)) < 3.0;
+        printf("   %s  nothing loaded passes the input through (in %+.2f dB, out %+.2f dB)\n",
+               passes ? "ok  " : "FAIL", toDb(inRms), toDb(dryRms));
+        if (!passes)
+            ++failures;
+
+        const std::string &ir = opt.pairs.front().first;
+        const bool loaded = sendIr(hostContext, component, 0, ir);
+        renderer.run(0.0);
+        const std::vector<float> cab = renderer.run(0.0);
+        const double cabRms = rms(cab, 0);
+        // Audible, and the cabinet's sound rather than the dry signal's: an IR is a filter, so it
+        // must change the samples.
+        const bool sounds = loaded && toDb(cabRms) > -60.0 && !identical(cab, dry);
+        printf("   %s  %s alone, no capture: %s (out %+.2f dB)\n", sounds ? "ok  " : "FAIL",
+               baseName(ir),
+               !loaded                 ? "THE PLUG-IN REFUSED THE IR"
+               : toDb(cabRms) <= -60.0 ? "SILENT"
+               : identical(cab, dry)   ? "THE IR DID NOT CHANGE THE AUDIO"
+                                       : "the cabinet sounds",
+               toDb(cabRms));
+        if (!sounds)
+            ++failures;
+        sendIr(hostContext, component, 0, "");
+        printf("\n");
+    }
+
     processor->setProcessing(false);
     component->setActive(false);
 
@@ -526,6 +576,7 @@ int main(int argc, char **argv)
         printf("FAILED - %d check%s did not hold\n", failures, failures == 1 ? "" : "s");
         return 1;
     }
-    printf("PASSED - the second slot is invisible to a one-IR user, and the blend is level\n");
+    printf("PASSED - the second slot is invisible to a one-IR user, the blend is level, and the "
+           "cabinet works with no capture loaded\n");
     return 0;
 }

@@ -83,8 +83,9 @@ inline bool sendCaptureLoad(Steinberg::Vst::HostApplication &host,
 }
 
 // All four channels from one root, each from its own subdirectory. A channel whose directory is
-// missing is not an error here: ModelBank warns and that channel outputs ramped silence, which is
-// the behaviour a tool asserting on a partial bank set wants to see rather than be spared.
+// missing is not an error here: ModelBank warns and that channel stays empty, passing its input
+// through dry, which is the behaviour a tool asserting on a partial bank set wants to see rather
+// than be spared.
 // Publish a Slim setting the way the settings overlay does: an IMessage on the message thread,
 // never the parameter queue, because applying it rebuilds every capture in every loaded bank.
 // The caller has to WAIT afterwards - a rebuilt bank is republished before any entry is ready, so

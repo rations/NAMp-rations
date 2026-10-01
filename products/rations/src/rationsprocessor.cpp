@@ -120,9 +120,11 @@ tresult PLUGIN_API RationsProcessor::initialize(FUnknown *context)
     // Nothing is loaded here, and that is the change this build is about. The plug-in used to ship
     // four banks inside its own bundle and request all four at this point; it ships none now, so a
     // fresh instance comes up with four empty channels and the settings page asking for them. Empty
-    // is a state the rack already handles correctly - it answers with ramped silence, never with
-    // dry signal, which would jump in level the instant a model landed - so there is nothing to add
-    // here beyond not doing it.
+    // is a state the rack already handles: a channel with no capture assigned passes its input
+    // through dry, as the parent plug-in does with no model loaded, so an instance can be used for
+    // its cabinet alone. Only a capture that is assigned but still building answers with ramped
+    // silence, because dry signal there would jump in level the instant the model landed. So there
+    // is nothing to add here beyond not loading anything.
     //
     // The four workers still exist and still start now. What makes the build breadth-first is one
     // worker per channel, and that is a property of the rack rather than of when the loads arrive:
