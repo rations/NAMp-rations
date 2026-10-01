@@ -80,7 +80,8 @@ struct Bank {
     }
 
     // Highest index that is playable right now. Returns -1 when nothing is ready yet, which the
-    // audio thread answers with ramped silence rather than with dry signal.
+    // audio thread answers with ramped silence rather than with dry signal — unless the bank is
+    // empty (count 0), where nothing will ever be ready and the input passes through dry.
     int highestReady() const
     {
         int highest = -1;

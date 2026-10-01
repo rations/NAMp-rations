@@ -310,11 +310,19 @@ void CrossfadeEngine::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFr
     const int highest = mBank ? mBank->highestReady() : -1;
     mHaveReady = highest >= 0;
     if (!mHaveReady) {
-        // Ramp to silence, never to dry signal: dry would be the wrong level and would jump the
-        // moment a model landed.
+        // Two different states arrive here. With no capture assigned at all — no bank, or the
+        // empty bank a Clear publishes — nothing is ever going to land, so the input passes
+        // through dry, as the parent plug-in does with no model loaded. That is what lets an
+        // instance be used for its cabinet alone. With a capture assigned but not yet built,
+        // ramp to silence instead: dry would be the wrong level and would jump the moment the
+        // model landed. Either way the dry gate is ramped, so neither change clicks.
+        const bool assigned = mBank && mBank->count > 0;
+        const double dryTarget = assigned ? 0.0 : 1.0;
         for (int i = 0; i < numFrames; ++i) {
             mReadyMix = std::max(0.0, mReadyMix - mReadyStep);
-            dst[i] = src[i] * mReadyMix;
+            mDryMix = dryTarget > mDryMix ? std::min(dryTarget, mDryMix + mReadyStep)
+                                          : std::max(dryTarget, mDryMix - mReadyStep);
+            dst[i] = src[i] * mDryMix;
         }
         return;
     }
@@ -530,6 +538,17 @@ void CrossfadeEngine::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFr
         for (int i = 0; i < n; ++i) {
             mReadyMix = std::min(1.0, mReadyMix + mReadyStep);
             chunkOut[i] *= mReadyMix;
+        }
+
+        // A capture landed while dry signal was still sounding — a bank whose first entry was
+        // already built by the time it was polled. Fade the dry signal out underneath the ready
+        // gate rather than cutting it. chunkIn is still intact here: the engine is never handed
+        // the same buffer for input and output. Zero in steady state, so this costs nothing then.
+        if (mDryMix > 0.0) {
+            for (int i = 0; i < n; ++i) {
+                mDryMix = std::max(0.0, mDryMix - mReadyStep);
+                chunkOut[i] += chunkIn[i] * mDryMix;
+            }
         }
 
         // --- advance the position -------------------------------------------------------------

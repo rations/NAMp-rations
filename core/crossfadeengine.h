@@ -83,19 +83,22 @@ public:
     }
     // Normalized index of the capture that is actually sounding — the nearer branch, not the knob.
     double activeIndexNorm() const;
-    // True once at least one entry is playable. Until then the engine outputs ramped silence, not
-    // dry signal: passing the input through and then dropping a model on top of it would jump in
-    // level the instant the first entry landed.
+    // True once at least one entry is playable. Until then an engine with a capture assigned
+    // outputs ramped silence, not dry signal: passing the input through and then dropping a model
+    // on top of it would jump in level the instant the first entry landed. An engine with NO
+    // capture assigned passes its input through dry instead, as the parent plug-in does with no
+    // model loaded; that is not "playable" in this sense, because no model is running.
     bool playable() const
     {
         return mReadyMix > 0.0 || mHaveReady;
     }
-    // True once this engine has actually put a sample into the output. Distinct from playable():
-    // the rack uses it to tell "nothing is being heard yet" from "something is", because adopting
-    // a channel outright is only free while nothing is audible.
+    // True once this engine has actually put a sample into the output: a model's, or the dry
+    // pass-through of an engine with nothing assigned. Distinct from playable(): the rack uses it
+    // to tell "nothing is being heard yet" from "something is", because adopting a channel
+    // outright is only free while nothing is audible, and dry signal is audible.
     bool sounding() const
     {
-        return mReadyMix > 0.0;
+        return mReadyMix > 0.0 || mDryMix > 0.0;
     }
     // True when the ready gate is fully open, so this engine's output is its models' output and
     // not a ramp of it. The channel fade must not start before this: a fade into a signal that is
@@ -188,7 +191,10 @@ private:
 
     double mSlewStep = 0.0; // position units per sample while following the knob
     double mReadyMix = 0.0; // ramped 0 .. 1 gate over "a playable entry exists"
-    double mReadyStep = 1.0;
+    // Ramped 0 .. 1 gate over "no capture is assigned, so pass the input through". Starts closed,
+    // so a restored project that is still building never lets a dry blip through first.
+    double mDryMix = 0.0;
+    double mReadyStep = 1.0; // shared by both gates
     bool mHaveReady = false;
 
     int mOutputMode = 0;

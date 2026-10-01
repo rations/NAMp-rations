@@ -546,8 +546,8 @@ endforeach()
 # person's amps, and made every build of it depend on files that are deliberately
 # not in this repository. Both are gone. The four banks are now whatever folder or
 # file the user picks on the settings page, remembered by absolute path in the
-# state blob, and an instance with nothing loaded outputs ramped silence rather
-# than failing to exist.
+# state blob, and an instance with nothing loaded passes its input through dry
+# rather than failing to exist.
 #
 # The offline proofs still need captures to run against, and take a --captures
 # argument (or $RATIONS_TEST_CAPTURES) rather than reading them out of a bundle.
