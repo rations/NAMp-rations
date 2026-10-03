@@ -22,6 +22,7 @@
 #include "pcmsamples.h"
 
 #include "host/hostapp.h"
+#include "host/rtdenormal.h"
 
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstevents.h"
@@ -1361,6 +1362,11 @@ int WasapiBackend::takeFromRing(float *dst, int frames)
 void WasapiBackend::runBlock()
 {
     const NAMp::host::RtScope rtScope;
+    // Flush-to-zero before anything in the chain runs. The audio API does not set it on this thread
+    // and is not required to, and the amp and each VST3 node only arm it for themselves — so
+    // without this the nodes in front of the amp, and the chain's own mixing, ran in whatever mode
+    // the thread happened to be left in.
+    NAMp::host::rtSetDenormalMode();
 
     IAudioClient *renderClient = static_cast<IAudioClient *>(mRenderClient);
     IAudioRenderClient *render = static_cast<IAudioRenderClient *>(mRender);

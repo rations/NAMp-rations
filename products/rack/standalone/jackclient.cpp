@@ -4,6 +4,7 @@
 #include "jackclient.h"
 
 #include "host/hostapp.h"
+#include "host/rtdenormal.h"
 
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstevents.h"
@@ -15,6 +16,9 @@
 #include <cstdio>
 #include <cstring>
 #include <thread>
+
+#include <pthread.h>
+#include <sched.h>
 
 using namespace Steinberg;
 
@@ -213,6 +217,26 @@ bool JackClient::open(const char *clientName, Vst::IAudioProcessor *processor,
 
     printf("namp-rack: JACK connected at %.0f Hz, %d frames\n", mSampleRate,
            mBlockSize.load(std::memory_order_relaxed));
+
+    // Whether the process thread really is real-time, read off the thread itself rather than off
+    // jack_is_realtime(), which reports the SERVER's mode and the priority it intends a client
+    // thread to get. A thread that came up SCHED_OTHER - no rtprio limit for this user, or a server
+    // started without -R - explains every xrun there will be, and nothing else would say so.
+    int policy = 0;
+    sched_param param = {};
+    const int err = pthread_getschedparam(jack_client_thread_id(mClient), &policy, &param);
+    if (err != 0)
+        fprintf(stderr, "namp-rack: cannot read the audio thread's scheduling (%s)\n",
+                strerror(err));
+    else if (policy == SCHED_FIFO || policy == SCHED_RR)
+        printf("namp-rack: audio thread is real-time (%s, priority %d)\n",
+               policy == SCHED_FIFO ? "SCHED_FIFO" : "SCHED_RR", param.sched_priority);
+    else
+        fprintf(stderr,
+                "namp-rack: WARNING - the audio thread is NOT real-time (the server %s). Expect "
+                "xruns: start jackd with -R and give your user a real-time priority limit.\n",
+                jack_is_realtime(mClient) ? "is real-time, so the client's request was refused"
+                                          : "was started without -R");
     return true;
 }
 
@@ -538,6 +562,11 @@ int JackClient::process(jack_nframes_t nframes)
     // zero, which is the worst kind of diagnostic: one that always says everything is fine.
     // Cost when nothing is armed: one thread-local increment and one decrement per JACK cycle.
     const NAMp::host::RtScope rtScope;
+    // Flush-to-zero before anything in the chain runs. The audio API does not set it on this thread
+    // and is not required to, and the amp and each VST3 node only arm it for themselves — so
+    // without this the nodes in front of the amp, and the chain's own mixing, ran in whatever mode
+    // the thread happened to be left in.
+    NAMp::host::rtSetDenormalMode();
 
     float *outL = static_cast<float *>(jack_port_get_buffer(mOutPorts[0], nframes));
     float *outR = static_cast<float *>(jack_port_get_buffer(mOutPorts[1], nframes));

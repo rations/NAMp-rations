@@ -218,10 +218,12 @@ bool ChainBuilder::remove(ChainSection section, int index)
     if (!indexOk(nodes, index))
         return false;
 
-    // Deactivated here, on this thread, but NOT destroyed: the audio thread may still be running a
-    // snapshot that references it.
-    if (nodes[static_cast<size_t>(index)].backend)
-        nodes[static_cast<size_t>(index)].backend->deactivate();
+    // NOT deactivated here, and not destroyed: the audio thread may still be running a snapshot
+    // that references it, and may be inside its process() at this very moment. Deactivating it now
+    // was setActive(false) / LV2 deactivate() on this thread concurrently with process() / run() on
+    // that one - which neither format permits - and a write to the backend's active flag that the
+    // audio thread reads unsynchronised. It stays live and keeps processing until collect() finds
+    // it unreachable, and the backend's destructor deactivates it there, before freeing it.
     bury(std::move(nodes[static_cast<size_t>(index)].backend),
          std::move(nodes[static_cast<size_t>(index)].dry));
 

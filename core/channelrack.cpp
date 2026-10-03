@@ -3,6 +3,8 @@
 
 #include "channelrack.h"
 
+#include "platform/rtdenormal.h"
+
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -414,6 +416,14 @@ void ChannelRack::feedFromRing(CrossfadeEngine &target, long long from, long lon
 // to save a thread wake that costs nothing.
 void ChannelRack::primeLoop()
 {
+    // Flush-to-zero for this thread, once: the mode is per thread, and nothing but this loop runs
+    // here, so nothing can clear it again. The audio thread runs these same models with it armed,
+    // and without this the three idle channels were primed in a different floating-point mode from
+    // the one they sound in. That is the whole reason: it is NOT a speed-up. Measured on a
+    // slimmable WaveNet capture at 128 frames, the model costs the same with and without it, on a
+    // guitar-like signal and on silence alike.
+    Rations::rtSetDenormalMode();
+
     while (mPrimeRunning.load(std::memory_order_acquire)) {
         const long long head = mWriteHead.load(std::memory_order_acquire);
 

@@ -5,6 +5,7 @@
 #include "pcmsamples.h"
 
 #include "host/hostapp.h"
+#include "host/rtdenormal.h"
 
 #include "pluginterfaces/vst/ivstcomponent.h"
 #include "pluginterfaces/vst/ivstevents.h"
@@ -934,6 +935,11 @@ void AsioBackend::bufferSwitch(long doubleBufferIndex)
     // allocation counter tell an allocation made during a load from one made while audio is
     // running.
     const NAMp::host::RtScope rtScope;
+    // Flush-to-zero before anything in the chain runs. The audio API does not set it on this thread
+    // and is not required to, and the amp and each VST3 node only arm it for themselves — so
+    // without this the nodes in front of the amp, and the chain's own mixing, ran in whatever mode
+    // the thread happened to be left in.
+    NAMp::host::rtSetDenormalMode();
 
     const int index = (doubleBufferIndex == 0) ? 0 : 1;
     void *outBuffers[2] = {mOut[0].buffers[index], mOut[1].buffers[index]};

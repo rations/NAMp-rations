@@ -5,6 +5,7 @@
 #include "lv2urid.h"
 #include "lv2world.h"
 #include "diagnostics.h"
+#include "rtdenormal.h"
 
 #include "../../deps/jalv/lv2_evbuf.h"
 
@@ -677,6 +678,12 @@ void Lv2Backend::process(const AudioBlock &block) noexcept
 {
     if (!mActive || mVoices.empty() || block.frames <= 0)
         return;
+
+    // A plug-in may clear MXCSR and not restore it, so the mode is re-armed per node rather than
+    // once per block: one misbehaving pedal must not leave the rest of the chain in subnormals. The
+    // VST3 backend does the same; this one did not, so an LV2 pedal after one that cleared the bits
+    // ran with subnormals until the next VST3 node or the amp put them back.
+    rtSetDenormalMode();
 
     const bool timing = diagArmed();
     const auto started =
