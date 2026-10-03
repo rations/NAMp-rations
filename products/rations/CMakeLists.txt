@@ -604,6 +604,7 @@ set(NAMP_PLUGIN_SOURCES
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.h
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/branchrunner.cpp
     ${NAMP_CORE_DIR}/channelrack.h
     ${NAMP_CORE_DIR}/channelrack.cpp
     ${NAMP_CORE_DIR}/irblend.h
@@ -1074,6 +1075,7 @@ add_executable(rations_switchcheck
     ${NAMP_CORE_DIR}/capturesource.cpp
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/branchrunner.cpp
     ${NAMP_CORE_DIR}/channelrack.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
     # from throwing out of the worker thread.
@@ -1105,6 +1107,7 @@ add_executable(rations_racecheck
     ${NAMP_CORE_DIR}/capturesource.cpp
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/branchrunner.cpp
     ${NAMP_CORE_DIR}/channelrack.cpp
     ${NAMP_CORE_DIR}/platform/respath.cpp
     ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
@@ -1155,6 +1158,7 @@ add_executable(rations_rtcheck
     ${NAMP_CORE_DIR}/capturesource.cpp
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/branchrunner.cpp
     ${NAMP_CORE_DIR}/channelrack.cpp
     ${NAMP_PRODUCT_DIR}/src/pedals/pedalchain.cpp
     # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path
@@ -1273,6 +1277,7 @@ if(NAMP_LINUX AND RATIONS_LV2_FOUND)
         ${NAMP_CORE_DIR}/capturesource.cpp
         ${NAMP_CORE_DIR}/modelbank.cpp
         ${NAMP_CORE_DIR}/crossfadeengine.cpp
+        ${NAMP_CORE_DIR}/branchrunner.cpp
         ${NAMP_CORE_DIR}/channelrack.cpp
         ${NAMP_CORE_DIR}/irblend.cpp
         ${NAMP_CORE_DIR}/midilearn.cpp

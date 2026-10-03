@@ -1,6 +1,7 @@
 // CrossfadeEngine implementation. See crossfadeengine.h for why position is continuous.
 
 #include "crossfadeengine.h"
+#include "branchrunner.h"
 #include "modelbank.h"
 
 #include <algorithm>
@@ -32,7 +33,8 @@ void CrossfadeEngine::prepare(int maxNativeFrames, double nativeSampleRate)
     const size_t n = static_cast<size_t>(std::max(maxNativeFrames, engine::kChunk));
     mScratchA.assign(n, 0.0);
     mScratchB.assign(n, 0.0);
-    mScratchIn.assign(n, 0.0);
+    mScratchInA.assign(n, 0.0);
+    mScratchInB.assign(n, 0.0);
     mNativeSampleRate = nativeSampleRate > 0.0 ? nativeSampleRate : kNativeSampleRate;
 
     // The gate that opens when the first entry becomes playable. Reuses the bypass ramp length —
@@ -478,26 +480,36 @@ void CrossfadeEngine::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFr
         // calibration off, where every inputGain is exactly 1.0 and this costs one comparison per
         // branch per sub-chunk and touches no memory — which is what keeps the default path, and
         // every measurement taken on it, exactly what it was.
-        auto branchInput = [&](const Branch &branch) -> NAM_SAMPLE * {
+        auto branchInput = [&](const Branch &branch, std::vector<NAM_SAMPLE> &scratch) {
             if (branch.inputGain == 1.0)
                 return inPtr;
-            NAM_SAMPLE *scaled = mScratchIn.data();
+            NAM_SAMPLE *scaled = scratch.data();
             for (int i = 0; i < n; ++i)
                 scaled[i] = chunkIn[i] * branch.inputGain;
             return scaled;
         };
+        // With both branches bound and a runner lent, branch B goes to the runner's thread while
+        // branch A runs here, and the two meet again before the mix. RT never waits for B unless
+        // the runner has already STARTED it: if B is still unclaimed when A is done, it is taken
+        // back and run here, so a late or absent runner costs exactly what serial always cost.
+        // Both paths hand B's model the same input pointer and the same output buffer, so the
+        // samples it produces cannot depend on which thread ran it.
+        NAM_SAMPLE *inB = mB.bound() ? branchInput(mB, mScratchInB) : nullptr;
+        NAM_SAMPLE *outB = mScratchB.data();
+        const bool parallel = mA.bound() && mB.bound() && mRunner && mRunner->running();
+        if (parallel)
+            mRunner->post(mB.model, inB, outB, n);
         if (mA.bound()) {
-            NAM_SAMPLE *inA = branchInput(mA);
+            NAM_SAMPLE *inA = branchInput(mA, mScratchInA);
             NAM_SAMPLE *outA = mScratchA.data();
             mA.model->process(&inA, &outA, n);
             mA.samplesLive += n;
         }
         if (mB.bound()) {
-            // Recomputed rather than reused: A and B are different captures and may state
-            // different input levels, and the buffer above holds A's scaling by now.
-            NAM_SAMPLE *inB = branchInput(mB);
-            NAM_SAMPLE *outB = mScratchB.data();
-            mB.model->process(&inB, &outB, n);
+            if (!parallel || mRunner->takeBack())
+                mB.model->process(&inB, &outB, n);
+            else
+                mRunner->waitDone();
             mB.samplesLive += n;
         }
 

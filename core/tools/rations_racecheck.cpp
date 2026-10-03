@@ -250,6 +250,16 @@ int main(int argc, char **argv)
     printf("worst lag      %lld samples (%.1f ms) of %lld before the worker is lapped (%.0f%%)\n",
            worst, 1000.0 * static_cast<double>(worst) / kNativeRate, budget,
            100.0 * static_cast<double>(worst) / static_cast<double>(budget));
+    // The branch runner is only under test if it actually ran branches. A run in which every job
+    // was taken back would be clean under ThreadSanitizer and would have tested nothing of it.
+    const unsigned long long runnerJobs = rack.branchRunner().jobsRun();
+    printf("branch runner  %llu branch calls run on it, %llu taken back by the audio thread\n",
+           runnerJobs, rack.branchRunner().jobsTakenBack());
+    if (runnerJobs == 0) {
+        fprintf(stderr, "rations_racecheck: the branch runner never ran a branch, so this run did "
+                        "not exercise it\n");
+        return 1;
+    }
     printf("\nrations_racecheck: completed - a clean run under ThreadSanitizer is the gate\n");
     return 0;
 }

@@ -604,6 +604,32 @@ int main(int argc, char **argv)
         rack.releaseBanks();
     }
 
+    // --- the rack: the dial sweeping for the whole run, serial and parallel ----------------------
+    // The branch runner may run branch B on a second thread. Whichever thread runs it, it is the
+    // same model fed the same samples into the same buffer, so the two renders must agree to the
+    // BIT, not to a tolerance: any difference at all means the threads touched each other's data
+    // or ran in different floating-point modes.
+    std::vector<double> outSerial(n, 0.0), outParallel(n, 0.0);
+    unsigned long long helperJobs = 0, takenBack = 0;
+    for (int parallel = 0; parallel < 2; ++parallel) {
+        Rations::ChannelRack rack;
+        rack.setParallelBranches(parallel != 0);
+        rack.prepare(opt.block, kNativeRate);
+        rack.setOutputMode(kOutputModeNormalized, kCalLevelDbu, opt.calibrate);
+        rack.start();
+        rack.loadChannel(kSlotA, opt.dirA, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
+        rack.loadChannel(kSlotB, opt.dirB, /*isDirectory=*/true, 1.0, Rations::engine::kChunk);
+        for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        renderRack(rack, opt, input, parallel ? outParallel : outSerial, total, total, -1, total);
+        if (parallel) {
+            helperJobs = rack.branchRunner().jobsRun();
+            takenBack = rack.branchRunner().jobsTakenBack();
+        }
+        rack.stop();
+        rack.releaseBanks();
+    }
+
     refA.close();
     refB.close();
 
@@ -735,6 +761,27 @@ int main(int argc, char **argv)
                             "lost input history that the priming needed.\n");
             ++failures;
         }
+    }
+
+    // --- 6. PARALLEL BRANCHES -------------------------------------------------------------------
+    const bool bitIdentical =
+        std::memcmp(outSerial.data(), outParallel.data(), n * sizeof(double)) == 0;
+    printf("\nparallel       dial swept for the whole run; %llu branch calls on the runner, %llu "
+           "taken back; serial and parallel %s\n",
+           helperJobs, takenBack, bitIdentical ? "bit-identical" : "DIFFER");
+    if (!bitIdentical) {
+        fprintf(stderr,
+                "FAIL: running branch B on the branch runner changed the output (max "
+                "difference %.3e). The two threads shared data they must not, or ran in "
+                "different floating-point modes.\n",
+                maxDiff(outSerial, outParallel, 0, n));
+        ++failures;
+    }
+    if (helperJobs == 0) {
+        fprintf(stderr,
+                "FAIL: the branch runner never ran a single branch, so the comparison above "
+                "compared serial with serial and proves nothing.\n");
+        ++failures;
     }
 
     if (failures > 0) {

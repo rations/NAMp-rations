@@ -40,6 +40,7 @@
 
 #pragma once
 
+#include "branchrunner.h"
 #include "crossfadeengine.h"
 #include "modelbank.h"
 #include "nativeresampler.h"
@@ -154,6 +155,21 @@ public:
     // whole receptive field, so what ships in this phase sounds exactly as it did before and the
     // only thing under test is whether the concurrency is correct.
     bool warm(Channel ch) const;
+
+    // Non-RT, before start(). Whether the sounding channel's dial crossfade may run its second
+    // branch on the branch runner's thread. On by default; the tools turn it off to have a serial
+    // reference to compare against, and RATIONS_SERIAL_BRANCHES in the environment turns it off
+    // for the whole process so the same binary can be measured both ways.
+    void setParallelBranches(bool on)
+    {
+        mParallelBranches = on;
+    }
+
+    // The branch runner's counters, for the tools. See BranchRunner::jobsRun().
+    const BranchRunner &branchRunner() const
+    {
+        return mRunner;
+    }
 
 private:
     // Which thread owns a channel's engine. Exactly one at any instant, with no object either may
@@ -292,6 +308,11 @@ private:
 
     std::thread mPrimeThread;
     std::atomic<bool> mPrimeRunning{false};
+    // The second thread the sounding channel's dial crossfade may lend branch B to. Lent only to
+    // mFrom, and only for the duration of its processNative() call, so no other engine ever sees
+    // it and the prime worker's engines stay serial.
+    BranchRunner mRunner;
+    bool mParallelBranches = true;
     std::atomic<long long> mWorstPrimeLag{0};
     // The worker's own staging. Sized in prepare() and never resized afterwards, because the
     // worker allocates nothing once it is running.
