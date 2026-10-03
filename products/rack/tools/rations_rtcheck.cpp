@@ -234,6 +234,54 @@ int main(int argc, char **argv)
         rack.releaseBanks();
     }
 
+    // --- the channel rack, the sounding dial sweeping -------------------------------------------
+    // Two branches bound on the sounding channel for the whole count, so branch B is handed to the
+    // branch runner every chunk. The allocation counters are process-wide, so this counts the
+    // runner's thread as well as the audio thread's — and it only counts anything if the runner
+    // actually ran branches, which is checked rather than assumed.
+    {
+        Rations::ChannelRack rack;
+        rack.prepare(kBlock, Rations::kNativeSampleRate);
+        rack.start();
+        rack.loadChannel(Rations::kChannelClean, dir, /*isDirectory=*/true, 1.0,
+                         Rations::engine::kChunk);
+        for (int i = 0; i < 1200 && rack.progress() < 1.0f; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (rack.progress() < 1.0f) {
+            fprintf(stderr, "rations_rtcheck: the rack's bank never finished building\n");
+            return 1;
+        }
+
+        long long block = 0;
+        auto drive = [&](int blocks) {
+            NAM_SAMPLE *ip = in.data();
+            NAM_SAMPLE *op = out.data();
+            for (int b = 0; b < blocks; ++b, ++block) {
+                rack.pollBanks();
+                rack.setPositionNorm(Rations::kChannelClean,
+                                     static_cast<double>(block % 400) / 400.0);
+                rack.requestChannel(Rations::kChannelClean);
+                rack.processNative(&ip, &op, kBlock);
+            }
+        };
+        drive(8);
+        const unsigned long long before = rack.branchRunner().jobsRun();
+
+        printf("counting       channel rack, sounding dial sweeping, branch B on the runner\n");
+        allocation_tracking::run_allocation_test_no_allocations(
+            nullptr, [&] { drive(200); }, nullptr,
+            "channel rack, sounding dial sweeping, branch B on the runner");
+
+        const unsigned long long ran = rack.branchRunner().jobsRun() - before;
+        rack.stop();
+        rack.releaseBanks();
+        if (ran == 0) {
+            fprintf(stderr, "rations_rtcheck: the branch runner ran no branches during the count, "
+                            "so it was not tested\n");
+            return 1;
+        }
+    }
+
     // --- the cabinet, both slots filled ---------------------------------------------------------
     // The IRs are built from raw audio rather than read from files: ImpulseResponse takes an IRData
     // directly, so the test needs no WAV on disk and no assumption about what is installed. Two

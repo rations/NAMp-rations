@@ -9,6 +9,7 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <thread>
 
 namespace Rations
@@ -107,6 +108,11 @@ void ChannelRack::start()
         mPrimeRunning.store(true, std::memory_order_release);
         mPrimeThread = std::thread([this] { primeLoop(); });
     }
+
+    // The branch runner. Left stopped, the engine runs both branches itself, exactly as it did
+    // before the runner existed.
+    if (mParallelBranches && !std::getenv("RATIONS_SERIAL_BRANCHES"))
+        mRunner.start();
 }
 
 void ChannelRack::stop()
@@ -116,6 +122,7 @@ void ChannelRack::stop()
     mPrimeRunning.store(false, std::memory_order_release);
     if (mPrimeThread.joinable())
         mPrimeThread.join();
+    mRunner.stop();
 
     for (int c = 0; c < kChannelCount; ++c)
         mLoader[c].stop();
@@ -847,7 +854,10 @@ void ChannelRack::processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames
     // which is what keeps the audio thread's steady-state cost at one model however many banks
     // are resident. The prime worker does feed the idle three, on its own thread, so that they
     // are already exact when the footswitch is stomped.
+    mRunner.noteAudioThread();
+    mEngine[mFrom].setRunner(&mRunner);
     mEngine[mFrom].processNative(in, out, numFrames);
+    mEngine[mFrom].setRunner(nullptr);
     applyLevel(mFrom, dst, numFrames);
 
     if (mFading) {

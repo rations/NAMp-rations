@@ -568,6 +568,7 @@ set(NAMP_PLUGIN_SOURCES
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.h
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/branchrunner.cpp
     ${NAMP_CORE_DIR}/channelrack.h
     ${NAMP_CORE_DIR}/channelrack.cpp
     ${NAMP_CORE_DIR}/irblend.h
@@ -1058,6 +1059,7 @@ if(NAMPRACK_BUILD_TOOLS)
             ${NAMP_CORE_DIR}/capturesource.cpp
             ${NAMP_CORE_DIR}/modelbank.cpp
             ${NAMP_CORE_DIR}/crossfadeengine.cpp
+            ${NAMP_CORE_DIR}/branchrunner.cpp
             ${NAMP_CORE_DIR}/channelrack.cpp
             # For utf8ToPath, which modelbank.cpp uses to keep an unrepresentable path from
             # throwing out of the worker thread.
@@ -1089,6 +1091,7 @@ if(NAMPRACK_BUILD_TOOLS)
         ${NAMP_CORE_DIR}/capturesource.cpp
         ${NAMP_CORE_DIR}/modelbank.cpp
         ${NAMP_CORE_DIR}/crossfadeengine.cpp
+        ${NAMP_CORE_DIR}/branchrunner.cpp
         ${NAMP_CORE_DIR}/channelrack.cpp
         ${NAMP_CORE_DIR}/platform/respath.cpp
         ${NAMP_CORE_DIR}/gfx/resourcestore.cpp

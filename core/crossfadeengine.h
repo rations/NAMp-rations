@@ -32,6 +32,7 @@
 namespace Rations
 {
 
+class BranchRunner;
 class ModelBank;
 
 //------------------------------------------------------------------------
@@ -70,6 +71,14 @@ public:
     // offsets exactly as it already crossfades between their two output compensations, instead of
     // stepping at the crossing.
     void setOutputMode(int mode, double calLevelDbu, bool calibrateInput);
+
+    // RT. Lend this engine a second thread for branch B, or take it away with nullptr. Only the
+    // thread that owns the engine calls this, and only the audio thread ever lends one: the prime
+    // worker's engines run serially, because nothing is waiting on them.
+    void setRunner(BranchRunner *runner)
+    {
+        mRunner = runner;
+    }
 
     // NativeBlockProcessor.
     void processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames) override;
@@ -170,6 +179,7 @@ private:
     static double primedFraction(const Branch &branch);
 
     ModelBank *mLoader = nullptr;
+    BranchRunner *mRunner = nullptr;
     Bank *mBank = nullptr;
     // Held when the retirement queue was momentarily full. Retried on the next block; the audio
     // thread never deletes it itself.
@@ -206,9 +216,11 @@ private:
 
     std::vector<NAM_SAMPLE> mScratchA;
     std::vector<NAM_SAMPLE> mScratchB;
-    // Where a branch's input is scaled when its inputGain is not 1.0. Written and consumed inside
-    // one sub-chunk, so one buffer serves both branches even when they want different gains.
-    std::vector<NAM_SAMPLE> mScratchIn;
+    // Where a branch's input is scaled when its inputGain is not 1.0. One per branch, because
+    // branch B may be running on the runner's thread while branch A is being scaled on this one;
+    // a single buffer shared between them was a data race the moment they could overlap.
+    std::vector<NAM_SAMPLE> mScratchInA;
+    std::vector<NAM_SAMPLE> mScratchInB;
 };
 
 } // namespace Rations
