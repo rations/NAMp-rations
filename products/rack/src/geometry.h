@@ -517,6 +517,10 @@ constexpr int kLedR = 9;
 constexpr int kToggleToLedGap = 6;
 constexpr int kLedCY = kToggleCY + kToggleH / 2 + kToggleToLedGap + kLedR; // 292
 constexpr int kLedCount = 4;
+// Which lamp an LED is when lit. Red is every LED the panel had before the input-level lamp, which
+// is the one green: led_green_on.png, the red art recoloured to kAccent by gui/make_assets.sh. Both
+// share led_off.png, so an unlit lamp does not say which colour it would be.
+enum class LedColor { Red, Green };
 
 // The gaps are named rather than folded into literal centres so the arithmetic
 // is checkable and so a part that grows fails the static_asserts below instead

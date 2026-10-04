@@ -1545,14 +1545,17 @@ void RationsEditorView::drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on)
 }
 
 //------------------------------------------------------------------------
-void RationsEditorView::drawLed(Canvas &c, float cx, float cy, bool lit, float r)
+void RationsEditorView::drawLed(Canvas &c, float cx, float cy, bool lit, float r,
+                                geo::LedColor color)
 {
     const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
     const int px = static_cast<int>(std::lround(2.0 * r * mScale));
-    if (cairo_surface_t *led = mImages.getScaled(lit ? "led_on" : "led_off", px, px)) {
+    const bool green = color == geo::LedColor::Green;
+    if (cairo_surface_t *led =
+            mImages.getScaled(!lit ? "led_off" : (green ? "led_green_on" : "led_on"), px, px)) {
         c.drawImage(led, dest);
     } else {
-        c.setColor(lit ? geo::kPeakColor : 0x141414);
+        c.setColor(!lit ? 0x141414 : (green ? geo::kAccent : geo::kPeakColor));
         c.fillEllipse(dest);
     }
 }

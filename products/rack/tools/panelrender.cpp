@@ -63,6 +63,7 @@ const char *const kRequiredImages[] = {
     "cabinet",
     "dial",
     "led_on",
+    "led_green_on",
     "led_off",
     "switch_up_ring",
     "switch_down_ring",
@@ -141,13 +142,14 @@ void drawToggle(Canvas &c, ImageCache &images, const geo::ToggleSpec &t, bool on
 
 //------------------------------------------------------------------------
 void drawLed(Canvas &c, ImageCache &images, float cx, float cy, bool lit,
-             float r = static_cast<float>(geo::kLedR))
+             float r = static_cast<float>(geo::kLedR), geo::LedColor color = geo::LedColor::Red)
 {
     const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
-    if (cairo_surface_t *led = images.get(lit ? "led_on" : "led_off")) {
+    const bool green = color == geo::LedColor::Green;
+    if (cairo_surface_t *led = images.get(!lit ? "led_off" : (green ? "led_green_on" : "led_on"))) {
         c.drawImage(led, dest);
     } else {
-        c.setColor(lit ? 0xE02020 : 0x141414);
+        c.setColor(!lit ? 0x141414 : (green ? geo::kAccent : 0xE02020));
         c.fillEllipse(dest);
     }
 }

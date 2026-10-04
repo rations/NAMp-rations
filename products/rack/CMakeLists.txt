@@ -603,6 +603,8 @@ set(NAMP_IMG_FILES
     img/namp-badge.png
     img/dial.png
     img/led_on.png
+    # The input-level lamp, lit. Generated from led-on-base.png by gui/make_assets.sh.
+    img/led_green_on.png
     img/led_off.png
     img/switch_up_ring.png
     img/switch_down_ring.png

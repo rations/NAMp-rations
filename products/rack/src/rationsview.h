@@ -160,7 +160,8 @@ private:
     // passes the head's own kLedR today; it was the pedalboard's smaller status LEDs that needed
     // the argument, and the channel lamps and the utility row would each need it again the moment
     // anything on this panel wants a lamp at another size.
-    void drawLed(Canvas &c, float cx, float cy, bool lit, float r = static_cast<float>(geo::kLedR));
+    void drawLed(Canvas &c, float cx, float cy, bool lit, float r = static_cast<float>(geo::kLedR),
+                 geo::LedColor color = geo::LedColor::Red);
     // The status strip under the faceplate: the four banks with the capture each dial is on.
     // Caps-dependent, so it is composed every frame; the band it sits on and its dividers are
     // static. There is no pedal row here — this product has no pedalboard.

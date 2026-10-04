@@ -161,7 +161,8 @@ private:
     // The LED's radius is a parameter because the pedalboard's are smaller than the head's: a
     // pedal's status LED is 10 units across against the amp's 18, which is the proportion the two
     // have on the real objects.
-    void drawLed(Canvas &c, float cx, float cy, bool lit, float r = static_cast<float>(geo::kLedR));
+    void drawLed(Canvas &c, float cx, float cy, bool lit, float r = static_cast<float>(geo::kLedR),
+                 geo::LedColor color = geo::LedColor::Red);
     // One pedal's face: its knobs, its mini controls, its LED, its footswitch and its name. The
     // enclosure itself is static and is composited by drawPedalboardStatic.
     void drawPedal(Canvas &c, int pedal);
