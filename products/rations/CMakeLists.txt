@@ -1091,10 +1091,15 @@ target_compile_options(rations_switchcheck PRIVATE -Wall)
 # rations_lampcheck — the offline proof of the input-level lamp: the detector's
 # window and holds, and the calibration gain it is handed, checked against the
 # level each capture states, through one engine and through the shipped
-# ChannelRack across a channel switch.
+# ChannelRack across a channel switch. Its last section drives the BUILT
+# BUNDLE, because the tap point and the output parameter are facts about the
+# plug-in a host loads, so it carries the module loader as well as the engine.
 # ---------------------------------------------------------------------------
 add_executable(rations_lampcheck
     ${NAMP_CORE_DIR}/tools/rations_lampcheck.cpp
+    ${RATIONS_MODULE_LOADER}
+    ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+    ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp
     ${NAMP_CORE_DIR}/capturesource.cpp
     ${NAMP_CORE_DIR}/modelbank.cpp
     ${NAMP_CORE_DIR}/crossfadeengine.cpp
@@ -1105,8 +1110,10 @@ add_executable(rations_lampcheck
 )
 target_include_directories(rations_lampcheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
 namp_link_whole_dsp(rations_lampcheck)
+target_link_libraries(rations_lampcheck PRIVATE sdk_hosting ${RATIONS_MODULE_LOADER_LIBS})
 target_compile_features(rations_lampcheck PRIVATE cxx_std_20)
 target_compile_options(rations_lampcheck PRIVATE -Wall)
+add_dependencies(rations_lampcheck Rations)
 
 # ---------------------------------------------------------------------------
 # rations_racecheck - the ThreadSanitizer gate for the prime worker.

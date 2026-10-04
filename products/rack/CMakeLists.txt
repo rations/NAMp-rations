@@ -1072,6 +1072,16 @@ if(NAMPRACK_BUILD_TOOLS)
         target_compile_features(${_tool} PRIVATE cxx_std_20)
         target_compile_options(${_tool} PRIVATE -Wall)
     endforeach()
+    # The lamp's proof ends by driving the BUILT BUNDLE, because the tap point and the output
+    # parameter are facts about the plug-in a host loads, so it carries the module loader too.
+    target_sources(rations_lampcheck PRIVATE
+        ${NAMPRACK_MODULE_LOADER}
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+        ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp)
+    target_link_libraries(rations_lampcheck PRIVATE sdk_hosting)
+    if(NAMPRACK_BUILD_VST3_BUNDLE)
+        add_dependencies(rations_lampcheck NampRackAmp)
+    endif()
 
 
     # The allocation gate. Deliberately links NO graphics at all — it is measuring allocations on

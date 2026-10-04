@@ -183,6 +183,10 @@ tresult PLUGIN_API RationsController::initialize(FUnknown *context)
     parameters.addParameter(STR16("Active Channel"), nullptr, 0, 0.0,
                             Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
                             kActiveChannelId);
+    // The input-level lamp, 0 or 1, hence one step.
+    parameters.addParameter(STR16("Input Level OK"), nullptr, 1, 0.0,
+                            Vst::ParameterInfo::kIsReadOnly | Vst::ParameterInfo::kIsHidden,
+                            kInputLevelOkId);
 
     // --- the unit, and the ORDER rule that comes with it ---------------------------------
     //

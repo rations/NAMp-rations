@@ -235,6 +235,8 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     // section has to be said again here rather than assumed to have survived.
     publishOutputMode();
 
+    mInputLamp.reset(mSampleRate);
+
     // Bypass ramp length in samples, at least one sample so the step is finite.
     const double rampSamples = std::max(1.0, engine::kBypassRampMs * 0.001 * mSampleRate);
     mBypassStep = 1.0 / rampSamples;
@@ -282,6 +284,8 @@ tresult PLUGIN_API RationsProcessor::setActive(TBool state)
         mToneStack.Process(warm, 1, static_cast<int>(n));
         // Come up dry and ramp in, rather than opening on a half-built bank.
         mBypassMix = 1.0;
+        // And with the lamp dark, rather than holding a light from before the deactivation.
+        mInputLamp.reset(mSampleRate);
     } else {
         // Anything the audio thread retired is unreachable from it now; free it here.
         for (int slot = 0; slot < kIrSlotCount; ++slot)
@@ -670,6 +674,7 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
             // light over a channel that is not there yet. The parameter is the request; this is
             // the answer.
             normFromChannel(mRack.soundingChannel()),
+            mInputLamp.lit() ? 1.0 : 0.0,
         };
         static_assert(sizeof(feedback) / sizeof(feedback[0]) == kFeedbackCount,
                       "one feedback value per entry of kFeedbackIds");
@@ -697,6 +702,19 @@ void RationsProcessor::applyDsp(const float *in, float *outL, float *outR, int32
         mDryBuf[static_cast<size_t>(i)] = x;
         mWorkBufInput[static_cast<size_t>(i)] = x * inputGain;
     }
+
+    // 1a. The input-level lamp, fed the model input as the Input knob leaves it, times the
+    // sounding capture's own input calibration: exactly the signal that capture's model will be
+    // fed. Anything a host runs before this plug-in, a hosted boost in the rack's own pre chain
+    // included, is already in it, and so is counted. Rations taps at the same point, which in that
+    // product is before its built-in PRE pedals, so its Boost is not counted; that is where each
+    // product's pedals sit, not a choice made here.
+    //
+    // At 48 kHz this is the native-rate signal sample for sample, because the resampler is a
+    // call-through. At any other rate it is the host-rate signal, and its peak can differ from the
+    // native-rate one by whatever inter-sample peak the resampler reconstructs - not measured, and
+    // the reason the lamp reads here anyway: the native-rate signal exists only inside the rack.
+    mInputLamp.process(mWorkBufInput.data(), numSamples, mRack.soundingInputGain());
 
     // 2. Noise-gate trigger (level detection; returns the gated signal).
     DSP_SAMPLE **processingInput = &mWorkPtrInput;

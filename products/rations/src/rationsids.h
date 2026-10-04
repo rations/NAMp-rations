@@ -208,6 +208,10 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     // capture is still being built is held rather than faked, and the panel LEDs read this so a
     // lamp never lights over a channel the audio has not reached yet.
     kActiveChannelId = 204,
+    // The input-level lamp beside the Input knob: 1 when the peak the sounding capture hears is in
+    // the window inputlevellamp.h describes, else 0. Like kActiveChannelId it is an answer from the
+    // audio thread, and the editor only draws it.
+    kInputLevelOkId = 205,
 
     // The MIDI-mapped parameter block: 1000 + cc for CC 0 .. 127, and 1128 for Program Change.
     // These exist because a footswitch's messages do not arrive as MIDI at all - they arrive as
@@ -230,9 +234,10 @@ enum ParamIDs : Steinberg::Vst::ParamID {
 // Every hidden read-only parameter the processor writes on every block, in one list. The
 // processor writes them by walking this list, the LV2 wrapper makes one control output port per
 // entry, in this order, and each standalone reserves its output queue against the count. One list
-// is what makes adding a sixth value move all three together.
+// is what makes adding a value move all three together.
 inline constexpr Steinberg::Vst::ParamID kFeedbackIds[] = {
-    kInputMeterId, kOutputMeterId, kBankProgressId, kActiveIndexId, kActiveChannelId,
+    kInputMeterId,  kOutputMeterId,   kBankProgressId,
+    kActiveIndexId, kActiveChannelId, kInputLevelOkId,
 };
 inline constexpr int kFeedbackCount =
     static_cast<int>(sizeof(kFeedbackIds) / sizeof(kFeedbackIds[0]));

@@ -219,6 +219,36 @@ inline constexpr std::uint32_t kPortFeedbackFirst = kPortControlFirst + kControl
 inline constexpr std::uint32_t kPortLatency = kPortFeedbackFirst + kFeedbackCount;
 inline constexpr std::uint32_t kPortCount = kPortLatency + 1;
 
+// What each feedback port is called, in kFeedbackIds' order. Kept here, beside the port layout, so
+// that the TTL generator writes from it and rations_lv2check reads the installed bundle back
+// against the same table.
+//
+// `optional` marks a port added after the bundle first shipped, and it is not a free choice. LV2's
+// versioning rules (the lv2:minorVersion documentation in the LV2 core specification) let a new
+// port be added under the same plug-in URI only "if and only if" it is lv2:connectionOptional and
+// the minor version is incremented, and they require that increment too whenever an existing
+// port's index moves, as the latency port's does each time this block grows. A host may then leave
+// such a port unconnected (lv2.h: connect_port() must be called before run() "unless that port is
+// lv2:connectionOptional"); the wrapper writes a feedback port only when it was connected, so
+// that costs nothing. The minor-version half of the rule is met by the release that first carries
+// the port, not by this table: kLv2MinorVersion above follows the project's VERSION file.
+struct FeedbackPort {
+    const char *symbol;
+    const char *name;
+    bool optional;
+};
+inline constexpr FeedbackPort kFeedbackPorts[] = {
+    {"input_meter", "Input Meter", false},
+    {"output_meter", "Output Meter", false},
+    {"bank_progress", "Bank Progress", false},
+    {"active_capture", "Active Capture", false},
+    {"active_channel", "Active Channel", false},
+    // Added in the release after 0.6.0, for the input-level lamp.
+    {"input_level_ok", "Input Level OK", true},
+};
+static_assert(sizeof(kFeedbackPorts) / sizeof(kFeedbackPorts[0]) == kFeedbackCount,
+              "one LV2 symbol and name per entry of kFeedbackIds");
+
 // The ParamID a control-input port carries. Out of range returns 0, which is not a ParamID this
 // plug-in uses.
 inline constexpr Steinberg::Vst::ParamID controlPortParam(int index)

@@ -14,11 +14,32 @@
 //      that does, the dominant capture's and never a blend of two while the dial crossfades
 //      between captures stating different levels, and 0 when nothing is bound. Then once more
 //      through the shipped ChannelRack, across a channel switch.
+//   3. THE PLUG-IN. The built bundle, loaded the way a host loads it and played exact sine tones,
+//      with the lamp read back out of the output parameter queue, kInputLevelOkId, which is all
+//      the editor ever sees of it. This is where the tap point is proved: that the Input knob is
+//      in the peak, that Calibrate moves the edge by exactly what the capture states and a capture
+//      stating nothing moves it by nothing, that an instance with nothing loaded stays dark, and,
+//      in rations, that the PRE Boost is not counted.
 //
-// Usage: rations_lampcheck --bank <dir> --plain <file.nam> [--block N]
+// Usage: rations_lampcheck --bank <dir> --plain <file.nam> --bundle <amp.vst3> [--block N]
 //   --bank   a folder holding two neighbouring captures (in the bank's own order) that state
 //            different input_level_dbu
 //   --plain  one capture that states no input_level_dbu
+//   --bundle the built amp bundle
+
+// The SDK's headers come first, and that is not taste. pluginterfaces/base/fstrdefs.h defines
+// stricmp and strnicmp unconditionally, while the WDL headers under the resampler define them only
+// if nobody has; the other order is a macro-redefinition warning in every translation unit that
+// has both.
+#include "public.sdk/source/vst/hosting/hostclasses.h"
+#include "public.sdk/source/vst/hosting/module.h"
+#include "public.sdk/source/vst/hosting/parameterchanges.h"
+#include "public.sdk/source/vst/hosting/plugprovider.h"
+#include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/ivstcomponent.h"
+
+#include "rationsids.h"
+#include "toolcaptures.h"
 
 #include "capturesource.h"
 #include "channelrack.h"
@@ -26,6 +47,14 @@
 #include "engineconfig.h"
 #include "inputlevellamp.h"
 #include "modelbank.h"
+
+// The rations product has a built-in PRE pedalboard and the rack does not; the Boost check in the
+// plug-in section runs only where there is a Boost to check.
+#if __has_include("pedals/boost.h")
+#define RATIONS_LAMPCHECK_HAS_BOOST 1
+#else
+#define RATIONS_LAMPCHECK_HAS_BOOST 0
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -77,6 +106,7 @@ bool closeTo(double a, double b)
 struct Options {
     std::string bank;
     std::string plain;
+    std::string bundle;
     int block = 128;
 };
 
@@ -88,12 +118,15 @@ bool parseArgs(int argc, char **argv, Options &opt)
             opt.bank = argv[++i];
         else if (a == "--plain" && i + 1 < argc)
             opt.plain = argv[++i];
+        else if (a == "--bundle" && i + 1 < argc)
+            opt.bundle = argv[++i];
         else if (a == "--block" && i + 1 < argc)
             opt.block = std::atoi(argv[++i]);
         else
             return false;
     }
-    return !opt.bank.empty() && !opt.plain.empty() && opt.block > 0 && opt.block <= 4096;
+    return !opt.bank.empty() && !opt.plain.empty() && !opt.bundle.empty() && opt.block > 0 &&
+           opt.block <= 4096;
 }
 
 // --- 1. the detector --------------------------------------------------------------------------
@@ -468,22 +501,326 @@ void checkRack(const Options &opt)
     rack.releaseBanks();
 }
 
+// --- 4. the plug-in
+// -------------------------------------------------------------------------------
+
+using namespace Steinberg;
+
+constexpr double kHostRate = 48000.0;
+
+double gainNorm(double db)
+{
+    return (db - Rations::ranges::kGainMin) /
+           (Rations::ranges::kGainMax - Rations::ranges::kGainMin);
+}
+
+double calNorm(double dbu)
+{
+    return (dbu - Rations::ranges::kCalMin) / (Rations::ranges::kCalMax - Rations::ranges::kCalMin);
+}
+
+// Everything a run pins, every block, so no test inherits a setting from the one before.
+struct Controls {
+    double inputDb = 0.0;
+    bool calibrate = false;
+    double calDbu = kCalLevelDbu;
+    Rations::Channel channel = Rations::kChannelClean;
+    bool boostSilent = false; // rations only: the PRE Boost engaged with its Level at zero
+};
+
+// What one run saw, block by block.
+struct Run {
+    std::vector<double> lamp; // kInputLevelOkId; -1 for a block that did not write it
+    double progress = 0.0;    // kBankProgressId at the last block
+    double channel = -1.0;    // kActiveChannelId at the last block
+    double outPeak = 0.0;     // the plug-in's own output, for the Boost check
+};
+
+struct Plugin {
+    Vst::IAudioProcessor *processor = nullptr;
+    int block = 128;
+
+    // `seconds` of a sine at `peakDb` dBFS whose crest lands on a sample, so the block peak IS the
+    // amplitude; or silence when peakDb is NaN.
+    Run play(double seconds, double peakDb, const Controls &c)
+    {
+        const int n = block;
+        const double amp = std::isnan(peakDb) ? 0.0 : dbToGain(peakDb);
+        std::vector<float> in(static_cast<size_t>(n)), outL(in.size()), outR(in.size());
+        float *inPtrs[1] = {in.data()};
+        float *outPtrs[2] = {outL.data(), outR.data()};
+        Vst::AudioBusBuffers inBus = {};
+        inBus.numChannels = 1;
+        inBus.channelBuffers32 = inPtrs;
+        Vst::AudioBusBuffers outBus = {};
+        outBus.numChannels = 2;
+        outBus.channelBuffers32 = outPtrs;
+        Vst::ParameterChanges changes;
+        changes.setMaxParameters(16);
+        Vst::ParameterChanges outChanges;
+        outChanges.setMaxParameters(64);
+        Vst::ProcessData data = {};
+        data.processMode = Vst::kOffline;
+        data.symbolicSampleSize = Vst::kSample32;
+        data.numInputs = 1;
+        data.numOutputs = 1;
+        data.inputs = &inBus;
+        data.outputs = &outBus;
+        data.numSamples = n;
+        data.inputParameterChanges = &changes;
+        data.outputParameterChanges = &outChanges;
+
+        Run r;
+        const int blocks = static_cast<int>(seconds * kHostRate) / n;
+        for (int b = 0; b < blocks; ++b) {
+            for (int i = 0; i < n; ++i)
+                in[static_cast<size_t>(i)] =
+                    static_cast<float>(amp * std::sin(2.0 * M_PI * (b * n + i) / 32.0));
+            changes.clearQueue();
+            auto set = [&](Vst::ParamID id, double v) {
+                int32 qi = 0, pi = 0;
+                if (auto *q = changes.addParameterData(id, qi))
+                    q->addPoint(0, v, pi);
+            };
+            set(Rations::kBypassId, 0.0);
+            set(Rations::kNoiseGateOnId, 0.0);
+            set(Rations::kInputGainId, gainNorm(c.inputDb));
+            set(Rations::kCalibrateInputId, c.calibrate ? 1.0 : 0.0);
+            set(Rations::kInputCalLevelId, calNorm(c.calDbu));
+            set(Rations::kChannelId, Rations::normFromChannel(c.channel));
+            set(Rations::kCleanGainId, 0.0); // the bank's first capture
+#if RATIONS_LAMPCHECK_HAS_BOOST
+            set(Rations::kBoostOnId, c.boostSilent ? 1.0 : 0.0);
+            set(Rations::kBoostLevelId, c.boostSilent ? 0.0 : 0.5);
+#endif
+            outChanges.clearQueue();
+            processor->process(data);
+
+            double lamp = -1.0;
+            for (int32 q = 0; q < outChanges.getParameterCount(); ++q) {
+                Vst::IParamValueQueue *queue = outChanges.getParameterData(q);
+                int32 offset = 0;
+                Vst::ParamValue v = 0.0;
+                if (!queue || queue->getPointCount() <= 0 ||
+                    queue->getPoint(queue->getPointCount() - 1, offset, v) != kResultTrue)
+                    continue;
+                if (queue->getParameterId() == Rations::kInputLevelOkId)
+                    lamp = v;
+                else if (queue->getParameterId() == Rations::kBankProgressId)
+                    r.progress = v;
+                else if (queue->getParameterId() == Rations::kActiveChannelId)
+                    r.channel = v;
+            }
+            r.lamp.push_back(lamp);
+            for (int i = 0; i < n; ++i)
+                r.outPeak = std::max(r.outPeak, std::fabs(static_cast<double>(outL[i])));
+        }
+        return r;
+    }
+
+    Run silence(double seconds, const Controls &c)
+    {
+        return play(seconds, std::numeric_limits<double>::quiet_NaN(), c);
+    }
+
+    // Enough silence for any hold, lit or hot, to have run out.
+    void clear(const Controls &c)
+    {
+        silence(InputLevelLamp::kHoldSeconds + 0.2, c);
+    }
+
+    // Until the plug-in says it is sounding `c.channel`.
+    bool reach(const Controls &c)
+    {
+        for (int i = 0; i < 200; ++i)
+            if (silence(0.05, c).channel == Rations::normFromChannel(c.channel))
+                return true;
+        return false;
+    }
+};
+
+bool allEqual(const Run &r, double v)
+{
+    return !r.lamp.empty() &&
+           std::all_of(r.lamp.begin(), r.lamp.end(), [v](double x) { return x == v; });
+}
+
+// What the rule says for a peak at the model input, for the cases below that are worked out from
+// a capture's stated level rather than written in.
+bool windowSays(double peakDb)
+{
+    return peakDb > InputLevelLamp::kLitAboveDb && peakDb <= InputLevelLamp::kLitAtMostDb;
+}
+
+// How long, in seconds, a run held its first value before changing to `to`.
+double secondsUntil(const Run &r, double to, int block)
+{
+    const auto at = std::find(r.lamp.begin(), r.lamp.end(), to) - r.lamp.begin();
+    return static_cast<double>(at) * block / kHostRate;
+}
+
+void checkPlugin(const Options &opt)
+{
+    printf("--- 4. the plug-in ---\n");
+    Vst::HostApplication host;
+    Vst::PluginContextFactory::instance().setPluginContext(&host);
+    std::string error;
+    auto module = VST3::Hosting::Module::create(opt.bundle, error);
+    if (!check(module != nullptr, "the bundle loads", error.c_str()))
+        return;
+    auto factory = module->getFactory();
+    IPtr<Vst::PlugProvider> provider;
+    for (auto &classInfo : factory.classInfos()) {
+        if (classInfo.category() != kVstAudioEffectClass)
+            continue;
+        provider = owned(new Vst::PlugProvider(factory, classInfo, true));
+        if (provider->initialize())
+            break;
+        provider = nullptr;
+    }
+    if (!check(provider != nullptr, "the bundle offers an audio effect"))
+        return;
+    Vst::IComponent *component = provider->getComponent();
+    FUnknownPtr<Vst::IAudioProcessor> processor(component);
+    if (!check(component && processor, "the plug-in provides a processor"))
+        return;
+
+    Vst::ProcessSetup setup = {};
+    setup.processMode = Vst::kOffline;
+    setup.symbolicSampleSize = Vst::kSample32;
+    setup.maxSamplesPerBlock = opt.block;
+    setup.sampleRate = kHostRate;
+    if (!check(processor->setupProcessing(setup) == kResultOk, "the process setup is accepted"))
+        return;
+    component->setActive(true);
+    processor->setProcessing(true);
+
+    Plugin plug;
+    plug.processor = processor;
+    plug.block = opt.block;
+    const Controls c;
+    const double tick = 2.0 * opt.block / kHostRate; // how closely a hold can be timed here
+    char detail[128];
+
+    check(allEqual(plug.play(0.5, -3.0, c), 0.0),
+          "nothing loaded: a -3 dBFS input leaves the lamp dark, because no capture hears it");
+
+    const std::vector<double> levels = statedLevels(opt.bank);
+    const bool bankStates = !levels.empty() && !std::isnan(levels[0]);
+    double progress = 0.0;
+    if (check(bankStates, "the bank's first capture states an input level")) {
+        RationsTools::sendCaptureLoad(host, component, Rations::kChannelClean, opt.bank, true);
+        RationsTools::sendCaptureLoad(host, component, Rations::kChannelCrunch, opt.plain, false);
+        for (int i = 0; i < 1200 && progress < 1.0; ++i) {
+            progress = plug.silence(0.05, c).progress;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+    if (bankStates && check(progress >= 1.0, "both channels build inside the plug-in")) {
+        // The window, through the whole processor.
+        plug.clear(c);
+        check(allEqual(plug.play(0.5, -7.0, c), 0.0), "-7 dBFS: dark for the whole run");
+        check(allEqual(plug.play(0.3, -5.0, c), 1.0), "-5 dBFS: lit from the first block");
+        check(allEqual(plug.play(0.3, 1.0, c), 0.0), "+1 dBFS: dark from the first block");
+
+        Run r = plug.play(1.5, -5.0, c);
+        double held = secondsUntil(r, 1.0, opt.block);
+        snprintf(detail, sizeof detail, "dark for %.3f s of -5 dBFS after the hot peak", held);
+        check(std::fabs(held - InputLevelLamp::kHoldSeconds) <= tick && r.lamp.back() == 1.0,
+              "back in the window after a hot peak: dark for the hold, then lit", detail);
+        printf("        measured: %s\n", detail);
+        r = plug.silence(1.5, c);
+        held = secondsUntil(r, 0.0, opt.block);
+        snprintf(detail, sizeof detail, "lit for %.3f s of silence", held);
+        check(std::fabs(held - InputLevelLamp::kHoldSeconds) <= tick && r.lamp.back() == 0.0,
+              "silence after playing: lit for the hold, then dark", detail);
+        printf("        measured: %s\n", detail);
+
+        // The Input knob is in the peak.
+        plug.clear(c);
+        check(allEqual(plug.play(0.3, -11.0, c), 0.0),
+              "-11 dBFS with the Input knob at 0 dB: dark");
+        Controls up = c;
+        up.inputDb = 6.0;
+        check(allEqual(plug.play(0.3, -11.0, up), 1.0),
+              "... and with the Input knob at +6 dB: lit, so the knob is in the peak it reads");
+
+        // Calibrate moves the edge by exactly what the capture states.
+        const double shift = kCalLevelDbu - static_cast<double>(static_cast<float>(levels[0]));
+        printf("        the first capture states %.3f dBu, so Calibrate scales the model input "
+               "by %+.3f dB\n",
+               levels[0], shift);
+        Controls cal = c;
+        cal.calibrate = true;
+        plug.clear(cal);
+        check(allEqual(plug.play(0.3, -3.0 - shift, cal), 1.0),
+              "Calibrate on: an input that the shift brings to -3 dBFS is lit");
+        plug.clear(cal);
+        check(allEqual(plug.play(0.3, -3.0, cal), windowSays(-3.0 + shift) ? 1.0 : 0.0),
+              "Calibrate on: a -3 dBFS input is judged at -3 dBFS plus the shift");
+        Controls calMoved = cal;
+        calMoved.calDbu = kCalLevelDbu + 4.0;
+        plug.clear(calMoved);
+        check(allEqual(plug.play(0.3, -3.0 - shift - 4.0, calMoved), 1.0),
+              "moving the interface level 4 dB moves the edge 4 dB with it");
+
+        // A capture stating no level is not shifted.
+        Controls plain = cal;
+        plain.channel = Rations::kChannelCrunch;
+        if (check(plug.reach(plain), "the switch to the plain capture arrives")) {
+            plug.clear(plain);
+            check(allEqual(plug.play(0.3, -3.0, plain), 1.0),
+                  "Calibrate on, a capture stating no level: -3 dBFS is lit, unshifted");
+            plug.clear(plain);
+            const double moved = -3.0 - shift; // lit under the bank's shift
+            check(allEqual(plug.play(0.3, moved, plain), windowSays(moved) ? 1.0 : 0.0),
+                  "... and the bank's shift is not applied to it");
+        }
+
+#if RATIONS_LAMPCHECK_HAS_BOOST
+        // The PRE Boost is not counted. With its Level at zero the model hears silence, and the
+        // lamp, which reads ahead of the pedals, still says what the guitar is doing.
+        if (check(plug.reach(c), "back on the bank")) {
+            Controls boost = c;
+            boost.boostSilent = true;
+            plug.clear(c);
+            const Run open = plug.play(0.5, -3.0, c);
+            plug.clear(boost);
+            const Run boosted = plug.play(0.5, -3.0, boost);
+            snprintf(detail, sizeof detail, "output peak %.5f with the Boost at zero, %.5f without",
+                     boosted.outPeak, open.outPeak);
+            check(boosted.outPeak < 0.01 * open.outPeak, "the Boost at Level 0 silences the amp",
+                  detail);
+            check(allEqual(boosted, 1.0),
+                  "... and the lamp stays lit at -3 dBFS: it reads ahead of the PRE pedals");
+        }
+#endif
+    }
+
+    processor->setProcessing(false);
+    component->setActive(false);
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     Options opt;
     if (!parseArgs(argc, argv, opt)) {
-        fprintf(stderr, "usage: rations_lampcheck --bank <dir> --plain <file.nam> [--block N]\n"
-                        "  --bank   a folder with two neighbouring captures stating different\n"
-                        "           input_level_dbu\n"
-                        "  --plain  a capture stating no input_level_dbu\n");
+        fprintf(stderr,
+                "usage: rations_lampcheck --bank <dir> --plain <file.nam> --bundle <amp.vst3>\n"
+                "                         [--block N]\n"
+                "  --bank   a folder with two neighbouring captures stating different\n"
+                "           input_level_dbu\n"
+                "  --plain  a capture stating no input_level_dbu\n"
+                "  --bundle the built amp bundle\n");
         return 2;
     }
 
     checkDetector(opt.block);
     checkEngine(opt);
     checkRack(opt);
+    checkPlugin(opt);
 
     printf("\n%s\n", gFailures == 0 ? "rations_lampcheck: PASSED" : "rations_lampcheck: FAILED");
     return gFailures == 0 ? 0 : 1;
