@@ -1088,6 +1088,27 @@ target_compile_features(rations_switchcheck PRIVATE cxx_std_20)
 target_compile_options(rations_switchcheck PRIVATE -Wall)
 
 # ---------------------------------------------------------------------------
+# rations_lampcheck — the offline proof of the input-level lamp: the detector's
+# window and holds, and the calibration gain it is handed, checked against the
+# level each capture states, through one engine and through the shipped
+# ChannelRack across a channel switch.
+# ---------------------------------------------------------------------------
+add_executable(rations_lampcheck
+    ${NAMP_CORE_DIR}/tools/rations_lampcheck.cpp
+    ${NAMP_CORE_DIR}/capturesource.cpp
+    ${NAMP_CORE_DIR}/modelbank.cpp
+    ${NAMP_CORE_DIR}/crossfadeengine.cpp
+    ${NAMP_CORE_DIR}/branchrunner.cpp
+    ${NAMP_CORE_DIR}/channelrack.cpp
+    ${NAMP_CORE_DIR}/platform/respath.cpp
+    ${NAMP_CORE_DIR}/gfx/resourcestore.cpp
+)
+target_include_directories(rations_lampcheck PRIVATE ${NAMP_PRODUCT_DIR}/src ${NAMP_CORE_INCLUDES} ${VST3_SDK_DIR})
+namp_link_whole_dsp(rations_lampcheck)
+target_compile_features(rations_lampcheck PRIVATE cxx_std_20)
+target_compile_options(rations_lampcheck PRIVATE -Wall)
+
+# ---------------------------------------------------------------------------
 # rations_racecheck - the ThreadSanitizer gate for the prime worker.
 #
 # Background priming is the first genuine concurrent access to the DSP objects

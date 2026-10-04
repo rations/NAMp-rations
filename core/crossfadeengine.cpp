@@ -230,9 +230,14 @@ bool CrossfadeEngine::hasInputLevel() const
     return mA.bound() && mBank && mBank->entries[mA.index].hasInputLevel;
 }
 
-double CrossfadeEngine::inputLevelDbu() const
+// B is the upper neighbour of A and carries weight mPos - A, so it dominates once mPos rounds to
+// it. std::round takes the half away from zero, as activeIndexNorm() does, so the two always agree
+// on which capture is sounding.
+double CrossfadeEngine::dominantInputGain() const
 {
-    return hasInputLevel() ? mBank->entries[mA.index].inputLevelDbu : 0.0;
+    if (mB.bound() && std::round(mPos) >= static_cast<double>(mB.index))
+        return mB.inputGain;
+    return mA.bound() ? mA.inputGain : 0.0;
 }
 
 //------------------------------------------------------------------------

@@ -1051,8 +1051,9 @@ if(NAMPRACK_BUILD_TOOLS)
     target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
     target_compile_options(rations_fadecheck PRIVATE -Wall)
 
-    # The channel-switch proof and the race gate: the same engine sources, driven differently.
-    foreach(_tool rations_switchcheck rations_racecheck)
+    # The channel-switch proof, the race gate and the input-level lamp's proof: the same engine
+    # sources, driven differently.
+    foreach(_tool rations_switchcheck rations_racecheck rations_lampcheck)
         namp_source(_tool_src tools/${_tool}.cpp)
         add_executable(${_tool}
             ${_tool_src}

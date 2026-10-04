@@ -355,6 +355,11 @@ double ChannelRack::activeIndexNorm() const
     return mEngine[mFading ? mTo : mFrom].activeIndexNorm();
 }
 
+double ChannelRack::soundingInputGain() const
+{
+    return mEngine[soundingChannel()].dominantInputGain();
+}
+
 bool ChannelRack::playable() const
 {
     return mEngine[mFrom].playable();

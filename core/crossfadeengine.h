@@ -83,9 +83,13 @@ public:
     // NativeBlockProcessor.
     void processNative(NAM_SAMPLE **in, NAM_SAMPLE **out, int numFrames) override;
 
-    // RT, for the processor's input-calibration stage and its editor feedback.
+    // Whether the capture on branch A states the level it was made at. For the tools' reports.
     bool hasInputLevel() const;
-    double inputLevelDbu() const;
+    // RT. The input calibration gain of the branch carrying the larger weight: A, or B once the
+    // dial crossfade has reached the halfway point, the same choice activeIndexNorm() makes. What
+    // the input-level lamp multiplies the model input by. 0 when no model is bound, so an empty
+    // or still-building channel never lights it.
+    double dominantInputGain() const;
     int entryCount() const
     {
         return mBank ? mBank->count : 0;
