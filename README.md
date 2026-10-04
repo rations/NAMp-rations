@@ -90,6 +90,15 @@ pedalboard of five pedals — Boost and Chorus before the amp, Flanger, Delay an
 A settings page behind the "Captures, MIDI, Settings" button, top right, carrying the capture
 loaders, a trim per channel, the MIDI-learn rows and the output section.
 
+**A green lamp beside the Input dial** tells you whether the capture is hearing a level like the
+one it was trained on. It lights while your playing peaks between −6 and 0 dBFS at the capture's
+input, which is the top of NAM's training signal: turn Input up until your hardest playing lights it.
+If it goes dark when you dig in, you are past full scale and the capture is hearing more than it
+was ever shown. It reads after the Input dial and, with *Calibrate Input* on, after the
+calibration, so it works the same for captures that state their recording level and captures that
+do not. The Boost and Chorus pedals do not count towards it; in NAMp Rack, plug-ins you host before
+the amp do.
+
 **You load your own captures.** Nothing ships in the bundle. Point each loader at a folder of
 `.nam` files or at a single one; the folder's name becomes the channel's name, and you can type
 over it.
