@@ -204,16 +204,11 @@ inline constexpr Steinberg::Vst::ParamID kFixedControlIds[] = {
 inline constexpr int kFixedControlCount =
     static_cast<int>(sizeof(kFixedControlIds) / sizeof(kFixedControlIds[0]));
 
-// The feedback block, as control OUTPUT ports. Every one of these needs a ui:portNotification
-// block in the TTL or it never reaches the UI: the UI extension says a host calls port_event()
-// for control port INPUTS by default, so without those declarations the meters, the bank progress
-// bar and the capture readout are permanently dead while the plug-in builds, loads and otherwise
-// works perfectly.
-inline constexpr Steinberg::Vst::ParamID kFeedbackIds[] = {
-    kInputMeterId, kOutputMeterId, kBankProgressId, kActiveIndexId, kActiveChannelId,
-};
-inline constexpr int kFeedbackCount =
-    static_cast<int>(sizeof(kFeedbackIds) / sizeof(kFeedbackIds[0]));
+// The feedback block, as control OUTPUT ports: one per entry of kFeedbackIds (rationsids.h), in
+// that list's order. Every one of these needs a ui:portNotification block in the TTL or it never
+// reaches the UI: the UI extension says a host calls port_event() for control port INPUTS by
+// default, so without those declarations the meters, the bank progress bar and the capture readout
+// are permanently dead while the plug-in builds, loads and otherwise works perfectly.
 
 inline constexpr int kControlInCount = kFixedControlCount + kPedalParamCount;
 

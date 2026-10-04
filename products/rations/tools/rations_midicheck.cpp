@@ -193,6 +193,10 @@ struct Block {
     // general form, because what a footswitch row echoes is a value it COMPUTED and the whole
     // point is to check which one.
     std::vector<std::pair<Vst::ParamID, double>> echoes;
+    // How much of the output queue the block used: queues claimed, and the most points any one of
+    // them held. A host has to reserve both before the audio thread runs.
+    int outQueues = 0;
+    int maxPoints = 0;
 };
 
 // What the plug-in said it did to one parameter this block, if it said anything.
@@ -262,6 +266,12 @@ struct Harness {
             outParamChanges.clearQueue();
             b.echoes.clear();
             processor->process(data);
+
+            b.outQueues = outParamChanges.getParameterCount();
+            b.maxPoints = 0;
+            for (int32 i = 0; i < b.outQueues; ++i)
+                if (Vst::IParamValueQueue *q = outParamChanges.getParameterData(i))
+                    b.maxPoints = std::max(b.maxPoints, static_cast<int>(q->getPointCount()));
 
             // The plug-in reporting a parameter it changed by itself, and the hidden read-only
             // parameter that says which channel is actually SOUNDING - the request and the answer,
@@ -1429,6 +1439,57 @@ int main(int argc, char **argv)
             check(echoOf(press, kPedalOnId[kPedalFlanger], v),
                   "... and the rows this build does have still work");
         }
+    }
+
+    // --- 8. every row in one block -------------------------------------------------------------
+    //
+    // A host reserves its output queue before the audio thread runs, because addParameterData
+    // grows it with `new` once the reserve is used up (public.sdk/source/vst/hosting/
+    // parameterchanges.cpp). What this plug-in can put in it in one block is every feedback value
+    // plus an echo of every parameter its learn table moved, so that is measured here: every row
+    // taught its own CC, and every CC pressed at once. The standalones assert the same bound at
+    // compile time; this is the half that says the plug-in really stays inside it. They used to
+    // reserve 8, which a footswitch burst outgrew.
+    printf("every row in one block\n");
+    {
+        constexpr int kFirstCc = 90;
+        for (int row = 0; row < kMidiLearnRowCount; ++row) {
+            sendMessage(hostContext, component, kMsgMidiLearn, &row);
+            Block teach;
+            teach.params.push_back(cc(kFirstCc + row, 127));
+            rig.run(teach);
+        }
+        Block release;
+        for (int row = 0; row < kMidiLearnRowCount; ++row)
+            release.params.push_back(cc(kFirstCc + row, 0));
+        rig.run(release);
+        Block all;
+        for (int row = 0; row < kMidiLearnRowCount; ++row)
+            all.params.push_back(cc(kFirstCc + row, 127));
+        rig.run(all);
+
+        // Rows can share a target - every channel row sets kChannelId - and the queue holds one
+        // entry per DISTINCT id, so that is what the count is compared with.
+        std::vector<Vst::ParamID> targets;
+        for (const MidiLearnTarget &row : kMidiLearnRows)
+            if (std::find(targets.begin(), targets.end(), row.param) == targets.end())
+                targets.push_back(row.param);
+        bool everyTarget = true;
+        for (Vst::ParamID id : targets) {
+            double v = 0.0;
+            everyTarget = everyTarget && echoOf(all, id, v);
+        }
+        check(everyTarget, "every row fires in the same block");
+
+        char detail[96];
+        snprintf(detail, sizeof detail, "%d queues for %d feedback values and %d moved parameters",
+                 all.outQueues, kFeedbackCount, static_cast<int>(targets.size()));
+        check(all.outQueues == kFeedbackCount + static_cast<int>(targets.size()),
+              "one output queue per feedback value and per moved parameter", detail);
+        check(all.outQueues <= kFeedbackCount + kMidiLearnRowCount,
+              "... which is inside the reserve the standalones make", detail);
+        check(all.maxPoints == 1, "every output queue holds a single point");
+        printf("        measured: %s\n", detail);
     }
 
     processor->setProcessing(false);

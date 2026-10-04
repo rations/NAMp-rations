@@ -227,6 +227,16 @@ enum ParamIDs : Steinberg::Vst::ParamID {
     kMidiProgramChangeId = 1128,
 };
 
+// Every hidden read-only parameter the processor writes on every block, in one list. The
+// processor writes them by walking this list, the LV2 wrapper makes one control output port per
+// entry, in this order, and each standalone reserves its output queue against the count. One list
+// is what makes adding a sixth value move all three together.
+inline constexpr Steinberg::Vst::ParamID kFeedbackIds[] = {
+    kInputMeterId, kOutputMeterId, kBankProgressId, kActiveIndexId, kActiveChannelId,
+};
+inline constexpr int kFeedbackCount =
+    static_cast<int>(sizeof(kFeedbackIds) / sizeof(kFeedbackIds[0]));
+
 // Units. The root unit is everything a player touches; the MIDI unit holds the 129 parameters
 // that exist only so that CC and Program Change have somewhere to arrive, and exists so a host
 // can fold them away instead of listing them beside Bass and Treble.

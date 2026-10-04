@@ -52,7 +52,7 @@ namespace
 // The queue and event sizes, and the reasoning behind each, are the JACK backend's; they are the
 // same numbers because they answer the same question about the same plug-in.
 constexpr int32 kMaxInputParameters = 64;
-constexpr int32 kMaxOutputParameters = 8;
+constexpr int32 kMaxOutputParameters = AudioBackend::kFeedbackSlots;
 constexpr int32 kMaxEvents = 256;
 
 constexpr int kMidiStatusMask = 0xf0;

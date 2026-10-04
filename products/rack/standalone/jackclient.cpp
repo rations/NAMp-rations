@@ -3,6 +3,9 @@
 
 #include "jackclient.h"
 
+#include "midilearn.h"
+#include "rationsids.h"
+
 #include "host/hostapp.h"
 #include "host/rtdenormal.h"
 
@@ -32,9 +35,18 @@ namespace
 // its vector when addParameterData runs out of reserved queues
 // (public.sdk/source/vst/hosting/parameterchanges.cpp), which on this thread is a malloc. One
 // block can carry every knob the editor touched plus a burst of CC, so the input side is sized for
-// far more than a person can produce and the output side for the five the plug-in publishes.
+// far more than a person can produce.
+//
+// The output side is sized to the feedback slots it drains into, because that is the most distinct
+// parameters this host can do anything with. It used to be 8, sized for "the five the plug-in
+// publishes", which forgot the MIDI echoes: the amp also reports every parameter its learn table
+// moved, one queue per distinct id. Each queue holds one point however often it is written,
+// because addPoint replaces a point at the same sample offset and the amp writes them all at 0.
 constexpr int32 kMaxInputParameters = 64;
-constexpr int32 kMaxOutputParameters = 8;
+constexpr int32 kMaxOutputParameters = AudioBackend::kFeedbackSlots;
+// The amp's own worst case: every feedback value plus an echo from every learn row at once.
+static_assert(kFeedbackCount + kMidiLearnRowCount <= kMaxOutputParameters,
+              "a block in which every MIDI row fires would outgrow the output queue");
 
 // One block of MIDI. A footswitch sends one message; this is sized for a controller sweeping a
 // whole bank of them, and anything past it is dropped rather than grown into.

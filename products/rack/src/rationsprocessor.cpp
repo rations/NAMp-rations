@@ -657,15 +657,24 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
             inPeak = std::max(inPeak, std::fabs(static_cast<double>(in[i])));
             outPeak = std::max(outPeak, std::fabs(static_cast<double>(outL[i])));
         }
-        writeOutputPoint(data.outputParameterChanges, kInputMeterId, peakToMeterNorm(inPeak), 0);
-        writeOutputPoint(data.outputParameterChanges, kOutputMeterId, peakToMeterNorm(outPeak), 0);
-        writeOutputPoint(data.outputParameterChanges, kBankProgressId, mRack.progress(), 0);
-        writeOutputPoint(data.outputParameterChanges, kActiveIndexId, mRack.activeIndexNorm(), 0);
-        // Which channel is SOUNDING, which is not always the one kChannelId asks for: a switch
-        // whose target capture is still being built is held, and the editor's LED must not light
-        // over a channel that is not there yet. The parameter is the request; this is the answer.
-        writeOutputPoint(data.outputParameterChanges, kActiveChannelId,
-                         normFromChannel(mRack.soundingChannel()), 0);
+        // In kFeedbackIds' order, and written by walking that list, because the list is also what
+        // every standalone reserves its output queue against. The size check makes a value added
+        // here without its id, or an id without its value, a compile error.
+        const double feedback[] = {
+            peakToMeterNorm(inPeak),
+            peakToMeterNorm(outPeak),
+            mRack.progress(),
+            mRack.activeIndexNorm(),
+            // Which channel is SOUNDING, which is not always the one kChannelId asks for: a switch
+            // whose target capture is still being built is held, and the editor's LED must not
+            // light over a channel that is not there yet. The parameter is the request; this is
+            // the answer.
+            normFromChannel(mRack.soundingChannel()),
+        };
+        static_assert(sizeof(feedback) / sizeof(feedback[0]) == kFeedbackCount,
+                      "one feedback value per entry of kFeedbackIds");
+        for (int f = 0; f < kFeedbackCount; ++f)
+            writeOutputPoint(data.outputParameterChanges, kFeedbackIds[f], feedback[f], 0);
     }
 
     return kResultOk;
