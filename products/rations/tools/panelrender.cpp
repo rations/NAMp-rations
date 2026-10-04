@@ -430,6 +430,9 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
                          static_cast<float>(geo::kIoKnobs[i].cx),
                          static_cast<float>(geo::kIoValueBaselineY));
     }
+    // The input-level lamp, lit: the demo input meter above it is playing.
+    drawLed(c, images, static_cast<float>(geo::kInputLampCX), static_cast<float>(geo::kInputLampCY),
+            true, static_cast<float>(geo::kInputLampR), geo::LedColor::Green);
 
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);

@@ -421,6 +421,8 @@ private:
     int mEntryCount[kChannelCount] = {0, 0, 0, 0};
     std::vector<std::string> mCaptureNames[kChannelCount];
     int mActiveIndex = -1; // capture sounding in the ACTIVE channel; -1 = not reported yet
+    // The input-level lamp as last reported, kept only to tell a change from a repeat.
+    bool mInputLampLit = false;
     float mBankProgress = 0.0f;
 
     // Capability polling. The capture names are produced by the processor's worker threads, so

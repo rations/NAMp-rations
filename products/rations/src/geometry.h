@@ -867,6 +867,30 @@ constexpr KnobSpec kIoKnobs[2] = {
     {kOutputGainId, kSideCXR, kIoKnobCY, kIoKnobR, "Output", "dB"},
 };
 
+// The input-level lamp: green when the peak the sounding capture hears is in the
+// window inputlevellamp.h describes. To the right of the Input dial, at the
+// dial's own height, which is the author's choice between two rendered
+// candidates (the other was beside the Input legend, where Amped puts its LED):
+// the lamp sits next to the control that fixes it. The utility row's size, not
+// the channel lamps': it is an indicator, set while a rig is put together, like
+// BYPASS. Nothing else is in this band between the dial and the first channel.
+constexpr int kInputLampR = kTopLedR;
+constexpr int kInputLampGap = 8; // from the dial's edge to the lamp's
+constexpr int kInputLampCX = kSideCXL + kIoKnobR + kInputLampGap + kInputLampR; // 134
+constexpr int kInputLampCY = kIoKnobCY;                                         // 275
+static_assert(kInputLampCX - kInputLampR > kSideCXL + kIoKnobR,
+              "the input-level lamp is drawn on the Input dial");
+static_assert(kInputLampCY - kInputLampR > kIoLabelBaselineY + kIoLabelSize / 4,
+              "the input-level lamp has come up onto the Input legend");
+static_assert(kInputLampCY + kInputLampR < kIoValueBaselineY - kKnobValueSize,
+              "the input-level lamp has come down onto the Input value row");
+static_assert(kInputLampCX + kInputLampR + 8 < kToggles[0].cx - kToggleHitW / 2,
+              "the input-level lamp has reached the first channel switch's click area");
+static_assert(kInputLampCX + kInputLampR + 8 < kKnobs[0].cx - kKnobR,
+              "the input-level lamp has reached the first channel dial");
+static_assert(kInputLampCY + kInputLampR < kFaceB - 8,
+              "the input-level lamp has reached the faceplate's edge");
+
 // --- Page buttons, bottom-centre-right of the faceplate ---------------------
 // ButtonSpec and kPageButtonH are declared further up, with the settings button:
 // that one is drawn in the same style but has to be declared before the Slim

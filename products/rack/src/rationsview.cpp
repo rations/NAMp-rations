@@ -641,6 +641,11 @@ void RationsEditorView::composeHead(Canvas &c)
     drawMeter(c, geo::kOutputMeter, mOutDisp, mOutPeak);
     for (int i = 0; i < 2; ++i)
         drawKnob(c, geo::kIoKnobs[i], true);
+    // Read from the parameter rather than from the cached copy ParamChanged keeps, so a page that
+    // is drawn before the first report still shows the controller's value.
+    drawLed(c, static_cast<float>(geo::kInputLampCX), static_cast<float>(geo::kInputLampCY),
+            paramValue(kInputLevelOkId) > 0.5, static_cast<float>(geo::kInputLampR),
+            geo::LedColor::Green);
 
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);
@@ -2835,6 +2840,16 @@ void RationsEditorView::ParamChanged(Vst::ParamID id, Vst::ParamValue value)
                 mCapsPollTicks = 0;
             }
             invalidate();
+            return;
+        }
+        case kInputLevelOkId: {
+            // Reported every block, and it changes a few times a phrase at most, so it repaints
+            // only when it changes rather than on every report the way the default below does.
+            const bool lit = value > 0.5;
+            if (lit != mInputLampLit) {
+                mInputLampLit = lit;
+                invalidate();
+            }
             return;
         }
         case kActiveIndexId: {
