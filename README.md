@@ -99,6 +99,12 @@ calibration, so it works the same for captures that state their recording level 
 do not. The Boost and Chorus pedals do not count towards it; in NAMp Rack, plug-ins you host before
 the amp do.
 
+**The knobs.** Drag up or down to turn one, or use the mouse wheel. Hold **Shift** or **Ctrl**
+(**Command** on a Mac) for ten times finer control. **Double-click** a knob or a channel trim to
+return it to its default. Click the number under Threshold, Bass, Middle, Treble, Input or Output
+to **type a value**: Enter or Tab sets it, Escape leaves it alone, and either `2.5` or `2,5` works.
+The same applies to the amp in NAMp Rack.
+
 **You load your own captures.** Nothing ships in the bundle. Point each loader at a folder of
 `.nam` files or at a single one; the folder's name becomes the channel's name, and you can type
 over it.
