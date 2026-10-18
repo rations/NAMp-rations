@@ -64,6 +64,17 @@ static void wheel(int clicks)
     }
 }
 
+// Hold or release Shift around a pointer gesture: the editor's fine control. Shift rather than
+// Ctrl because both are fine control on this platform and Shift is the one a window manager is
+// least likely to have bound to a pointer gesture of its own.
+static void holdShift(int down)
+{
+    const KeyCode code = XKeysymToKeycode(display, XK_Shift_L);
+    XTestFakeKeyEvent(display, code, down ? True : False, CurrentTime);
+    XFlush(display);
+    usleep(30000);
+}
+
 // Resize the host's TOP-LEVEL window, which is what makes the host call the plug-in's
 // checkSizeConstraint and then onSize. Resizing the plug-in's own child window directly would
 // change some pixels and tell the plug-in nothing, so the editor would never re-lay-out and the
@@ -149,10 +160,12 @@ static void typeString(const char *text)
 int main(int argc, char **argv)
 {
     if (argc < 4) {
-        fprintf(stderr, "usage: editor-drive <click|drag> <window-id> <x> <y> [dx dy]\n"
-                        "       editor-drive wheel <window-id> <x> <y> <clicks>\n"
-                        "       editor-drive resize <window-id> <w> <h>\n"
-                        "       editor-drive <type|key> <window-id> <text|keysym-name>\n");
+        fprintf(stderr,
+                "usage: editor-drive <click|dclick|drag|sdrag> <window-id> <x> <y> [dx dy]\n"
+                "       editor-drive <wheel|swheel> <window-id> <x> <y> <clicks>\n"
+                "       editor-drive focus <window-id> -\n"
+                "       editor-drive resize <window-id> <w> <h>\n"
+                "       editor-drive <type|key|press> <window-id> <text|keysym-name>\n");
         return 2;
     }
     display = XOpenDisplay(NULL);
@@ -162,8 +175,32 @@ int main(int argc, char **argv)
     }
     window = (Window)strtoul(argv[2], NULL, 0);
 
+    // Who holds the X input focus right now. A field takes it while open and must hand it back
+    // when it closes, and the only way to see that it did is to ask the server.
+    if (strcmp(argv[1], "focus") == 0) {
+        Window focus = None;
+        int revert = 0;
+        XGetInputFocus(display, &focus, &revert);
+        printf("0x%lx\n", (unsigned long)focus);
+        XCloseDisplay(display);
+        return 0;
+    }
     if (strcmp(argv[1], "type") == 0) {
         typeString(argv[3]);
+        XCloseDisplay(display);
+        return 0;
+    }
+    // `press` is `key` WITHOUT the focus move: it leaves the input focus wherever the editor put
+    // it, which is the only way to test that the editor hands the focus back by itself. `key`
+    // moves it first because it predates the editor taking the focus on its own.
+    if (strcmp(argv[1], "press") == 0) {
+        const KeySym sym = XStringToKeysym(argv[3]);
+        if (sym == NoSymbol) {
+            fprintf(stderr, "editor-drive: unknown keysym '%s'\n", argv[3]);
+            XCloseDisplay(display);
+            return 2;
+        }
+        pressKeysym(sym);
         XCloseDisplay(display);
         return 0;
     }
@@ -201,15 +238,20 @@ int main(int argc, char **argv)
     const int x = atoi(argv[3]);
     const int y = atoi(argv[4]);
 
-    if (strcmp(argv[1], "wheel") == 0) {
+    if (strcmp(argv[1], "wheel") == 0 || strcmp(argv[1], "swheel") == 0) {
         if (argc < 6) {
             fprintf(stderr, "editor-drive: wheel needs a click count\n");
             XCloseDisplay(display);
             return 2;
         }
+        const int shifted = argv[1][0] == 's';
         moveTo(x, y);
         usleep(50000);
+        if (shifted)
+            holdShift(1);
         wheel(atoi(argv[5]));
+        if (shifted)
+            holdShift(0);
         XCloseDisplay(display);
         return 0;
     }
@@ -221,19 +263,34 @@ int main(int argc, char **argv)
         moveTo(x, y);
         button(1, 1);
         button(0, 1);
-    } else if (strcmp(argv[1], "drag") == 0 && argc >= 7) {
+    } else if (strcmp(argv[1], "dclick") == 0) {
+        // Two presses 80 ms apart at one spot: well inside the editor's 400 ms, and slow enough
+        // that each is a separate event on the server's clock rather than one burst.
+        moveTo(x, y);
+        button(1, 1);
+        button(0, 1);
+        usleep(80000);
+        button(1, 1);
+        button(0, 1);
+    } else if ((strcmp(argv[1], "drag") == 0 || strcmp(argv[1], "sdrag") == 0) && argc >= 7) {
         // Twenty steps with a real pause between them, because the editor coalesces motion and
         // repaints on a timer: a drag delivered as one jump exercises the hit test and nothing
         // else, and would not show a readout that is only drawn while the button is held.
+        // sdrag holds Shift for the whole gesture, which is the editor's fine control.
         const int dx = atoi(argv[5]);
         const int dy = atoi(argv[6]);
+        const int shifted = argv[1][0] == 's';
         moveTo(x, y);
+        if (shifted)
+            holdShift(1);
         button(1, 1);
         for (int i = 1; i <= 20; ++i) {
             moveTo(x + dx * i / 20, y + dy * i / 20);
             usleep(60000);
         }
         button(0, 1);
+        if (shifted)
+            holdShift(0);
     } else {
         fprintf(stderr, "editor-drive: unknown command '%s'\n", argv[1]);
         XCloseDisplay(display);
