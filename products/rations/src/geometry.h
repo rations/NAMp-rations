@@ -931,6 +931,63 @@ constexpr ButtonSpec kPageButtons[kPageButtonCount] = {
 static_assert(kLedCY == kPageButtonY + kPageButtonH / 2,
               "the channel lamps no longer line up with the page buttons");
 
+// --- Typed values: the six readouts are also where a value is entered --------
+// Clicking a dial's value row opens a text field over it, seeded with the
+// value and selected, which is the parent plug-in's IVKnobControl built with
+// valueIsEditable and is the second way to reach those six controls, never the
+// only one (whether keys reach an embedded view at all is the host's business).
+// The four channel dials have no value row — their band is the bat switches' —
+// and what they would offer to type is a capture name, so they are not here.
+//
+// The box is the CLICK target and the field drawn while editing, one rect for
+// both so the two cannot drift. It hangs off the readout's own baseline, 13
+// above and 6 below, so the text does not move as the field opens; 64 wide is
+// room for "-100.0" at kKnobValueSize with the caret, and stops 30 units short
+// of the next column at the 94-unit pitch.
+struct ValueField {
+    Steinberg::Vst::ParamID id;
+    int x, y, w, h;
+};
+constexpr int kValueFieldW = 64;
+constexpr int kValueFieldAscent = 13;
+constexpr int kValueFieldDescent = 6;
+constexpr ValueField valueField(const KnobSpec &k, int baselineY)
+{
+    return {k.id, k.cx - kValueFieldW / 2, baselineY - kValueFieldAscent, kValueFieldW,
+            kValueFieldAscent + kValueFieldDescent};
+}
+constexpr int kValueFieldCount = 6;
+constexpr ValueField kValueFields[kValueFieldCount] = {
+    valueField(kKnobs[4], kKnobCY + kKnobValueDY), // Threshold
+    valueField(kKnobs[5], kKnobCY + kKnobValueDY), // Bass
+    valueField(kKnobs[6], kKnobCY + kKnobValueDY), // Middle
+    valueField(kKnobs[7], kKnobCY + kKnobValueDY), // Treble
+    valueField(kIoKnobs[0], kIoValueBaselineY),    // Input
+    valueField(kIoKnobs[1], kIoValueBaselineY),    // Output
+};
+// A dial is hit-tested as its own circle, so a box that reached up into one
+// would take a drag's first click away from it.
+static_assert(kValueFields[0].y > kKnobCY + kKnobR, "a value field reaches up into its dial");
+static_assert(kValueFields[4].y > kIoKnobCY + kIoKnobR,
+              "the Input/Output value fields reach up into their dials");
+static_assert(kValueFieldW < kKnobPitch, "two neighbouring value fields touch");
+// Below the four head readouts is the page button row, which spans Bass to
+// Treble; the Threshold field's left-hand neighbour is the last channel
+// switch's (generous) click target.
+static_assert(kValueFields[0].y + kValueFields[0].h < kPageButtonY,
+              "the value fields have come down onto the page buttons");
+static_assert(kValueFields[0].x > kToggles[kToggleCount - 1].cx + kToggleHitW / 2,
+              "the Threshold value field reaches into the last channel switch's click area");
+// The Input field's neighbour is the first channel switch; the Output field's
+// is the end of the page button row, which shares its band.
+static_assert(kValueFields[4].x + kValueFieldW < kToggles[0].cx - kToggleHitW / 2,
+              "the Input value field reaches into the first channel switch's click area");
+static_assert(kValueFields[5].x >
+                  kPageButtons[kPageButtonCount - 1].x + kPageButtons[kPageButtonCount - 1].w,
+              "the Output value field reaches into the page buttons");
+static_assert(kValueFields[4].y + kValueFields[4].h < kFaceB,
+              "the Input/Output value fields have reached the faceplate's edge");
+
 // --- The status strip, under the faceplate ----------------------------------
 // WHAT THE STRIP IS FOR: the two things a player could not see without leaving
 // this page. Which capture each of the four banks is on, and which pedals are

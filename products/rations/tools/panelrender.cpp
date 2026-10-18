@@ -1026,6 +1026,22 @@ bool auditHitBoxes()
                          static_cast<float>(geo::kStripColX0 + (i + 1) * geo::kStripColW),
                          static_cast<float>(geo::kStripCaptureY + geo::kStripCaptureDescent)});
 
+    // The six dial readouts are click targets too, since clicking one opens it for typing. They
+    // share the bottom band with the switches and the page buttons, and the Input field sits
+    // beside the input meter's column, so they are exactly what this audit is for. Labelled by
+    // the dial's own legend, from the same table the editor hit-tests.
+    for (const geo::ValueField &f : geo::kValueFields) {
+        const char *what = "value field";
+        for (const geo::KnobSpec &k : geo::kKnobs)
+            if (k.id == f.id)
+                what = k.label;
+        for (const geo::KnobSpec &k : geo::kIoKnobs)
+            if (k.id == f.id)
+                what = k.label;
+        boxes.push_back({what, static_cast<float>(f.x), static_cast<float>(f.y),
+                         static_cast<float>(f.x + f.w), static_cast<float>(f.y + f.h)});
+    }
+
     // The two level meters are not clickable, but a control drawn on top of one is a control
     // drawn on top of the thing it is supposed to sit beside, so they are in the check as
     // obstacles.

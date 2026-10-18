@@ -1,9 +1,10 @@
 // The platform seam: which IPlugView base the editor is built on.
 //
 // RationsEditorView is written against ONE protected hook set — onAttached,
-// onRemoved, onDraw(cairo_t*), onMouseDown/Up/Move/Leave/Wheel, onTick,
-// isResizable, constrainSize, onResized, invalidate, isWindowOpen — and knows
-// nothing about the windowing system underneath it. Each platform base
+// onRemoved, onDraw(cairo_t*), onMouseDown/Up/Move/Leave/Wheel (carrying a
+// PointerMod mask from platform/pointermods.h and, on a press, a double-click
+// flag), onTick, isResizable, constrainSize, onResized, invalidate,
+// isWindowOpen — and knows nothing about the windowing system underneath it. Each platform base
 // implements that hook set over its own native window, and this header picks
 // one. Nothing else in the plug-in includes a platform header.
 //

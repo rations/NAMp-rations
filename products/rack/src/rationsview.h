@@ -88,10 +88,10 @@ protected:
     void onAttached() SMTG_OVERRIDE;
     void onRemoved() SMTG_OVERRIDE;
     void onDraw(cairo_t *cr) SMTG_OVERRIDE;
-    void onMouseDown(int x, int y, int button) SMTG_OVERRIDE;
+    void onMouseDown(int x, int y, int button, unsigned mods, bool doubleClick) SMTG_OVERRIDE;
     void onMouseUp(int x, int y, int button) SMTG_OVERRIDE;
-    void onMouseMove(int x, int y) SMTG_OVERRIDE;
-    void onMouseWheel(int x, int y, int delta) SMTG_OVERRIDE;
+    void onMouseMove(int x, int y, unsigned mods) SMTG_OVERRIDE;
+    void onMouseWheel(int x, int y, int delta, unsigned mods) SMTG_OVERRIDE;
     void onTick() SMTG_OVERRIDE;
 
     bool isResizable() const SMTG_OVERRIDE
@@ -176,9 +176,14 @@ private:
     void editParam(Steinberg::Vst::ParamID id, double norm);
     void nudgeParam(Steinberg::Vst::ParamID id, double delta);
     void startDrag(Steinberg::Vst::ParamID id, float x, float y, bool horizontal = false);
-    bool handleHeadClick(float x, float y);
-    bool handleCabinetClick(float x, float y);
-    bool handleSettingsClick(float x, float y);
+    // Return a control to its parameter's own default — the double-click on a dial or a slider,
+    // as on the original plug-in (IControl::OnMouseDblClick -> SetValueToDefault).
+    void resetParam(Steinberg::Vst::ParamID id);
+    // `doubleClick` reaches only the handlers that have something a double-click resets; every
+    // switch ignores it, so two clicks on a toggle are still two toggles.
+    bool handleHeadClick(float x, float y, bool doubleClick);
+    bool handleCabinetClick(float x, float y, bool doubleClick);
+    bool handleSettingsClick(float x, float y, bool doubleClick);
     bool handleIrRowClick(int slot, float x, float y);
     // Load the previous (-1) or next (+1) IR in slot `slot`'s own folder.
     void stepIr(int slot, int dir);
@@ -192,8 +197,9 @@ private:
     void boundCaptureBrowser();
 
     // --- typed input -------------------------------------------------------------------------
-    // Two fields take typed input — a channel's name and the interface calibration level — and
-    // they share one field, one caret, one focus grab and one key handler. That is not tidiness:
+    // Three kinds of field take typed input — a channel's name, the interface calibration level and
+    // the six dial readouts — and they share one field, one caret, one focus grab and one key
+    // handler. That is not tidiness:
     // the field holds the host's keyboard focus while it is open (RULES §4), so two independent
     // fields would be two things that can each forget to hand it back, and a state where both
     // believe they have it. One field cannot be open twice.
@@ -205,8 +211,9 @@ private:
         NoField,
         ChannelName, // mEditChannel says which of the four
         CalLevel,    // the interface level in dBu, kInputCalLevelId
+        KnobValue,   // one of the six dial readouts, geo::kValueFields; mEditParam says which
     };
-    void beginTextEdit(TextField field, int channel = -1);
+    void beginTextEdit(TextField field, int channel = -1, Steinberg::Vst::ParamID param = 0);
     // Ends the edit by KEEPING what was typed, which is what every exit but Escape does. A value
     // that will not parse is the one case that cannot be kept, and leaves its parameter alone.
     void commitTextEdit();
@@ -226,6 +233,10 @@ private:
     {
         return mEditField == TextField::ChannelName && mEditChannel == channel;
     }
+    bool editingValue(Steinberg::Vst::ParamID id) const
+    {
+        return mEditField == TextField::KnobValue && mEditParam == id;
+    }
     // Returns true when the key was consumed, which is exactly what onKeyDown must report to the
     // host: a wrong "yes" swallows the host's own key commands, and the transport is one of them.
     bool handleTextKey(Steinberg::char16 key, Steinberg::int16 keyCode, Steinberg::int16 modifiers);
@@ -239,6 +250,13 @@ private:
     // for editing ("12.0") — the unit is not typed, so it is not offered to be deleted.
     std::string calValueText() const;
     std::string calEditSeed() const;
+    // A dial readout's field: where it is, and its seed — the readout without its unit.
+    static Rect valueFieldRect(const geo::ValueField &f);
+    std::string valueEditSeed(Steinberg::Vst::ParamID id) const;
+    // The text of an open field, with its selection or its caret, inside `box` on `baseline`. The
+    // font is set by the caller; the dBu box and the dial readouts both draw through this, so the
+    // two fields look and behave as one.
+    void drawFieldText(Canvas &c, const Rect &box, float baseline);
     void pollCaps();
     // Ask the processor what the learn table now says, while a row is waiting to be taught.
     void pollMidi();
@@ -256,7 +274,7 @@ private:
     std::string knobReadout(const geo::KnobSpec &k) const;
     // One wheel click. On a channel dial that is one capture, so the wheel lands on real captures
     // rather than between them.
-    double wheelStep(Steinberg::Vst::ParamID id) const;
+    double wheelStep(Steinberg::Vst::ParamID id, bool fine) const;
     // Index of the capture sounding in channel `c`, falling back to that dial's position before
     // the processor has reported one.
     int captureIndex(int c) const;
@@ -379,7 +397,8 @@ private:
     // The one open text field, if any, and what is in it. The text is held here rather than
     // pushed at its destination on every keystroke so that Escape has something to go back to.
     TextField mEditField = TextField::NoField;
-    int mEditChannel = -1; // meaningful only for TextField::ChannelName
+    int mEditChannel = -1;                  // meaningful only for TextField::ChannelName
+    Steinberg::Vst::ParamID mEditParam = 0; // meaningful only for TextField::KnobValue
     std::string mEditText;
     size_t mEditCaret = 0;
     // The whole seed is selected until the first key lands on it. One flag rather than an anchor
@@ -394,12 +413,17 @@ private:
     // rebuilds every capture in every bank — see kMsgSetSlim.
     bool mSlimOpen = false;
     bool mSlimDirty = false;
-    float mDragStartY = 0;
+    // The drag ACCUMULATES from the last pointer position rather than measuring from the first,
+    // which is what lets Shift or Ctrl change its gearing mid-drag without the control jumping.
+    // mDragNorm is the editor's own running value and is never re-read from the parameter during
+    // the drag, so a host that echoes a write back late cannot pull it backwards. mDragStartNorm is
+    // kept only to tell a drag that moved from a click that did not.
+    float mDragLastX = 0, mDragLastY = 0;
+    double mDragNorm = 0;
     double mDragStartNorm = 0;
     // A knob is dragged vertically and a level slider horizontally, so the drag carries which
     // axis it is on rather than the hit test having to leave a knob's coordinate in a Y field.
     bool mDragHorizontal = false;
-    float mDragStartX = 0;
     float mMouseX = 0, mMouseY = 0;
 
     // The coordinate frame the press that is being held was hit-tested in. The setup page hands

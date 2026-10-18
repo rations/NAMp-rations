@@ -24,21 +24,21 @@ protected:
     {
         (void)cr;
     }
-    void onMouseDown(int x, int y, int button) SMTG_OVERRIDE
+    void onMouseDown(int x, int y, int button, unsigned mods, bool doubleClick) SMTG_OVERRIDE
     {
-        (void)x, (void)y, (void)button;
+        (void)x, (void)y, (void)button, (void)mods, (void)doubleClick;
     }
     void onMouseUp(int x, int y, int button) SMTG_OVERRIDE
     {
         (void)x, (void)y, (void)button;
     }
-    void onMouseMove(int x, int y) SMTG_OVERRIDE
+    void onMouseMove(int x, int y, unsigned mods) SMTG_OVERRIDE
     {
-        (void)x, (void)y;
+        (void)x, (void)y, (void)mods;
     }
-    void onMouseWheel(int x, int y, int delta) SMTG_OVERRIDE
+    void onMouseWheel(int x, int y, int delta, unsigned mods) SMTG_OVERRIDE
     {
-        (void)x, (void)y, (void)delta;
+        (void)x, (void)y, (void)delta, (void)mods;
     }
     void onTick() SMTG_OVERRIDE
     {

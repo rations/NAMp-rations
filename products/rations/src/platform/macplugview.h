@@ -88,6 +88,7 @@
 
 #include "public.sdk/source/vst/vsteditcontroller.h"
 #include "pluginterfaces/gui/iplugview.h"
+#include "platform/pointermods.h"
 
 #include <cairo/cairo.h>
 
@@ -126,11 +127,11 @@ public:
     // the subclass contract and nothing in src/ outside this pair calls them.
     void macTick();
     void macDraw(void *cgContext);
-    void macMouseDown(double x, double y, int button);
+    void macMouseDown(double x, double y, int button, unsigned mods, bool doubleClick);
     void macMouseUp(double x, double y, int button);
-    void macMouseMove(double x, double y);
+    void macMouseMove(double x, double y, unsigned mods);
     void macMouseLeave();
-    void macMouseWheel(double x, double y, double deltaY);
+    void macMouseWheel(double x, double y, double deltaY, unsigned mods);
     bool macKeyDown(char16 key, int16 keyCode, int16 modifiers);
     void macFocusLost();
     void macFrameChanged(double pointW, double pointH);
@@ -155,25 +156,28 @@ protected:
     // Buttons are X button numbers (1 = left, 2 = middle, 3 = right) on this
     // platform too: the numbering is part of the hook contract that all three
     // platform bases honour, so the editor above never has to know which one it
-    // is running on. Wheel steps arrive as delta +1 (up) or -1 (down).
-    virtual void onMouseDown(int x, int y, int button)
+    // is running on. Wheel steps arrive as delta +1 (up) or -1 (down). `mods` is
+    // a PointerMod mask (platform/pointermods.h), and `doubleClick` is set on the
+    // second press of a pair — AppKit counts clicks itself, so this one is read
+    // from the event rather than derived as the other two derive theirs.
+    virtual void onMouseDown(int x, int y, int button, unsigned mods, bool doubleClick)
     {
-        (void)x, (void)y, (void)button;
+        (void)x, (void)y, (void)button, (void)mods, (void)doubleClick;
     }
     virtual void onMouseUp(int x, int y, int button)
     {
         (void)x, (void)y, (void)button;
     }
-    virtual void onMouseMove(int x, int y)
+    virtual void onMouseMove(int x, int y, unsigned mods)
     {
-        (void)x, (void)y;
+        (void)x, (void)y, (void)mods;
     }
     virtual void onMouseLeave()
     {
     }
-    virtual void onMouseWheel(int x, int y, int delta)
+    virtual void onMouseWheel(int x, int y, int delta, unsigned mods)
     {
-        (void)x, (void)y, (void)delta;
+        (void)x, (void)y, (void)delta, (void)mods;
     }
 
     // Keyboard, taken from the PLATFORM view rather than handed in by the host. Return true if

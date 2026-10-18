@@ -61,6 +61,7 @@
 #include "public.sdk/source/vst/vsteditcontroller.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
+#include "platform/pointermods.h"
 
 #include <cairo/cairo.h>
 
@@ -127,25 +128,28 @@ protected:
     // 3 = right) on this platform too: the numbering is part of the hook
     // contract that both platform bases honour, so the editor above never has
     // to know which one it is running on. Wheel steps arrive as delta +1 (up)
-    // or -1 (down).
-    virtual void onMouseDown(int x, int y, int button)
+    // or -1 (down). `mods` is a PointerMod mask (platform/pointermods.h), and
+    // `doubleClick` is set on the second press of a pair — derived here rather
+    // than taken from WM_LBUTTONDBLCLK, for the reason given at
+    // windowClassName() in the .cpp.
+    virtual void onMouseDown(int x, int y, int button, unsigned mods, bool doubleClick)
     {
-        (void)x, (void)y, (void)button;
+        (void)x, (void)y, (void)button, (void)mods, (void)doubleClick;
     }
     virtual void onMouseUp(int x, int y, int button)
     {
         (void)x, (void)y, (void)button;
     }
-    virtual void onMouseMove(int x, int y)
+    virtual void onMouseMove(int x, int y, unsigned mods)
     {
-        (void)x, (void)y;
+        (void)x, (void)y, (void)mods;
     }
     virtual void onMouseLeave()
     {
     }
-    virtual void onMouseWheel(int x, int y, int delta)
+    virtual void onMouseWheel(int x, int y, int delta, unsigned mods)
     {
-        (void)x, (void)y, (void)delta;
+        (void)x, (void)y, (void)delta, (void)mods;
     }
 
     // Keyboard, taken from the PLATFORM window rather than handed in by the host. Return true
@@ -235,7 +239,7 @@ private:
     void redraw();
     void blit(HDC dc);
 
-    void pressButton(int button, int x, int y);
+    void pressButton(int button, int x, int y, WPARAM keys);
     void releaseButton(int button, int x, int y);
     void releaseAllButtons(); // capture lost: end every drag that is open
     void armMouseLeave();
@@ -279,6 +283,12 @@ private:
     unsigned mButtonsDown = 0;
     int mLastMouseX = 0;
     int mLastMouseY = 0;
+    // The last press, for double-click detection: the same rule and the same two numbers as the
+    // X11 view, timed on the message's own clock (GetMessageTime) rather than on a fresh read of
+    // the system's, so a busy message queue cannot turn one click into two.
+    int mLastPressButton = 0;
+    DWORD mLastPressTime = 0;
+    int mLastPressX = 0, mLastPressY = 0;
     bool mTrackingLeave = false;
     // WM_MOUSEWHEEL deltas are a multiple of WHEEL_DELTA on an ordinary mouse
     // but smaller on a high-resolution one, so they accumulate into notches.
