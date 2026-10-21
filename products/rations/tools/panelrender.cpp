@@ -64,6 +64,7 @@ const char *const kRequiredImages[] = {
     "cabinet",
     "dial",
     "led_on",
+    "led_green_on",
     "led_off",
     "switch_up_ring",
     "switch_down_ring",
@@ -151,13 +152,14 @@ void drawToggle(Canvas &c, ImageCache &images, const geo::ToggleSpec &t, bool on
 
 //------------------------------------------------------------------------
 void drawLed(Canvas &c, ImageCache &images, float cx, float cy, bool lit,
-             float r = static_cast<float>(geo::kLedR))
+             float r = static_cast<float>(geo::kLedR), geo::LedColor color = geo::LedColor::Red)
 {
     const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
-    if (cairo_surface_t *led = images.get(lit ? "led_on" : "led_off")) {
+    const bool green = color == geo::LedColor::Green;
+    if (cairo_surface_t *led = images.get(!lit ? "led_off" : (green ? "led_green_on" : "led_on"))) {
         c.drawImage(led, dest);
     } else {
-        c.setColor(lit ? 0xE02020 : 0x141414);
+        c.setColor(!lit ? 0x141414 : (green ? geo::kAccent : 0xE02020));
         c.fillEllipse(dest);
     }
 }
@@ -428,6 +430,9 @@ void renderHead(Canvas &c, ImageCache &images, SvgCache &icons)
                          static_cast<float>(geo::kIoKnobs[i].cx),
                          static_cast<float>(geo::kIoValueBaselineY));
     }
+    // The input-level lamp, lit: the demo input meter above it is playing.
+    drawLed(c, images, static_cast<float>(geo::kInputLampCX), static_cast<float>(geo::kInputLampCY),
+            true, static_cast<float>(geo::kInputLampR), geo::LedColor::Green);
 
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);
@@ -1020,6 +1025,22 @@ bool auditHitBoxes()
                          static_cast<float>(geo::kStripTop + geo::kStripPadT),
                          static_cast<float>(geo::kStripColX0 + (i + 1) * geo::kStripColW),
                          static_cast<float>(geo::kStripCaptureY + geo::kStripCaptureDescent)});
+
+    // The six dial readouts are click targets too, since clicking one opens it for typing. They
+    // share the bottom band with the switches and the page buttons, and the Input field sits
+    // beside the input meter's column, so they are exactly what this audit is for. Labelled by
+    // the dial's own legend, from the same table the editor hit-tests.
+    for (const geo::ValueField &f : geo::kValueFields) {
+        const char *what = "value field";
+        for (const geo::KnobSpec &k : geo::kKnobs)
+            if (k.id == f.id)
+                what = k.label;
+        for (const geo::KnobSpec &k : geo::kIoKnobs)
+            if (k.id == f.id)
+                what = k.label;
+        boxes.push_back({what, static_cast<float>(f.x), static_cast<float>(f.y),
+                         static_cast<float>(f.x + f.w), static_cast<float>(f.y + f.h)});
+    }
 
     // The two level meters are not clickable, but a control drawn on top of one is a control
     // drawn on top of the thing it is supposed to sit beside, so they are in the check as

@@ -106,6 +106,33 @@ need "$ART_DIR/led-off-base.png"
 magick "$ART_DIR/led-on-base.png"  -strip -depth 8 "PNG32:$OUT_DIR/led_on.png"
 magick "$ART_DIR/led-off-base.png" -strip -depth 8 "PNG32:$OUT_DIR/led_off.png"
 
+# ---- led_green_on.png: the input-level lamp, lit ---------------------------
+# The red LED recoloured to ACCENT rather than drawn again, so the two lamps
+# share one shape, rim and size. The red LED's green and blue are a fixed tenth
+# of its red everywhere, so the RED channel alone carries all of its shading:
+# it is levelled so the brightest opaque red becomes 1 (that maximum is measured
+# here, not written in, because a hard-coded 234 would quietly mis-tint a
+# re-exported source), turned back into colour (a separated channel is a
+# greyscale image, and colourising one leaves it grey), multiplied by ACCENT,
+# and given the source's own alpha back. The centre therefore lands on ACCENT
+# exactly, and the check below says so. The white point is passed as a PERCENTAGE because -level reads a bare
+# number in QuantumRange units, which is 65535 on a Q16 build. The lamp's off
+# state is led_off.png, shared with the channel LEDs.
+RED_MAX_PCT="$(magick "$ART_DIR/led-on-base.png" \
+    \( +clone -alpha extract -threshold 50% \) -alpha off \
+    -compose multiply -composite -channel R -separate -format "%[fx:maxima*100]" info:)"
+magick "$ART_DIR/led-on-base.png" \
+    \( +clone -alpha off -channel R -separate +channel -level "0,${RED_MAX_PCT}%" \
+       -colorspace sRGB \
+       \( +clone -fill "$ACCENT" -colorize 100 \) -compose multiply -composite \) \
+    +swap -compose copyalpha -composite \
+    -strip -depth 8 "PNG32:$OUT_DIR/led_green_on.png"
+green_centre="$(magick "$OUT_DIR/led_green_on.png" -format "%[hex:p{64,64}]" info:)"
+if [ "#${green_centre:0:6}" != "$ACCENT" ]; then
+    echo "make_assets: led_green_on.png's centre is #${green_centre}, not ACCENT $ACCENT." >&2
+    exit 1
+fi
+
 # ---- generated art --------------------------------------------------------
 ./make_knob.sh
 ./make_switch.sh

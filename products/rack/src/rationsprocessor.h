@@ -32,6 +32,7 @@
 #include "public.sdk/source/vst/vstaudioeffect.h"
 
 #include "channelrack.h"
+#include "inputlevellamp.h"
 #include "irblend.h"
 #include "midilearn.h"
 #include "nativeresampler.h"
@@ -193,6 +194,9 @@ private:
     // Four banks, four crossfade engines, one input ring and the switch between them. The single
     // native-rate block processor the shared resampler drives.
     ChannelRack mRack;
+    // The input-level lamp's detector. Audio thread only, apart from reset() in setupProcessing
+    // and setActive, when the audio thread is not running.
+    InputLevelLamp mInputLamp;
 
     // Two IR slots. Slot A alone is the normal case and takes exactly the path it took before the
     // second slot existed - one Process call, no mixing, the blend not consulted - so a user who

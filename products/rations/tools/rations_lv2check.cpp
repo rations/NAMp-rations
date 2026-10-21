@@ -211,6 +211,7 @@ void checkPorts(LilvWorld *world, const LilvPlugin *plugin)
     LilvNode *classControl = lilv_new_uri(world, LV2_CORE__ControlPort);
     LilvNode *classAtom = lilv_new_uri(world, LV2_ATOM__AtomPort);
     LilvNode *classInput = lilv_new_uri(world, LV2_CORE__InputPort);
+    LilvNode *optional = lilv_new_uri(world, LV2_CORE__connectionOptional);
 
     const uint32_t count = lilv_plugin_get_num_ports(plugin);
     checkf(count == kPortCount, "the bundle declares %u ports; the code expects %u", count,
@@ -263,8 +264,22 @@ void checkPorts(LilvWorld *world, const LilvPlugin *plugin)
         // The feedback block and the latency port.
         checkf(lilv_port_is_a(plugin, port, classControl), "port %u should be a control port", i);
         checkf(!isInput, "port %u should be an output", i);
+        if (i >= kPortFeedbackFirst && i < kPortLatency) {
+            // By symbol as well as by index, because a symbol is what a host's saved state keys
+            // on, and connectionOptional exactly where the table says, because a port added after
+            // the bundle shipped is allowed under the same URI only with it.
+            const FeedbackPort &want = kFeedbackPorts[i - kPortFeedbackFirst];
+            const LilvNode *symbol = lilv_port_get_symbol(plugin, port);
+            const char *got = symbol ? lilv_node_as_string(symbol) : "";
+            checkf(std::strcmp(got, want.symbol) == 0, "port %u is \"%s\"; the code says \"%s\"", i,
+                   got, want.symbol);
+            checkf(lilv_port_has_property(plugin, port, optional) == want.optional,
+                   "port %u (%s) %s lv2:connectionOptional", i, want.symbol,
+                   want.optional ? "must be" : "must not be");
+        }
     }
 
+    lilv_node_free(optional);
     lilv_node_free(classInput);
     lilv_node_free(classAtom);
     lilv_node_free(classControl);
@@ -1085,8 +1100,13 @@ void checkInstantiate(LilvWorld *world, const LilvPlugin *plugin)
         lilv_instance_connect_port(instance, kPortControlFirst + i,
                                    &gPortValues[kPortControlFirst + i]);
     }
-    for (uint32_t i = kPortFeedbackFirst; i < kPortCount; ++i)
-        lilv_instance_connect_port(instance, i, &gPortValues[i]);
+    // Every feedback port except the connection-optional ones, which are explicitly left
+    // unconnected, as a host is entitled to. The 32 blocks below are then the proof that the
+    // wrapper writes only the ports it was given.
+    for (uint32_t i = kPortFeedbackFirst; i < kPortCount; ++i) {
+        const bool optional = i < kPortLatency && kFeedbackPorts[i - kPortFeedbackFirst].optional;
+        lilv_instance_connect_port(instance, i, optional ? nullptr : &gPortValues[i]);
+    }
 
     lilv_instance_activate(instance);
     for (int block = 0; block < 32; ++block) {

@@ -481,19 +481,14 @@ bool writePluginTtl(const std::string &path, const std::vector<PortInfo> &ports)
         fprintf(f, " , ");
     }
 
-    static const char *kFeedbackNames[kFeedbackCount] = {
-        "Input Meter", "Output Meter", "Bank Progress", "Active Capture", "Active Channel",
-    };
-    static const char *kFeedbackSymbols[kFeedbackCount] = {
-        "input_meter", "output_meter", "bank_progress", "active_capture", "active_channel",
-    };
     for (int i = 0; i < kFeedbackCount; ++i) {
+        const FeedbackPort &port = kFeedbackPorts[i];
         fprintf(f,
                 "[\n\t\ta lv2:OutputPort ,\n\t\t\tlv2:ControlPort ;\n\t\tlv2:index %u ;\n"
-                "\t\tlv2:symbol \"%s\" ;\n\t\tlv2:name \"%s\" ;\n"
+                "\t\tlv2:symbol \"%s\" ;\n\t\tlv2:name \"%s\" ;\n%s"
                 "\t\tlv2:default 0.0 ;\n\t\tlv2:minimum 0.0 ;\n\t\tlv2:maximum 1.0\n\t] , ",
-                kPortFeedbackFirst + static_cast<std::uint32_t>(i), kFeedbackSymbols[i],
-                kFeedbackNames[i]);
+                kPortFeedbackFirst + static_cast<std::uint32_t>(i), port.symbol, port.name,
+                port.optional ? "\t\tlv2:portProperty lv2:connectionOptional ;\n" : "");
     }
 
     // Latency. The VST3 build reports it through getLatencySamples(); LV2's way of saying the same

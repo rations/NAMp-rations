@@ -31,6 +31,24 @@ constexpr int kButtonLeft = 1;
 constexpr int kButtonMiddle = 2;
 constexpr int kButtonRight = 3;
 
+// The X11 view's double-click rule and its two numbers, repeated rather than read from
+// GetDoubleClickTime: that is the desktop's preference on this platform and has no counterpart on
+// the other, and one gesture behaving two ways is the thing CS_DBLCLKS is left off to avoid.
+constexpr DWORD kDoubleClickMs = 400;
+constexpr int kDoubleClickSlop = 4;
+
+// MK_SHIFT / MK_CONTROL, the key state every mouse message carries (in the whole of wParam, or in
+// its low word for WM_MOUSEWHEEL), as the editor's PointerMod mask.
+unsigned pointerMods(WPARAM keys)
+{
+    unsigned mods = 0;
+    if (keys & MK_SHIFT)
+        mods |= kPointerShift;
+    if (keys & MK_CONTROL)
+        mods |= kPointerControl;
+    return mods;
+}
+
 // One trace summary line per ~1 s, and the threshold above which a repaint is
 // interesting enough to log on its own (i.e. the editor was quiet and then
 // something woke it up).
@@ -76,8 +94,11 @@ HINSTANCE thisModule()
 //
 // CS_DBLCLKS is deliberately NOT set. With it, the second click of a pair
 // arrives as WM_LBUTTONDBLCLK instead of WM_LBUTTONDOWN, and the editor would
-// simply lose that click. X11 delivers two ordinary presses; this keeps the two
-// platforms behaving the same. CS_HREDRAW | CS_VREDRAW invalidate the whole
+// simply lose that click. X11 delivers two ordinary presses, and both views
+// derive the double-click themselves from those presses by one rule and two
+// shared numbers (see pressButton), so the gesture is the same on both
+// platforms rather than one rule here and another there. CS_HREDRAW |
+// CS_VREDRAW invalidate the whole
 // window on a size change, so a resize can never leave a stale edge.
 // `proc` is passed in rather than named here because the window procedure is a
 // private member of Win32PlugView; openWindow() supplies it.
@@ -393,13 +414,13 @@ LRESULT Win32PlugView::wndProc(UINT msg, WPARAM wParam, LPARAM lParam)
             return 0;
 
         case WM_LBUTTONDOWN:
-            pressButton(kButtonLeft, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            pressButton(kButtonLeft, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), wParam);
             return 0;
         case WM_MBUTTONDOWN:
-            pressButton(kButtonMiddle, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            pressButton(kButtonMiddle, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), wParam);
             return 0;
         case WM_RBUTTONDOWN:
-            pressButton(kButtonRight, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            pressButton(kButtonRight, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), wParam);
             return 0;
 
         case WM_LBUTTONUP:
@@ -422,7 +443,7 @@ LRESULT Win32PlugView::wndProc(UINT msg, WPARAM wParam, LPARAM lParam)
             // Already coalesced by the system — a WM_MOUSEMOVE is only
             // generated when the queue has none pending, so the X11 side's
             // explicit motion compression has no counterpart here.
-            onMouseMove(mLastMouseX, mLastMouseY);
+            onMouseMove(mLastMouseX, mLastMouseY, pointerMods(wParam));
             return 0;
 
         case WM_MOUSELEAVE:
@@ -436,14 +457,17 @@ LRESULT Win32PlugView::wndProc(UINT msg, WPARAM wParam, LPARAM lParam)
             POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             ScreenToClient(mWindow, &pt);
 
+            // The key state is the low word here, where every other mouse message carries it as
+            // the whole of wParam: the high word is the wheel delta.
+            const unsigned mods = pointerMods(GET_KEYSTATE_WPARAM(wParam));
             mWheelRemainder += GET_WHEEL_DELTA_WPARAM(wParam);
             while (mWheelRemainder >= WHEEL_DELTA) {
                 mWheelRemainder -= WHEEL_DELTA;
-                onMouseWheel(pt.x, pt.y, 1);
+                onMouseWheel(pt.x, pt.y, 1, mods);
             }
             while (mWheelRemainder <= -WHEEL_DELTA) {
                 mWheelRemainder += WHEEL_DELTA;
-                onMouseWheel(pt.x, pt.y, -1);
+                onMouseWheel(pt.x, pt.y, -1, mods);
             }
             return 0;
         }
@@ -518,14 +542,31 @@ LRESULT Win32PlugView::wndProc(UINT msg, WPARAM wParam, LPARAM lParam)
 // pointer crosses our window's edge the drag stops receiving WM_MOUSEMOVE and
 // the knob freezes. Capture is taken on the first button down and released only
 // when the last one comes up.
-void Win32PlugView::pressButton(int button, int x, int y)
+//
+// The double-click is the X11 view's rule, derived from two ordinary presses: the same button
+// within kDoubleClickMs and kDoubleClickSlop pixels of the first, and a pair consumed so a third
+// press starts a new one. GetMessageTime is that message's own timestamp in milliseconds since the
+// system started, and Microsoft's documentation for it says to take the difference of two such
+// times ignoring overflow, as unsigned integers — which is what the DWORD subtraction does across
+// the 49-day wrap.
+void Win32PlugView::pressButton(int button, int x, int y, WPARAM keys)
 {
     mLastMouseX = x;
     mLastMouseY = y;
     if (mButtonsDown == 0)
         SetCapture(mWindow);
     mButtonsDown |= 1u << button;
-    onMouseDown(x, y, button);
+
+    const DWORD now = static_cast<DWORD>(GetMessageTime());
+    const bool doubleClick = button == mLastPressButton &&
+                             static_cast<DWORD>(now - mLastPressTime) <= kDoubleClickMs &&
+                             std::abs(x - mLastPressX) <= kDoubleClickSlop &&
+                             std::abs(y - mLastPressY) <= kDoubleClickSlop;
+    mLastPressButton = doubleClick ? 0 : button;
+    mLastPressTime = now;
+    mLastPressX = x;
+    mLastPressY = y;
+    onMouseDown(x, y, button, pointerMods(keys), doubleClick);
 }
 
 void Win32PlugView::releaseButton(int button, int x, int y)

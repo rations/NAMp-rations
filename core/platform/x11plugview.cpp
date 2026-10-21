@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -42,6 +43,23 @@ constexpr int kMapFallbackTicks = 6; // ~200 ms at 33 ms
 // something woke it up).
 constexpr unsigned long kSummaryTicks = 30;
 constexpr unsigned long kQuietRedrawTicks = 15;
+
+// Two presses of one button count as a double-click when the second follows within this many
+// milliseconds and this many pixels of the first. X itself defines no double-click, so these are
+// this editor's own choice rather than a value read from the desktop's settings — and the Win32
+// view uses the same two numbers, so the gesture feels the same on both.
+constexpr unsigned long kDoubleClickMs = 400;
+constexpr int kDoubleClickSlop = 4;
+
+unsigned pointerMods(unsigned int state)
+{
+    unsigned mods = 0;
+    if (state & ShiftMask)
+        mods |= kPointerShift;
+    if (state & ControlMask)
+        mods |= kPointerControl;
+    return mods;
+}
 
 //------------------------------------------------------------------------
 // One X keysym to one VirtualKeyCodes value (pluginterfaces/base/keycodes.h), or 0 for a key
@@ -798,15 +816,29 @@ void X11PlugView::drainEvents()
                     mDirty = true;
                 break;
 
-            case ButtonPress:
-                if (event.xbutton.button == kWheelUp || event.xbutton.button == kWheelDown) {
-                    onMouseWheel(event.xbutton.x, event.xbutton.y,
-                                 event.xbutton.button == kWheelUp ? 1 : -1);
-                } else {
-                    onMouseDown(event.xbutton.x, event.xbutton.y,
-                                static_cast<int>(event.xbutton.button));
+            case ButtonPress: {
+                const XButtonEvent &b = event.xbutton;
+                if (b.button == kWheelUp || b.button == kWheelDown) {
+                    onMouseWheel(b.x, b.y, b.button == kWheelUp ? 1 : -1, pointerMods(b.state));
+                    break;
                 }
+                // The server clock is a 32-bit CARD32 carried in an unsigned long, so the
+                // difference is taken in 32 bits to stay right across its wrap.
+                const bool doubleClick =
+                    b.button == mLastPressButton &&
+                    static_cast<uint32_t>(b.time - mLastPressTime) <= kDoubleClickMs &&
+                    std::abs(b.x - mLastPressX) <= kDoubleClickSlop &&
+                    std::abs(b.y - mLastPressY) <= kDoubleClickSlop;
+                // A double-click consumes its pair, so a third press starts a new one instead of
+                // reading as a second double-click.
+                mLastPressButton = doubleClick ? 0 : b.button;
+                mLastPressTime = b.time;
+                mLastPressX = b.x;
+                mLastPressY = b.y;
+                onMouseDown(b.x, b.y, static_cast<int>(b.button), pointerMods(b.state),
+                            doubleClick);
                 break;
+            }
 
             case ButtonRelease:
                 if (event.xbutton.button != kWheelUp && event.xbutton.button != kWheelDown)
@@ -825,7 +857,7 @@ void X11PlugView::drainEvents()
                         break;
                     XNextEvent(mDisplay, &latest);
                 }
-                onMouseMove(latest.xmotion.x, latest.xmotion.y);
+                onMouseMove(latest.xmotion.x, latest.xmotion.y, pointerMods(latest.xmotion.state));
                 break;
             }
 

@@ -603,6 +603,8 @@ set(NAMP_IMG_FILES
     img/namp-badge.png
     img/dial.png
     img/led_on.png
+    # The input-level lamp, lit. Generated from led-on-base.png by gui/make_assets.sh.
+    img/led_green_on.png
     img/led_off.png
     img/switch_up_ring.png
     img/switch_down_ring.png
@@ -1051,8 +1053,9 @@ if(NAMPRACK_BUILD_TOOLS)
     target_compile_features(rations_fadecheck PRIVATE cxx_std_20)
     target_compile_options(rations_fadecheck PRIVATE -Wall)
 
-    # The channel-switch proof and the race gate: the same engine sources, driven differently.
-    foreach(_tool rations_switchcheck rations_racecheck)
+    # The channel-switch proof, the race gate and the input-level lamp's proof: the same engine
+    # sources, driven differently.
+    foreach(_tool rations_switchcheck rations_racecheck rations_lampcheck)
         namp_source(_tool_src tools/${_tool}.cpp)
         add_executable(${_tool}
             ${_tool_src}
@@ -1071,6 +1074,16 @@ if(NAMPRACK_BUILD_TOOLS)
         target_compile_features(${_tool} PRIVATE cxx_std_20)
         target_compile_options(${_tool} PRIVATE -Wall)
     endforeach()
+    # The lamp's proof ends by driving the BUILT BUNDLE, because the tap point and the output
+    # parameter are facts about the plug-in a host loads, so it carries the module loader too.
+    target_sources(rations_lampcheck PRIVATE
+        ${NAMPRACK_MODULE_LOADER}
+        ${VST3_SDK_DIR}/public.sdk/source/vst/hosting/plugprovider.cpp
+        ${VST3_SDK_DIR}/public.sdk/samples/vst-hosting/editorhost/source/usediids.cpp)
+    target_link_libraries(rations_lampcheck PRIVATE sdk_hosting)
+    if(NAMPRACK_BUILD_VST3_BUNDLE)
+        add_dependencies(rations_lampcheck NampRackAmp)
+    endif()
 
 
     # The allocation gate. Deliberately links NO graphics at all — it is measuring allocations on

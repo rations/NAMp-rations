@@ -107,6 +107,32 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
 }
 
 //------------------------------------------------------------------------
+// The pointer's fine-adjust keys, as the editor's PointerMod mask. Shift is Shift; the second
+// key is COMMAND, which is iPlug2's own mapping for its mouse modifiers here (IGraphicsMac_view.mm,
+// -getMouseLeft:, builds IMouseMod's `C` from NSCommandKeyMask) and the only one that can work:
+// Control turns a left click into a right one (see -mouseDown:), so it cannot also mean "fine".
+static unsigned pointerModsFromFlags(NSEventModifierFlags flags)
+{
+    unsigned mods = 0;
+    if (flags & NSEventModifierFlagShift)
+        mods |= Steinberg::kPointerShift;
+    if (flags & NSEventModifierFlagCommand)
+        mods |= Steinberg::kPointerControl;
+    return mods;
+}
+
+//------------------------------------------------------------------------
+// AppKit counts clicks itself, so a double-click is read rather than derived: VSTGUI's own
+// NSViewFrame::onMouseDown passes [theEvent clickCount] straight through. It is taken as every
+// EVEN count rather than exactly 2, which pairs presses the way the X11 and Win32 views do — a
+// third press starts a new pair, and the fourth completes it.
+static bool isDoubleClick(NSEvent *event)
+{
+    const NSInteger count = [event clickCount];
+    return count >= 2 && (count % 2) == 0;
+}
+
+//------------------------------------------------------------------------
 // The Objective-C view.
 //
 // FLAGGED: Objective-C class names live in one flat, process-wide namespace, so
@@ -274,14 +300,15 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
     const NSPoint p = [self localPoint:event];
     mLeftIsRight = ([event modifierFlags] & NSEventModifierFlagControl) ? YES : NO;
     if (mOwner)
-        mOwner->macMouseDown(p.x, p.y, mLeftIsRight ? kButtonRight : kButtonLeft);
+        mOwner->macMouseDown(p.x, p.y, mLeftIsRight ? kButtonRight : kButtonLeft,
+                             pointerModsFromFlags([event modifierFlags]), isDoubleClick(event));
 }
 
 - (void)mouseDragged:(NSEvent *)event
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseMove(p.x, p.y);
+        mOwner->macMouseMove(p.x, p.y, pointerModsFromFlags([event modifierFlags]));
 }
 
 - (void)mouseUp:(NSEvent *)event
@@ -297,14 +324,15 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseDown(p.x, p.y, kButtonRight);
+        mOwner->macMouseDown(p.x, p.y, kButtonRight, pointerModsFromFlags([event modifierFlags]),
+                             isDoubleClick(event));
 }
 
 - (void)rightMouseDragged:(NSEvent *)event
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseMove(p.x, p.y);
+        mOwner->macMouseMove(p.x, p.y, pointerModsFromFlags([event modifierFlags]));
 }
 
 - (void)rightMouseUp:(NSEvent *)event
@@ -318,14 +346,15 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseDown(p.x, p.y, kButtonMiddle);
+        mOwner->macMouseDown(p.x, p.y, kButtonMiddle, pointerModsFromFlags([event modifierFlags]),
+                             isDoubleClick(event));
 }
 
 - (void)otherMouseDragged:(NSEvent *)event
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseMove(p.x, p.y);
+        mOwner->macMouseMove(p.x, p.y, pointerModsFromFlags([event modifierFlags]));
 }
 
 - (void)otherMouseUp:(NSEvent *)event
@@ -344,7 +373,7 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseMove(p.x, p.y);
+        mOwner->macMouseMove(p.x, p.y, pointerModsFromFlags([event modifierFlags]));
 }
 
 - (void)mouseExited:(NSEvent *)event
@@ -363,7 +392,7 @@ static Steinberg::int16 keyModifiersFromFlags(NSEventModifierFlags flags)
 {
     const NSPoint p = [self localPoint:event];
     if (mOwner)
-        mOwner->macMouseWheel(p.x, p.y, [event deltaY]);
+        mOwner->macMouseWheel(p.x, p.y, [event deltaY], pointerModsFromFlags([event modifierFlags]));
 }
 
 //------------------------------------------------------------------------
@@ -967,9 +996,9 @@ void MacPlugView::macTick()
 //------------------------------------------------------------------------
 // AppKit hands over points; the hook set is in device pixels. This is the third
 // of the four conversion sites named at the top of macplugview.h.
-void MacPlugView::macMouseDown(double x, double y, int button)
+void MacPlugView::macMouseDown(double x, double y, int button, unsigned mods, bool doubleClick)
 {
-    onMouseDown(toPixels(x), toPixels(y), button);
+    onMouseDown(toPixels(x), toPixels(y), button, mods, doubleClick);
 }
 
 void MacPlugView::macMouseUp(double x, double y, int button)
@@ -977,9 +1006,9 @@ void MacPlugView::macMouseUp(double x, double y, int button)
     onMouseUp(toPixels(x), toPixels(y), button);
 }
 
-void MacPlugView::macMouseMove(double x, double y)
+void MacPlugView::macMouseMove(double x, double y, unsigned mods)
 {
-    onMouseMove(toPixels(x), toPixels(y));
+    onMouseMove(toPixels(x), toPixels(y), mods);
 }
 
 void MacPlugView::macMouseLeave()
@@ -988,7 +1017,7 @@ void MacPlugView::macMouseLeave()
 }
 
 //------------------------------------------------------------------------
-void MacPlugView::macMouseWheel(double x, double y, double deltaY)
+void MacPlugView::macMouseWheel(double x, double y, double deltaY, unsigned mods)
 {
     NAMpRationsPlugView *view = nativeView(mView);
     if (!view)
@@ -998,11 +1027,11 @@ void MacPlugView::macMouseWheel(double x, double y, double deltaY)
     const int py = toPixels(y);
     while (view->mWheelAccum >= 1.0) {
         view->mWheelAccum -= 1.0;
-        onMouseWheel(px, py, 1);
+        onMouseWheel(px, py, 1, mods);
     }
     while (view->mWheelAccum <= -1.0) {
         view->mWheelAccum += 1.0;
-        onMouseWheel(px, py, -1);
+        onMouseWheel(px, py, -1, mods);
     }
 }
 

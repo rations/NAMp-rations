@@ -123,6 +123,16 @@ than a person with a pedal.
       needed explicit work; on macOS it should be free, and this confirms it.)
 - [ ] Right-click a control: it should return to its default. **Control-click
       should do the same thing**, because that is the Mac gesture for it.
+- [ ] **Double-click a knob** (Bass, say): it should jump back to its default
+      (5.0 for Bass). A third quick click should not do it again.
+- [ ] Drag a knob while holding **Shift**, then while holding **Command**: either
+      one should make it move about ten times more slowly. (Not Control — on a
+      Mac, Control-click is a right-click.) The mouse wheel or a two-finger
+      scroll over a knob should also step ten times finer with Shift held.
+- [ ] **Click the number under Bass** (or Threshold, Middle, Treble, Input,
+      Output). It should turn into a box with the number highlighted. Type
+      `7.5` and press Return: the knob should move to 7.5. Try `7,5` too — it
+      should do the same. Escape should leave the value as it was.
 - [ ] All four page buttons work, and the window **changes shape** each time
       without changing apparent size.
 - [ ] Resize the window by dragging its corner. The panel should scale with it

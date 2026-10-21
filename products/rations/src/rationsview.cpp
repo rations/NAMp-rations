@@ -17,6 +17,7 @@
 #include "rationsids.h"
 #include "gfx/widgets.h"
 #include "platform/respath.h"
+#include "typednumber.h"
 
 #include "pluginterfaces/base/keycodes.h"
 #include "pluginterfaces/base/ustring.h"
@@ -64,9 +65,25 @@ void drawCaret(Canvas &c, const Rect &box, float caretX)
     c.strokeLine(caretX, box.y + 4.0f, caretX, box.bottom() - 4.0f);
 }
 
-// Pixels of vertical drag for a dial's full range, in LOGICAL units — so the feel is the same at
-// every window size.
-constexpr float kKnobDragRange = 200.0f;
+// Drag and wheel gearing, from the original plug-in's knobs (iPlug2's IKnobControlBase). A drag
+// covers the full range in DEFAULT_GEARING (4.0) heights of the knob's drag bounds; upstream takes
+// those bounds from the control's own rect, and the head dial's face diameter stands in for it
+// here — for EVERY dial, so the small pedal knobs are not geared coarser than the big ones. In
+// LOGICAL units, so the feel is the same at every window size. Holding Shift or Ctrl (Command on a
+// Mac, see platform/pointermods.h) makes a drag ten times finer and a wheel notch a tenth of its
+// usual 1%: upstream's IsFineControl is `mod.C || mod.S`, and its wheel steps are 0.01 and 0.001.
+constexpr float kDragGearing = 4.0f;
+constexpr float kKnobDragRange = kDragGearing * 2.0f * geo::kKnobR; // 224
+constexpr float kFineDragFactor = 10.0f;
+constexpr double kWheelStep = 0.01, kFineWheelStep = 0.001;
+// The trims and the dBu box keep their own round-number notches (kLevelWheelDb, kCalWheelDb), and
+// fine is a tenth of those too.
+constexpr double kFineWheelDivisor = 10.0;
+
+bool isFine(unsigned mods)
+{
+    return (mods & (Steinberg::kPointerShift | Steinberg::kPointerControl)) != 0;
+}
 
 // The dial is the one layer that is rotated after being scaled, so rotation resamples it a second
 // time. Caching it at exactly its on-screen size loses visible contrast in the thin gold pointer;
@@ -598,6 +615,11 @@ void RationsEditorView::composeHead(Canvas &c)
     drawMeter(c, geo::kOutputMeter, mOutDisp, mOutPeak);
     for (int i = 0; i < 2; ++i)
         drawKnob(c, geo::kIoKnobs[i], true);
+    // Read from the parameter rather than from the cached copy ParamChanged keeps, so a page that
+    // is drawn before the first report still shows the controller's value.
+    drawLed(c, static_cast<float>(geo::kInputLampCX), static_cast<float>(geo::kInputLampCY),
+            paramValue(kInputLevelOkId) > 0.5, static_cast<float>(geo::kInputLampR),
+            geo::LedColor::Green);
 
     for (const geo::ButtonSpec &b : geo::kPageButtons)
         drawButton(c, b);
@@ -1366,29 +1388,17 @@ void RationsEditorView::drawOutputSection(Canvas &c)
     c.setPenSize(1.0f);
     c.strokeRoundRect(value, 4.0f);
 
-    const std::string text = editing ? mEditText : calValueText();
     c.setFont(Font::Body);
     c.setFontSize(geo::kMidiRowTextSize);
     // Centred in both states, so the box does not jolt as the field opens under the pointer.
-    const float textW = c.stringWidth(text.c_str());
-    const float textX = value.centerX() - textW * 0.5f;
     const float textBase = value.centerY() + geo::kMidiRowTextSize * 0.36f;
-    if (editSelected()) {
-        // The seed, drawn SELECTED — which is the field saying, before anything is typed, that
-        // typing will replace it rather than append to it. Without this the rule is still the
-        // right one and the user has no way to know it until they have got a wrong answer.
-        const Rect sel(textX - 2.0f, value.y + 4.0f, textW + 4.0f, value.h - 8.0f);
-        c.setColor(geo::kAccent, 210);
-        c.fillRoundRect(sel, 2.0f);
-        c.setColor(0x0C0B0A);
-    } else {
-        c.setColor(editing ? geo::kAccentBright : geo::kTextColor);
+    if (editing) {
+        drawFieldText(c, value, textBase);
+        return;
     }
-    c.drawString(text.c_str(), textX, textBase);
-    if (editing && !editSelected()) {
-        const std::string before = text.substr(0, std::min(mEditCaret, text.size()));
-        drawCaret(c, value, textX + c.stringWidth(before.c_str()));
-    }
+    const std::string text = calValueText();
+    c.setColor(geo::kTextColor);
+    c.drawString(text.c_str(), value.centerX() - c.stringWidth(text.c_str()) * 0.5f, textBase);
 }
 
 //------------------------------------------------------------------------
@@ -1422,7 +1432,7 @@ geo::ButtonSpec RationsEditorView::midiButton(int row, bool clear) const
 }
 
 //------------------------------------------------------------------------
-bool RationsEditorView::handleSettingsClick(float x, float y)
+bool RationsEditorView::handleSettingsClick(float x, float y, bool doubleClick)
 {
     if (!mController)
         return false;
@@ -1503,7 +1513,10 @@ bool RationsEditorView::handleSettingsClick(float x, float y)
         // inside the row it starts makes no difference, and a 12 px thumb is not something to
         // make anyone aim at.
         if (levelRowRect(i).contains(x, y)) {
-            startDrag(kChannelLevelId[i], x, y, true);
+            if (doubleClick)
+                resetParam(kChannelLevelId[i]);
+            else
+                startDrag(kChannelLevelId[i], x, y, true);
             invalidate();
             return true;
         }
@@ -1621,6 +1634,24 @@ void RationsEditorView::drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled
     // Dim when idle, accent while this dial is being dragged. The row does not appear and
     // disappear — a value that came and went would make the panel twitch under the hand — it only
     // changes colour, which says "live" without moving anything.
+    // Open for typing: the readout's own box becomes the field, in the dBu box's style, with the
+    // text on the readout's own baseline so nothing shifts as it opens.
+    if (editingValue(k.id)) {
+        for (const geo::ValueField &f : geo::kValueFields) {
+            if (f.id != k.id)
+                continue;
+            const Rect box = valueFieldRect(f);
+            c.setColor(0x000000, 200);
+            c.fillRoundRect(box, 4.0f);
+            c.setColor(geo::kAccent, 220);
+            c.setPenSize(1.0f);
+            c.strokeRoundRect(box, 4.0f);
+            c.setFont(Font::Body);
+            c.setFontSize(geo::kKnobValueSize);
+            drawFieldText(c, box, valueY);
+        }
+        return;
+    }
     if (readout.empty())
         return;
     c.setFont(Font::Body);
@@ -1698,14 +1729,17 @@ void RationsEditorView::drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on)
 }
 
 //------------------------------------------------------------------------
-void RationsEditorView::drawLed(Canvas &c, float cx, float cy, bool lit, float r)
+void RationsEditorView::drawLed(Canvas &c, float cx, float cy, bool lit, float r,
+                                geo::LedColor color)
 {
     const Rect dest(cx - r, cy - r, 2.0f * r, 2.0f * r);
     const int px = static_cast<int>(std::lround(2.0 * r * mScale));
-    if (cairo_surface_t *led = mImages.getScaled(lit ? "led_on" : "led_off", px, px)) {
+    const bool green = color == geo::LedColor::Green;
+    if (cairo_surface_t *led =
+            mImages.getScaled(!lit ? "led_off" : (green ? "led_green_on" : "led_on"), px, px)) {
         c.drawImage(led, dest);
     } else {
-        c.setColor(lit ? geo::kPeakColor : 0x141414);
+        c.setColor(!lit ? 0x141414 : (green ? geo::kAccent : geo::kPeakColor));
         c.fillEllipse(dest);
     }
 }
@@ -2079,15 +2113,37 @@ void RationsEditorView::nudgeParam(Vst::ParamID id, double delta)
     invalidate();
 }
 
+// The double-click's reset. Slim needs one more step than every other control: it is published on
+// the knob's RELEASE (see kMsgSetSlim), and a double-click has no release of its own to wait for —
+// the first click's has already been and gone, with nothing moved. So it is published here, and
+// only when the value actually changed, because an unmoved Slim would cost every bank a rebuild.
+void RationsEditorView::resetParam(Vst::ParamID id)
+{
+    if (!mController)
+        return;
+    const Vst::Parameter *p = mController->getParameterObject(id);
+    if (!p)
+        return;
+    const double norm = p->getInfo().defaultNormalizedValue;
+    const bool moved = paramValue(id) != norm;
+    editParam(id, norm);
+    if (id == kSlimId && moved) {
+        mController->applySlim();
+        mSlimDirty = false;
+    }
+    invalidate();
+}
+
 void RationsEditorView::startDrag(Vst::ParamID id, float x, float y, bool horizontal)
 {
     if (!mController)
         return;
     mDragParam = id;
-    mDragStartX = x;
-    mDragStartY = y;
+    mDragLastX = x;
+    mDragLastY = y;
     mDragHorizontal = horizontal;
     mDragStartNorm = paramValue(id);
+    mDragNorm = mDragStartNorm;
     mController->beginEdit(id);
     // No explicit pointer grab is needed here: X delivers an implicit grab to the window that saw
     // the ButtonPress for as long as the button is held, and the Win32 view calls SetCapture for
@@ -2096,13 +2152,15 @@ void RationsEditorView::startDrag(Vst::ParamID id, float x, float y, bool horizo
 
 //------------------------------------------------------------------------
 // One wheel click. On a channel dial that is one capture, so the wheel lands on real captures
-// rather than between them — the same resting places the dial's own auto-detent glides to.
-double RationsEditorView::wheelStep(Vst::ParamID id) const
+// rather than between them — the same resting places the dial's own auto-detent glides to, which
+// is also why fine control does not apply there: a tenth of a capture is a position the detent
+// would glide straight back off.
+double RationsEditorView::wheelStep(Vst::ParamID id, bool fine) const
 {
     for (int c = 0; c < kChannelCount; ++c)
         if (id == kChannelGainId[c] && mEntryCount[c] > 1)
             return 1.0 / static_cast<double>(mEntryCount[c] - 1);
-    return 0.05;
+    return fine ? kFineWheelStep : kWheelStep;
 }
 
 //------------------------------------------------------------------------
@@ -2143,17 +2201,29 @@ static Rect pedalSwitchRect(int pedal)
 }
 
 //------------------------------------------------------------------------
-void RationsEditorView::onMouseDown(int x, int y, int button)
+void RationsEditorView::onMouseDown(int x, int y, int button, unsigned /*mods*/, bool doubleClick)
 {
     // Physical pixels in, logical units out: this is the only place the page transform is undone,
     // and everything below hit-tests against geometry.h directly.
     const float fx = static_cast<float>((x - mOffX) / mScale);
     const float fy = static_cast<float>((y - mOffY) / mScale);
 
-    // Right-click resets a channel trim to exactly 0 dB. The one gesture this editor answers on a
-    // button other than the left, and it is here rather than on a double-click because neither
-    // window class delivers double-clicks: the X11 view sees two ordinary presses and the Win32
-    // one deliberately does not set CS_DBLCLKS, so that the two platforms behave the same.
+    // An open dial readout is closed by a press anywhere else, and closed by KEEPING what was
+    // typed — the settings page's rule for its own fields, applied before anything below can act
+    // on the press. A press inside it leaves it open, caret and all. The head page does not
+    // scroll, so its fields are tested in window-logical coordinates as they are drawn.
+    if (mEditField == TextField::KnobValue) {
+        for (const geo::ValueField &f : geo::kValueFields) {
+            if (f.id == mEditParam && valueFieldRect(f).contains(fx, fy))
+                return;
+        }
+        commitTextEdit();
+    }
+
+    // Right-click resets a channel trim to exactly 0 dB, and steps a pedal's list backwards. It
+    // predates the double-click, which every platform base now reports and which resets the trims
+    // too; the right button keeps doing what it did, because a gesture a user has learned is not
+    // one to take away.
     if (button == 3) {
         // The Slim overlay closes on a right-click ANYWHERE, which is the gesture the author asked
         // for and is tested before everything else so it cannot be swallowed by a control under
@@ -2203,7 +2273,10 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
     // underneath the dim can be clicked through.
     if (mSlimOpen) {
         if (hitCircle(fx, fy, geo::kSlimKnobCX, geo::kSlimKnobCY, geo::kSlimKnobR)) {
-            startDrag(kSlimId, fx, fy);
+            if (doubleClick)
+                resetParam(kSlimId);
+            else
+                startDrag(kSlimId, fx, fy);
             invalidate();
         } else {
             closeSlim();
@@ -2237,10 +2310,10 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
 
     switch (mPage) {
         case geo::Page::Head:
-            handleHeadClick(fx, fy);
+            handleHeadClick(fx, fy, doubleClick);
             return;
         case geo::Page::Cabinet:
-            handleCabinetClick(fx, fy);
+            handleCabinetClick(fx, fy, doubleClick);
             return;
         case geo::Page::Settings:
             // The scrollbar is chrome, so it is hit-tested in window coordinates and gets first
@@ -2251,16 +2324,16 @@ void RationsEditorView::onMouseDown(int x, int y, int button)
                 return;
             if (fy < static_cast<float>(geo::kPageContentTop))
                 return;
-            handleSettingsClick(fx, contentY(fy));
+            handleSettingsClick(fx, contentY(fy), doubleClick);
             return;
         case geo::Page::Pedalboard:
-            handlePedalboardClick(fx, fy);
+            handlePedalboardClick(fx, fy, doubleClick);
             return;
     }
 }
 
 //------------------------------------------------------------------------
-bool RationsEditorView::handleHeadClick(float x, float y)
+bool RationsEditorView::handleHeadClick(float x, float y, bool doubleClick)
 {
     if (buttonRect(geo::kSettingsButton).contains(x, y)) {
         setPage(geo::kSettingsButton.target);
@@ -2287,10 +2360,17 @@ bool RationsEditorView::handleHeadClick(float x, float y)
         }
     }
 
+    // A dial is dragged, double-clicked back to its default, or — for the six with a value row —
+    // typed into by clicking that row: the three ways the original plug-in's knobs offer. The
+    // first press of a double-click has already begun and ended a drag that went nowhere, which
+    // is harmless: an edit gesture with no performEdit in it changes nothing.
     for (int i = 0; i < geo::kKnobCount; ++i) {
         const geo::KnobSpec &k = geo::kKnobs[i];
         if (hitCircle(x, y, k.cx, k.cy, k.r)) {
-            startDrag(k.id, x, y);
+            if (doubleClick)
+                resetParam(k.id);
+            else
+                startDrag(k.id, x, y);
             invalidate(); // the readout appears
             return true;
         }
@@ -2298,8 +2378,18 @@ bool RationsEditorView::handleHeadClick(float x, float y)
     for (int i = 0; i < 2; ++i) {
         const geo::KnobSpec &k = geo::kIoKnobs[i];
         if (hitCircle(x, y, k.cx, k.cy, k.r)) {
-            startDrag(k.id, x, y);
+            if (doubleClick)
+                resetParam(k.id);
+            else
+                startDrag(k.id, x, y);
             invalidate();
+            return true;
+        }
+    }
+    for (const geo::ValueField &f : geo::kValueFields) {
+        if (valueFieldRect(f).contains(x, y)) {
+            if (!editingValue(f.id))
+                beginTextEdit(TextField::KnobValue, -1, f.id);
             return true;
         }
     }
@@ -2350,10 +2440,13 @@ bool RationsEditorView::handleHeadClick(float x, float y)
 }
 
 //------------------------------------------------------------------------
-bool RationsEditorView::handleCabinetClick(float x, float y)
+bool RationsEditorView::handleCabinetClick(float x, float y, bool doubleClick)
 {
     if (blendActive() && hitCircle(x, y, geo::kBlendCX, geo::kBlendCY, geo::kBlendHitR)) {
-        startDrag(kIrBlendId, x, y);
+        if (doubleClick)
+            resetParam(kIrBlendId);
+        else
+            startDrag(kIrBlendId, x, y);
         invalidate();
         return true;
     }
@@ -2383,7 +2476,7 @@ void RationsEditorView::cycleList(const PedalParamSpec &spec, int dir)
 // A pedal that is switched OFF is still fully editable. That is not an oversight: a player dials
 // a delay in and then stomps it, and the alternative - refusing clicks until the LED is lit -
 // would mean the only way to set a pedal up is to hear it first.
-bool RationsEditorView::handlePedalboardClick(float x, float y)
+bool RationsEditorView::handlePedalboardClick(float x, float y, bool doubleClick)
 {
     for (int i = 0; i < geo::kPedalCount; ++i) {
         for (int k = 0, nk = pedalKnobCount(i); k < nk; ++k) {
@@ -2391,7 +2484,11 @@ bool RationsEditorView::handlePedalboardClick(float x, float y)
             if (!hitCircle(x, y, static_cast<float>(pt.x), static_cast<float>(pt.y),
                            static_cast<float>(geo::kPedalKnobHitR)))
                 continue;
-            startDrag(kPedalParams[pedalKnobParam(i, k)].id, x, y);
+            const Vst::ParamID id = kPedalParams[pedalKnobParam(i, k)].id;
+            if (doubleClick)
+                resetParam(id);
+            else
+                startDrag(id, x, y);
             invalidate();
             return true;
         }
@@ -2458,7 +2555,7 @@ bool RationsEditorView::handleIrRowClick(int slot, float x, float y)
 }
 
 //------------------------------------------------------------------------
-void RationsEditorView::onMouseMove(int x, int y)
+void RationsEditorView::onMouseMove(int x, int y, unsigned mods)
 {
     mMouseX = static_cast<float>((x - mOffX) / mScale);
     // In PAGE coordinates, like every rect it is tested against. A drag reads deltas, and those
@@ -2480,19 +2577,32 @@ void RationsEditorView::onMouseMove(int x, int y)
 
     if (!mDragParam || !mController)
         return;
+    // Accumulated from the last position, as the original plug-in's knobs do, so pressing or
+    // releasing Shift mid-drag changes the gearing from that point on instead of making the
+    // control jump. The accumulator is clamped as it goes, so overshooting an end costs no travel
+    // on the way back.
+    const bool fine = isFine(mods);
+    const float gear = fine ? kFineDragFactor : 1.0f;
     double norm;
     if (mDragHorizontal) {
         // Relative, never absolute: a slider that jumped to wherever it was clicked would let a
         // mis-click throw a channel's level by the whole range, and this control's whole job is
         // small corrections. The drag also snaps to exactly 0 dB near the centre, because a trim
-        // has to be returnable to its default by hand.
-        norm = clampNorm(mDragStartNorm + (mMouseX - mDragStartX) / geo::kLevelDragRange);
+        // has to be returnable to its default by hand — but NOT under fine control, whose whole
+        // point is a value like +0.1 dB that the snap zone (±0.28 dB) would otherwise swallow.
+        // The snap is applied to what is published, never to the accumulator, so a coarse drag
+        // that passes through the centre is not held there.
+        mDragNorm = clampNorm(mDragNorm + (mMouseX - mDragLastX) / (geo::kLevelDragRange * gear));
+        norm = mDragNorm;
         const double centre = 0.5;
-        if (std::fabs(norm - centre) * geo::kLevelDragRange < geo::kLevelCentreSnap)
+        if (!fine && std::fabs(norm - centre) * geo::kLevelDragRange < geo::kLevelCentreSnap)
             norm = centre;
     } else {
-        norm = clampNorm(mDragStartNorm + (mDragStartY - mMouseY) / kKnobDragRange);
+        mDragNorm = clampNorm(mDragNorm + (mDragLastY - mMouseY) / (kKnobDragRange * gear));
+        norm = mDragNorm;
     }
+    mDragLastX = mMouseX;
+    mDragLastY = mMouseY;
     // A Slim drag that actually moved is what makes the release worth publishing. A click on the
     // knob that goes nowhere leaves mSlimDirty false and costs no rebuild.
     if (mDragParam == kSlimId && norm != mDragStartNorm)
@@ -2527,14 +2637,16 @@ void RationsEditorView::onMouseUp(int /*x*/, int /*y*/, int button)
 
 //------------------------------------------------------------------------
 // Wheel adjusts whatever is under the cursor (wheel up = increase).
-void RationsEditorView::onMouseWheel(int x, int y, int delta)
+void RationsEditorView::onMouseWheel(int x, int y, int delta, unsigned mods)
 {
     const float fx = static_cast<float>((x - mOffX) / mScale);
     const float fy = static_cast<float>((y - mOffY) / mScale);
+    const bool fine = isFine(mods);
+    const double step = delta * (fine ? kFineWheelStep : kWheelStep);
 
     if (mSlimOpen) {
         if (hitCircle(fx, fy, geo::kSlimKnobCX, geo::kSlimKnobCY, geo::kSlimKnobR)) {
-            nudgeParam(kSlimId, delta * 0.05);
+            nudgeParam(kSlimId, step);
             mSlimDirty = true;
         }
         return;
@@ -2546,7 +2658,7 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
     }
     if (mPage == geo::Page::Cabinet) {
         if (blendActive() && hitCircle(fx, fy, geo::kBlendCX, geo::kBlendCY, geo::kBlendHitR))
-            nudgeParam(kIrBlendId, delta * 0.05);
+            nudgeParam(kIrBlendId, step);
         return;
     }
     if (mPage == geo::Page::Settings) {
@@ -2577,16 +2689,19 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
         // to repeat on the other three channels.
         for (int i = 0; i < geo::kLevelRowCount; ++i) {
             if (levelRowRect(i).contains(fx, cy)) {
+                const double db = geo::kLevelWheelDb / (fine ? kFineWheelDivisor : 1.0);
                 nudgeParam(kChannelLevelId[i],
-                           delta * geo::kLevelWheelDb / (ranges::kLevelMax - ranges::kLevelMin));
+                           delta * db / (ranges::kLevelMax - ranges::kLevelMin));
                 return;
             }
         }
         // The interface calibration level, in whole decibels: an interface's stated level is a
         // round number, and this is how a user lands on theirs without aiming a drag at it.
-        if (calValueRect().contains(fx, cy)) {
-            nudgeParam(kInputCalLevelId,
-                       delta * geo::kCalWheelDb / (ranges::kCalMax - ranges::kCalMin));
+        // Not while the box is open for typing: the wheel would move the value underneath a field
+        // that is about to overwrite it, and the box would show neither.
+        if (calValueRect().contains(fx, cy) && mEditField != TextField::CalLevel) {
+            const double db = geo::kCalWheelDb / (fine ? kFineWheelDivisor : 1.0);
+            nudgeParam(kInputCalLevelId, delta * db / (ranges::kCalMax - ranges::kCalMin));
             return;
         }
         return;
@@ -2601,7 +2716,7 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
                 if (!hitCircle(fx, fy, static_cast<float>(pt.x), static_cast<float>(pt.y),
                                static_cast<float>(geo::kPedalKnobHitR)))
                     continue;
-                nudgeParam(kPedalParams[pedalKnobParam(i, k)].id, delta * 0.05);
+                nudgeParam(kPedalParams[pedalKnobParam(i, k)].id, step);
                 return;
             }
             for (int m = 0, nm = pedalMiniCount(i); m < nm; ++m) {
@@ -2609,8 +2724,9 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
                     continue;
                 const PedalParamSpec &spec = kPedalParams[pedalMiniParam(i, m)];
                 // A list steps by whole entries: landing between two sync divisions is not a
-                // state the parameter has, and a 0.05 nudge on a twelve-entry list would skip
-                // some of them and repeat others.
+                // state the parameter has, and a fractional nudge on a twelve-entry list would
+                // skip some of them and repeat others. Fine control does not apply, for the same
+                // reason.
                 if (spec.kind == PedalParamKind::List)
                     cycleList(spec, delta > 0 ? 1 : -1);
                 return;
@@ -2622,15 +2738,18 @@ void RationsEditorView::onMouseWheel(int x, int y, int delta)
         return;
     for (int i = 0; i < geo::kKnobCount; ++i) {
         const geo::KnobSpec &k = geo::kKnobs[i];
+        // A dial whose readout is open for typing ignores the wheel, as the dBu box does.
         if (hitCircle(fx, fy, k.cx, k.cy, k.r)) {
-            nudgeParam(k.id, delta * wheelStep(k.id));
+            if (!editingValue(k.id))
+                nudgeParam(k.id, delta * wheelStep(k.id, fine));
             return;
         }
     }
     for (int i = 0; i < 2; ++i) {
         const geo::KnobSpec &k = geo::kIoKnobs[i];
         if (hitCircle(fx, fy, k.cx, k.cy, k.r)) {
-            nudgeParam(k.id, delta * 0.05);
+            if (!editingValue(k.id))
+                nudgeParam(k.id, step);
             return;
         }
     }
@@ -2760,20 +2879,71 @@ std::string RationsEditorView::calEditSeed() const
     return dbu;
 }
 
-void RationsEditorView::beginTextEdit(TextField field, int channel)
+// A dial's readout without its unit: exactly the number the row shows, so opening the field moves
+// nothing but the highlight. paramText is the controller's own formatting of the plain value, and
+// commitTextEdit reads a plain value back, so the seed round-trips.
+std::string RationsEditorView::valueEditSeed(Vst::ParamID id) const
+{
+    return paramText(id);
+}
+
+Rect RationsEditorView::valueFieldRect(const geo::ValueField &f)
+{
+    return Rect(static_cast<float>(f.x), static_cast<float>(f.y), static_cast<float>(f.w),
+                static_cast<float>(f.h));
+}
+
+// The text of the open field: centred in its box, either the whole of it highlighted (just
+// opened — typing replaces it) or a caret. Shared by the dBu box and the dial readouts, so the two
+// cannot come to disagree about what a selected field looks like.
+void RationsEditorView::drawFieldText(Canvas &c, const Rect &box, float baseline)
+{
+    const float textW = c.stringWidth(mEditText.c_str());
+    const float textX = box.centerX() - textW * 0.5f;
+    if (editSelected()) {
+        // The seed, drawn SELECTED — which is the field saying, before anything is typed, that
+        // typing will replace it rather than append to it. Without this the rule is still the
+        // right one and the user has no way to know it until they have got a wrong answer.
+        const Rect sel(textX - 2.0f, box.y + 4.0f, textW + 4.0f, box.h - 8.0f);
+        c.setColor(geo::kAccent, 210);
+        c.fillRoundRect(sel, 2.0f);
+        c.setColor(0x0C0B0A);
+    } else {
+        c.setColor(geo::kAccentBright);
+    }
+    c.drawString(mEditText.c_str(), textX, baseline);
+    if (!editSelected()) {
+        const std::string before = mEditText.substr(0, std::min(mEditCaret, mEditText.size()));
+        drawCaret(c, box, textX + c.stringWidth(before.c_str()));
+    }
+}
+
+void RationsEditorView::beginTextEdit(TextField field, int channel, Vst::ParamID param)
 {
     if (!mController || field == TextField::NoField)
         return;
     if (field == TextField::ChannelName && (channel < 0 || channel >= kChannelCount))
         return;
+    if (field == TextField::KnobValue && param == 0)
+        return;
+    // One field at a time: opening a second one closes the first, keeping what it held.
+    commitTextEdit();
 
     mEditField = field;
     mEditChannel = channel;
+    mEditParam = field == TextField::KnobValue ? param : 0;
     // A name is seeded with the name currently SHOWN, not with the override, so a user adjusting
-    // the folder's name starts from it rather than from an empty field. A level is seeded with the
-    // level currently set, for the same reason: both are edits to something, not entries from
-    // nothing.
-    mEditText = field == TextField::ChannelName ? mController->channelName(channel) : calEditSeed();
+    // the folder's name starts from it rather than from an empty field. A level or a dial's value
+    // is seeded with what is currently set, for the same reason: all three are edits to something,
+    // not entries from nothing.
+    if (field == TextField::ChannelName)
+        mEditText = mController->channelName(channel);
+    else if (field == TextField::CalLevel)
+        mEditText = calEditSeed();
+    else
+        mEditText = valueEditSeed(param);
+    if (field != TextField::ChannelName && mEditText.size() > geo::kCalEditMaxChars)
+        mEditText.resize(geo::kCalEditMaxChars);
     mEditCaret = mEditText.size();
     // A LEVEL opens with its seed selected, so the first character typed replaces it. That is what
     // a value field is for: the number is read off an interface's spec sheet and entered whole,
@@ -2784,7 +2954,7 @@ void RationsEditorView::beginTextEdit(TextField field, int channel)
     // A NAME does not, and that is the same argument reaching the other answer: a channel's name
     // is seeded with what the folder is called precisely so it can be ADJUSTED (D14), and select-
     // on-open would put a keystroke between the user and the text they asked to start from.
-    mEditSelectAll = field == TextField::CalLevel;
+    mEditSelectAll = field != TextField::ChannelName;
     // Take the keyboard for exactly as long as this field is open, and no longer. Every exit from
     // a field — commit, cancel, a click elsewhere, a page change — runs through commitTextEdit()
     // or cancelTextEdit(), so there is no path that leaves it held.
@@ -2798,9 +2968,11 @@ void RationsEditorView::commitTextEdit()
         return;
     const TextField field = mEditField;
     const int channel = mEditChannel;
+    const Vst::ParamID param = mEditParam;
     const std::string text = mEditText;
     mEditField = TextField::NoField;
     mEditChannel = -1;
+    mEditParam = 0;
     mEditText.clear();
     mEditCaret = 0;
     mEditSelectAll = false;
@@ -2822,24 +2994,36 @@ void RationsEditorView::commitTextEdit()
         // a number invented out of a partial one — "-" on its own, or an emptied field, is a user
         // part-way through an edit and not a request for -60 dBu.
         //
-        // strtod rather than std::stod: this runs on the host's UI thread inside a click, and a
-        // throw out of here would cross the SDK's C ABI.
+        // parseTypedNumber rather than strtod, which follows the HOST's LC_NUMERIC and under a
+        // locale that writes 2,5 reads "-3.5" as -3 — see typednumber.h, which also says why it is
+        // not std::from_chars. It throws nothing, so nothing can cross the SDK's C ABI from here.
         //
         // There is deliberately no std::isfinite guard: this translation unit is built with
         // -ffast-math, under which that call folds to a constant true (D26, where exactly such a
         // guard had been compiled out of every build since it was written). It is not needed
-        // either. acceptsTextChar admits only [0-9.+-], so there is no exponent and no "nan" to
+        // either. acceptsTextChar admits only [0-9.,+-], so there is no exponent and no "nan" to
         // type, and kCalEditMaxChars caps the field at eight characters — the largest magnitude
         // that can be entered is 99999999, which is finite, and std::clamp takes it to +60.
-        const char *begin = text.c_str();
-        char *end = nullptr;
-        const double db = std::strtod(begin, &end);
-        if (end != begin) {
+        double db = 0.0;
+        if (parseTypedNumber(text, db)) {
             // Clamped rather than refused: a user who types 100 wants the loudest this offers, and
             // the box redraws at +60.0 dBu to say what they got.
             const double clamped = std::clamp(db, ranges::kCalMin, ranges::kCalMax);
             editParam(kInputCalLevelId,
                       (clamped - ranges::kCalMin) / (ranges::kCalMax - ranges::kCalMin));
+        }
+    } else if (mController && field == TextField::KnobValue) {
+        // A dial's value, in the units its readout shows — the parameter's PLAIN value, which for
+        // all six is a straight line over its range (each is a RangeParameter), so toNormalized is
+        // exact. The same rules as the dBu box: what will not parse leaves the parameter alone,
+        // and what is out of range is clamped, so the readout redraws at the limit and says what
+        // was taken.
+        double plain = 0.0;
+        const Vst::Parameter *p = mController->getParameterObject(param);
+        if (p && parseTypedNumber(text, plain)) {
+            const double lo = p->toPlain(0.0), hi = p->toPlain(1.0);
+            plain = std::clamp(plain, std::min(lo, hi), std::max(lo, hi));
+            editParam(param, p->toNormalized(plain));
         }
     }
     invalidate();
@@ -2849,6 +3033,7 @@ void RationsEditorView::cancelTextEdit()
 {
     mEditField = TextField::NoField;
     mEditChannel = -1;
+    mEditParam = 0;
     mEditText.clear();
     mEditCaret = 0;
     mEditSelectAll = false;
@@ -2856,11 +3041,6 @@ void RationsEditorView::cancelTextEdit()
     invalidate();
 }
 
-// What may be typed into the field that is open. A name takes any printable ASCII; a level takes
-// only the characters a decimal number is written with, so a field whose whole purpose is to be
-// parsed cannot be filled with something that will not parse. The check is on the CHARACTER and
-// not on the resulting string: rejecting "-" because "-" is not yet a number would make a negative
-// level untypeable, which is the shape of interface level most users have.
 // Drop the selection, optionally taking the text with it. One place rather than the six the key
 // handler would otherwise set two fields in, because a selection left set after the text under it
 // has changed would highlight characters the user did not select.
@@ -2875,11 +3055,17 @@ void RationsEditorView::clearSelection(bool erase)
     }
 }
 
+// What may be typed into the field that is open. A name takes any printable ASCII; a level or a
+// dial's value takes only the characters a decimal number is written with, so a field whose whole
+// purpose is to be parsed cannot be filled with something that will not parse. The check is on the
+// CHARACTER and not on the resulting string: rejecting "-" because "-" is not yet a number would
+// make a negative level untypeable, which is the shape of interface level most users have. Both
+// decimal marks are taken, because a user whose desktop writes 2,5 will type it that way.
 bool RationsEditorView::acceptsTextChar(char ch) const
 {
-    if (mEditField != TextField::CalLevel)
+    if (mEditField == TextField::ChannelName)
         return true;
-    return (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '+';
+    return (ch >= '0' && ch <= '9') || ch == '.' || ch == ',' || ch == '-' || ch == '+';
 }
 
 // One key. Returns whether it was consumed, which is the whole contract: the SDK warns that
@@ -2891,8 +3077,11 @@ bool RationsEditorView::handleTextKey(char16 key, int16 keyCode, int16 modifiers
         return false;
 
     switch (keyCode) {
+        // Tab commits as well, as it does in the original plug-in's fields and in most others: it
+        // is what a hand that is about to move on presses.
         case Steinberg::KEY_RETURN:
         case Steinberg::KEY_ENTER:
+        case Steinberg::KEY_TAB:
             commitTextEdit();
             return true;
         case Steinberg::KEY_ESCAPE:
@@ -2989,8 +3178,9 @@ bool RationsEditorView::handleTextKey(char16 key, int16 keyCode, int16 modifiers
     // The first character typed into a selected field replaces the whole of it.
     if (mEditSelectAll)
         clearSelection(/*erase=*/true);
+    // A dial's value is a number of the same shape as the dBu level, so it takes the same cap.
     const size_t limit =
-        mEditField == TextField::CalLevel ? geo::kCalEditMaxChars : kRenameMaxChars;
+        mEditField == TextField::ChannelName ? kRenameMaxChars : geo::kCalEditMaxChars;
     if (mEditText.size() >= limit)
         return true; // consumed, but the field is full
     mEditText.insert(mEditCaret, 1, static_cast<char>(ch));
@@ -3121,6 +3311,16 @@ void RationsEditorView::ParamChanged(Vst::ParamID id, Vst::ParamValue value)
                 mCapsPollTicks = 0;
             }
             invalidate();
+            return;
+        }
+        case kInputLevelOkId: {
+            // Reported every block, and it changes a few times a phrase at most, so it repaints
+            // only when it changes rather than on every report the way the default below does.
+            const bool lit = value > 0.5;
+            if (lit != mInputLampLit) {
+                mInputLampLit = lit;
+                invalidate();
+            }
             return;
         }
         case kActiveIndexId: {

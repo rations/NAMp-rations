@@ -52,6 +52,9 @@
 #   scripts/editor-drive.sh click 251 226 shot out.png
 #   scripts/editor-drive.sh rclick 320 200 shot out.png         # the second button
 #   scripts/editor-drive.sh drag 251 226 0 -70 shot out.png     # photographed mid-drag
+#   scripts/editor-drive.sh sdrag 251 226 0 -70 shot out.png    # the same, with Shift held (fine)
+#   scripts/editor-drive.sh dclick 721 203 shot out.png         # double-click: reset to default
+#   scripts/editor-drive.sh swheel 721 203 3 focus              # fine wheel; who has the focus
 #   scripts/editor-drive.sh click 140 110 type "JCM800" key Return shot out.png
 #   scripts/editor-drive.sh --size 640x460 click 320 200 shot cab.png
 #   scripts/editor-drive.sh click 886 106 resize 640 420 shot short.png   # the settings page,
@@ -148,19 +151,29 @@ while [ "$#" -gt 0 ]; do
             echo "  rclick $2,$3"
             sleep 1
             shift 3 ;;
-        drag)
+        dclick)
+            # A double-click: the reset gesture on a dial, a slider or a pedal knob.
+            "$poke" dclick "$window" "$2" "$3"
+            echo "  dclick $2,$3"
+            sleep 1
+            shift 3 ;;
+        focus)
+            # Print who holds the X input focus: an open field takes it and must give it back.
+            echo "  focus $("$poke" focus "$window" -) (editor window $window)"
+            shift 1 ;;
+        drag|sdrag)
             # Photograph from here while the drag runs in the background: the readout exists only
-            # for as long as the button is down.
-            "$poke" drag "$window" "$2" "$3" "$4" "$5" &
+            # for as long as the button is down. sdrag holds Shift throughout, for fine control.
+            "$poke" "$1" "$window" "$2" "$3" "$4" "$5" &
             drag_pid=$!
             sleep 1
             if [ "${6:-}" = "shot" ]; then
                 import -window "$window" "$7"
-                echo "  drag $2,$3 by $4,$5 -> $7 (mid-drag)"
+                echo "  $1 $2,$3 by $4,$5 -> $7 (mid-drag)"
                 wait "$drag_pid" 2>/dev/null
                 shift 7
             else
-                echo "  drag $2,$3 by $4,$5"
+                echo "  $1 $2,$3 by $4,$5"
                 wait "$drag_pid" 2>/dev/null
                 shift 5
             fi ;;
@@ -169,14 +182,16 @@ while [ "$#" -gt 0 ]; do
             echo "  type '$2'"
             sleep 1
             shift 2 ;;
-        key)
-            "$poke" key "$window" "$2"
-            echo "  key $2"
+        key|press)
+            # `press` leaves the input focus alone; `key` moves it to the window first. Use press
+            # when what is being tested is who holds the focus afterwards.
+            "$poke" "$1" "$window" "$2"
+            echo "  $1 $2"
             sleep 1
             shift 2 ;;
-        wheel)
-            "$poke" wheel "$window" "$2" "$3" "$4"
-            echo "  wheel $2,$3 x$4"
+        wheel|swheel)
+            "$poke" "$1" "$window" "$2" "$3" "$4"
+            echo "  $1 $2,$3 x$4"
             sleep 1
             shift 4 ;;
         resize)

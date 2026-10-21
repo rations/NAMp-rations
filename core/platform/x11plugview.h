@@ -42,6 +42,7 @@
 
 #include "public.sdk/source/vst/vsteditcontroller.h"
 #include "pluginterfaces/gui/iplugview.h"
+#include "platform/pointermods.h"
 
 #include <cairo/cairo.h>
 
@@ -98,25 +99,29 @@ protected:
     virtual void onDraw(cairo_t *cr) = 0;
 
     // Pointer input. Buttons are X button numbers (1 = left, 2 = middle,
-    // 3 = right). Wheel steps arrive as delta +1 (up) or -1 (down).
-    virtual void onMouseDown(int x, int y, int button)
+    // 3 = right). Wheel steps arrive as delta +1 (up) or -1 (down). `mods` is
+    // a PointerMod mask (platform/pointermods.h). `doubleClick` is set on the
+    // second press of the same button, close in time and place to the first:
+    // X has no double-click event of its own, so it is derived here once
+    // rather than by every editor.
+    virtual void onMouseDown(int x, int y, int button, unsigned mods, bool doubleClick)
     {
-        (void)x, (void)y, (void)button;
+        (void)x, (void)y, (void)button, (void)mods, (void)doubleClick;
     }
     virtual void onMouseUp(int x, int y, int button)
     {
         (void)x, (void)y, (void)button;
     }
-    virtual void onMouseMove(int x, int y)
+    virtual void onMouseMove(int x, int y, unsigned mods)
     {
-        (void)x, (void)y;
+        (void)x, (void)y, (void)mods;
     }
     virtual void onMouseLeave()
     {
     }
-    virtual void onMouseWheel(int x, int y, int delta)
+    virtual void onMouseWheel(int x, int y, int delta, unsigned mods)
     {
-        (void)x, (void)y, (void)delta;
+        (void)x, (void)y, (void)delta, (void)mods;
     }
 
     // Keyboard, taken from the PLATFORM window rather than handed in by the host. Return true
@@ -239,6 +244,13 @@ private:
     bool mDirty = true;
     bool mMapped = false;
     int mTicksUnmapped = 0;
+
+    // The last left/middle/right press, for double-click detection. Time is the X server's
+    // millisecond clock from the event itself, never the local clock, so a slow round trip cannot
+    // turn one click into two.
+    unsigned int mLastPressButton = 0;
+    unsigned long mLastPressTime = 0;
+    int mLastPressX = 0, mLastPressY = 0;
 
     // Keyboard focus, held only while a text field is open. mPrevFocus is whatever had the focus
     // when we took it, so it can be given back rather than left wherever we put it.

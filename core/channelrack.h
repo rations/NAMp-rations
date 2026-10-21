@@ -136,6 +136,11 @@ public:
     }
     // Normalized index of the capture sounding in that channel.
     double activeIndexNorm() const;
+    // The input calibration gain of that capture, for the input-level lamp: 1.0 unless Calibrate
+    // is on and the capture states its input level, and 0 when the sounding channel has no model
+    // bound. Read from the channel soundingChannel() names, so the lamp and the channel LEDs
+    // always describe the same capture. Audio thread only: both ends of a fade belong to it.
+    double soundingInputGain() const;
     bool playable() const;
     // Fraction of all four banks that is built and primed. One number rather than four, because
     // what the editor shows is one progress line.

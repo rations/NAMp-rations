@@ -52,7 +52,7 @@ namespace
 
 // The same figures, for the same reasons, as the other two backends'. See jackclient.cpp.
 constexpr int32 kMaxInputParameters = 64;
-constexpr int32 kMaxOutputParameters = 8;
+constexpr int32 kMaxOutputParameters = AudioBackend::kFeedbackSlots;
 constexpr int32 kMaxEvents = 256;
 
 constexpr int kMidiStatusMask = 0xf0;

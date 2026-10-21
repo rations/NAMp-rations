@@ -240,6 +240,8 @@ tresult PLUGIN_API RationsProcessor::setupProcessing(ProcessSetup &setup)
     // section has to be said again here rather than assumed to have survived.
     publishOutputMode();
 
+    mInputLamp.reset(mSampleRate);
+
     // Bypass ramp length in samples, at least one sample so the step is finite.
     const double rampSamples = std::max(1.0, engine::kBypassRampMs * 0.001 * mSampleRate);
     mBypassStep = 1.0 / rampSamples;
@@ -298,6 +300,8 @@ tresult PLUGIN_API RationsProcessor::setActive(TBool state)
         mPedals.reset();
         // Come up dry and ramp in, rather than opening on a half-built bank.
         mBypassMix = 1.0;
+        // And with the lamp dark, rather than holding a light from before the deactivation.
+        mInputLamp.reset(mSampleRate);
     } else {
         // Anything the audio thread retired is unreachable from it now; free it here.
         for (int slot = 0; slot < kIrSlotCount; ++slot)
@@ -697,15 +701,25 @@ tresult PLUGIN_API RationsProcessor::process(ProcessData &data)
             inPeak = std::max(inPeak, std::fabs(static_cast<double>(in[i])));
             outPeak = std::max(outPeak, std::fabs(static_cast<double>(outL[i])));
         }
-        writeOutputPoint(data.outputParameterChanges, kInputMeterId, peakToMeterNorm(inPeak), 0);
-        writeOutputPoint(data.outputParameterChanges, kOutputMeterId, peakToMeterNorm(outPeak), 0);
-        writeOutputPoint(data.outputParameterChanges, kBankProgressId, mRack.progress(), 0);
-        writeOutputPoint(data.outputParameterChanges, kActiveIndexId, mRack.activeIndexNorm(), 0);
-        // Which channel is SOUNDING, which is not always the one kChannelId asks for: a switch
-        // whose target capture is still being built is held, and the editor's LED must not light
-        // over a channel that is not there yet. The parameter is the request; this is the answer.
-        writeOutputPoint(data.outputParameterChanges, kActiveChannelId,
-                         normFromChannel(mRack.soundingChannel()), 0);
+        // In kFeedbackIds' order, and written by walking that list, because the list is also what
+        // every standalone reserves its output queue against. The size check makes a value added
+        // here without its id, or an id without its value, a compile error.
+        const double feedback[] = {
+            peakToMeterNorm(inPeak),
+            peakToMeterNorm(outPeak),
+            mRack.progress(),
+            mRack.activeIndexNorm(),
+            // Which channel is SOUNDING, which is not always the one kChannelId asks for: a switch
+            // whose target capture is still being built is held, and the editor's LED must not
+            // light over a channel that is not there yet. The parameter is the request; this is
+            // the answer.
+            normFromChannel(mRack.soundingChannel()),
+            mInputLamp.lit() ? 1.0 : 0.0,
+        };
+        static_assert(sizeof(feedback) / sizeof(feedback[0]) == kFeedbackCount,
+                      "one feedback value per entry of kFeedbackIds");
+        for (int f = 0; f < kFeedbackCount; ++f)
+            writeOutputPoint(data.outputParameterChanges, kFeedbackIds[f], feedback[f], 0);
     }
 
     return kResultOk;
@@ -728,6 +742,20 @@ void RationsProcessor::applyDsp(const float *in, float *outL, float *outR, int32
         mDryBuf[static_cast<size_t>(i)] = x;
         mWorkBufInput[static_cast<size_t>(i)] = x * inputGain;
     }
+
+    // 1a. The input-level lamp, fed the model input as the Input knob leaves it, times the
+    // sounding capture's own input calibration: exactly the signal that capture's model will be
+    // fed, apart from the stages below that change it on purpose. Tapped HERE, before the gate's
+    // trigger and before the PRE pedals, so a Boost (a deliberate drive into the amp) does not
+    // switch off the lamp that is there to check the gain staging under it. In the rack the same
+    // tap counts a hosted boost, because hosted plug-ins run before the amp's Input knob; that is
+    // where each product's pedals sit, not a choice made here.
+    //
+    // At 48 kHz this is the native-rate signal sample for sample, because the resampler is a
+    // call-through. At any other rate it is the host-rate signal, and its peak can differ from the
+    // native-rate one by whatever inter-sample peak the resampler reconstructs - not measured, and
+    // the reason the lamp reads here anyway: the native-rate signal exists only inside the rack.
+    mInputLamp.process(mWorkBufInput.data(), numSamples, mRack.soundingInputGain());
 
     // 2. Noise-gate trigger (level detection; returns the gated signal).
     DSP_SAMPLE **processingInput = &mWorkPtrInput;

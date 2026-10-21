@@ -19,7 +19,8 @@
 //      burst is still the audio thread: it feeds the incoming channel out of the input ring inside
 //      the same process() call, so every rule that applies to the steady state applies to it. This
 //      is also where a ring read, a fade buffer or a chunk stage that was sized wrong would show
-//      up, because those only run during a switch.
+//      up, because those only run during a switch. The input-level lamp runs in the same loop,
+//      fed the gain soundingInputGain() reads across the switch, as the processor feeds it.
 //   5. The cabinet stage with both IR slots filled and the blend dial sweeping. AudioDSPTools
 //      sizes an ImpulseResponse's history and output buffers on its FIRST Process call, which for
 //      an IR loaded mid-session would be a malloc on the audio thread. The plug-in avoids that by
@@ -34,6 +35,7 @@
 #include "channelrack.h"
 #include "crossfadeengine.h"
 #include "engineconfig.h"
+#include "inputlevellamp.h"
 #include "irblend.h"
 #include "midilearn.h"
 #include "modelbank.h"
@@ -201,6 +203,9 @@ int main(int argc, char **argv)
             return 1;
         }
 
+        Rations::InputLevelLamp lamp;
+        lamp.reset(Rations::kNativeSampleRate);
+
         // The stomp period is deliberately shorter than a whole switch takes, so some requests
         // land mid-catch-up and some mid-fade. Both are the paths that only exist here.
         auto drive = [&](int blocks) {
@@ -220,15 +225,17 @@ int main(int argc, char **argv)
                               0.25 + 0.5 * std::fabs(std::fmod(t, 2.0) - 1.0));
                 rack.setLevel(Rations::kChannelOd1, 4.0 - 3.0 * std::fabs(std::fmod(t, 2.0) - 1.0));
                 rack.requestChannel(want);
+                lamp.process(in.data(), kBlock, rack.soundingInputGain());
                 rack.processNative(&ip, &op, kBlock);
             }
         };
         drive(8); // warm anything lazily sized before the count starts
 
-        printf("counting       channel rack, stomping between two channels, trims moving\n");
+        printf("counting       channel rack, stomping between two channels, trims moving, lamp "
+               "running\n");
         allocation_tracking::run_allocation_test_no_allocations(
             nullptr, [&] { drive(200); }, nullptr,
-            "channel rack, stomping between two channels, trims moving");
+            "channel rack, stomping between two channels, trims moving, lamp running");
 
         rack.stop();
         rack.releaseBanks();

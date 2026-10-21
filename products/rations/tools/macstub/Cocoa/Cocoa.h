@@ -132,6 +132,7 @@ enum {
 @interface NSEvent : NSObject
 - (NSPoint)locationInWindow;
 - (NSEventModifierFlags)modifierFlags;
+- (NSInteger)clickCount;
 - (CGFloat)deltaY;
 - (NSString *)characters;
 - (NSString *)charactersIgnoringModifiers;
