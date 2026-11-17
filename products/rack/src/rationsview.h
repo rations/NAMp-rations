@@ -145,6 +145,10 @@ private:
 
     void drawKnob(Canvas &c, const geo::KnobSpec &k, bool enabled);
     void drawKnobAt(Canvas &c, float cx, float cy, float r, double norm);
+    // The same dial drawn from a NAMED bitmap rather than from the style the user chose, which is
+    // what the settings page's preview needs. Every dial of the amp's own goes through
+    // drawKnobAt, which is the one place the choice is consulted.
+    void drawDialArt(Canvas &c, const char *art, float cx, float cy, float r, double norm);
     void drawToggle(Canvas &c, const geo::ToggleSpec &t, bool on);
     // Whether the Slim control exists for what is loaded right now. Read by the painter, the hit
     // test and ModelCapsChanged, so all three agree — see the definition.
@@ -351,6 +355,9 @@ private:
     static Rect calToggleRect();
     static Rect calValueRect();
     void drawOutputSection(Canvas &c);
+    // The dials section's three radio rows, and the preview beside them.
+    static Rect dialStyleRow(int index);
+    void drawDialSection(Canvas &c);
     // Whether an output control can do anything, which depends on what the SOUNDING channel's
     // captures state about their own levels. Not on the requested channel: a switch that is being
     // held has not happened yet, and the answer has to describe what the player is hearing.

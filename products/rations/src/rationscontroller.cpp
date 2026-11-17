@@ -561,6 +561,15 @@ tresult PLUGIN_API RationsController::setComponentState(IBStream *state)
         return kResultFalse;
     setParamNormalized(kSlimId, std::clamp(slim, 0.0, 1.0));
 
+    // Version 10 onwards: the dial style, the last field. Read here for the reason the capture
+    // paths are - it is not a parameter, and the editor has no other way to learn it - and, like
+    // them, nothing is sent back: the processor read the same value out of the same blob. A
+    // version 1-9 project opens with the Black dials.
+    int32 dialStyle = kDialBlack;
+    if (version >= 10 && !streamer.readInt32(dialStyle))
+        return kResultFalse;
+    mDialStyle = dialStyleFromStored(dialStyle);
+
     refreshParamTitles();
     notifyViewFiles();
     return kResultOk;
@@ -827,6 +836,28 @@ tresult RationsController::setChannelName(int channel, const char8 *name)
     // Updated whatever the processor said. A name is not a load: there is nothing for the other
     // half to refuse, and it holds a copy only because it is the half that writes the state blob.
     mChannelNameOverride[channel] = n;
+    notifyViewFiles();
+    return result;
+}
+
+//------------------------------------------------------------------------
+// The dial style. The same shape as setChannelName above and for the same reason: the editor's
+// copy is what the panel draws from, and the processor holds one only because it writes the blob.
+tresult RationsController::setDialStyle(int style)
+{
+    if (style < 0 || style >= kDialStyleCount)
+        return kInvalidArgument;
+
+    IPtr<Vst::IMessage> message = owned(allocateMessage());
+    if (!message)
+        return kResultFalse;
+    message->setMessageID(kMsgDialStyle);
+    message->getAttributes()->setInt(kDialStyleAttr, style);
+    const tresult result = sendMessage(message);
+
+    // Updated whatever the processor said, as a name is: there is nothing for the other half to
+    // refuse, and a dial that did not change when it was clicked would be the worse failure.
+    mDialStyle = static_cast<DialStyle>(style);
     notifyViewFiles();
     return result;
 }

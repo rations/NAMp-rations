@@ -895,6 +895,14 @@ void RationsEditorView::composeSettings(Canvas &c)
                  static_cast<float>(geo::kOutputFootnoteY));
     c.drawString(geo::kOutputFootnote2, cx - c.stringWidth(geo::kOutputFootnote2) * 0.5f,
                  static_cast<float>(geo::kOutputFootnote2Y));
+
+    // Section 5: the dials. Last because it is the one thing here that changes nothing audible.
+    c.setFont(Font::Title);
+    c.setFontSize(geo::kSettingsHeadingSize);
+    c.setColor(geo::kTextColor);
+    c.drawString(geo::kDialHeading, cx - c.stringWidth(geo::kDialHeading) * 0.5f,
+                 static_cast<float>(geo::kDialHeadingY));
+    drawDialSection(c);
 }
 
 //------------------------------------------------------------------------
@@ -1103,6 +1111,15 @@ Rect RationsEditorView::outputModeRow(int index)
                 static_cast<float>(geo::kOutputRowW), static_cast<float>(geo::kOutputRowH));
 }
 
+// The dials section's rows are the output section's rows further down the page: same column, same
+// width, same pitch. One shape for both lists, so a click target learned on one is the other's.
+Rect RationsEditorView::dialStyleRow(int index)
+{
+    return Rect(static_cast<float>(geo::kMidiRowX),
+                static_cast<float>(geo::kDialRowY0 + index * geo::kOutputRowPitch),
+                static_cast<float>(geo::kOutputRowW), static_cast<float>(geo::kOutputRowH));
+}
+
 Rect RationsEditorView::calToggleRect()
 {
     return Rect(static_cast<float>(geo::kCalToggleCX) - geo::kCalPillW * 0.5f,
@@ -1151,6 +1168,44 @@ bool RationsEditorView::inputCalibrationAvailable() const
     if (mController->entryCount(active) <= 0)
         return true; // nothing loaded, so nothing to disable it over
     return mController->bankHasInputLevel(active);
+}
+
+//------------------------------------------------------------------------
+// The dials section: three radio rows, and one dial beside them wearing the style that is selected.
+//
+// The rows are drawn exactly as the output section's are, less the gating - a style is art, and
+// there is nothing a capture could fail to honour about it. The preview is the reason the section
+// can be used from this page at all: the dials it changes are on a different page, and a list of
+// three names is not something anyone can choose from without seeing what the names mean.
+void RationsEditorView::drawDialSection(Canvas &c)
+{
+    const DialStyle current = mController ? mController->dialStyle() : kDialBlack;
+
+    for (int i = 0; i < kDialStyleCount; ++i) {
+        const Rect row = dialStyleRow(i);
+        const float dotCX = row.x + geo::kOutputDotCX;
+        const float dotCY = row.centerY();
+
+        c.setColor(geo::kAccent);
+        c.setPenSize(1.5f);
+        c.strokeEllipse(dotCX, dotCY, geo::kOutputDotR, geo::kOutputDotR);
+        if (i == current) {
+            c.setColor(geo::kAccentBright);
+            c.fillEllipse(dotCX, dotCY, geo::kOutputDotFillR, geo::kOutputDotFillR);
+        }
+        c.setPenSize(1.0f);
+
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(geo::kDialStyleNames[i], row.x + static_cast<float>(geo::kOutputTextX),
+                     dotCY + geo::kMidiRowTextSize * 0.36f);
+    }
+
+    // At mid-travel, which is where the art carries its pointer straight up.
+    drawDialArt(c, geo::kDialStyleImage[current], static_cast<float>(geo::kDialPreviewCX),
+                static_cast<float>(geo::kDialPreviewCY), static_cast<float>(geo::kDialPreviewR),
+                0.5);
 }
 
 void RationsEditorView::drawOutputSection(Canvas &c)
@@ -1346,6 +1401,15 @@ bool RationsEditorView::handleSettingsClick(float x, float y, bool doubleClick)
         invalidate();
         return true;
     }
+    // The dial style. Not a parameter, so it goes to the controller by name rather than through
+    // editParam: there is no host automation to open a gesture for.
+    for (int i = 0; i < kDialStyleCount; ++i) {
+        if (!dialStyleRow(i).contains(x, y))
+            continue;
+        mController->setDialStyle(i);
+        invalidate();
+        return true;
+    }
     // Only the TOGGLE is gated on what the sounding channel's captures state; the level beside it
     // is a property of the user's interface and stays editable on every channel. See the comment
     // in drawOutputSection, which draws the same split.
@@ -1390,13 +1454,24 @@ bool RationsEditorView::handleSettingsClick(float x, float y, bool doubleClick)
 }
 
 //------------------------------------------------------------------------
-// A dial is the bitmap rotated about its own centre. The art carries a gold pointer straight up at
-// mid-travel, so nothing is drawn on top of it — a code-drawn notch or value arc would fight it.
+// A dial is the bitmap rotated about its own centre. The art carries its own pointer straight up
+// at mid-travel, so nothing is drawn on top of it — a code-drawn notch or value arc would fight it.
+//
+// WHICH bitmap is the user's choice on the settings page (DialStyle), asked of the controller here
+// and nowhere else, so every dial of the amp's own changes together. An editor with no controller
+// draws the default.
 void RationsEditorView::drawKnobAt(Canvas &c, float cx, float cy, float r, double norm)
+{
+    const DialStyle style = mController ? mController->dialStyle() : kDialBlack;
+    drawDialArt(c, geo::kDialStyleImage[style], cx, cy, r, norm);
+}
+
+void RationsEditorView::drawDialArt(Canvas &c, const char *art, float cx, float cy, float r,
+                                    double norm)
 {
     const Rect face(cx - r, cy - r, 2.0f * r, 2.0f * r);
     const int px = static_cast<int>(std::lround(2.0 * r * mScale * kDialSupersample));
-    if (cairo_surface_t *dial = mImages.getScaled("dial", px, px)) {
+    if (cairo_surface_t *dial = mImages.getScaled(art, px, px)) {
         c.drawImageRotated(dial, face, (norm - 0.5) * geo::kKnobSweepDeg);
     } else {
         c.setColor(0x28282E);

@@ -260,6 +260,13 @@ private:
     std::string mCapturePath[kChannelCount];
     bool mCaptureIsDir[kChannelCount] = {false, false, false, false};
     std::string mChannelName[kChannelCount];
+    // Which art the editor draws the dials with (a DialStyle). Here for the same reason the names
+    // are: this half writes the state blob. Nothing on the audio path reads it.
+    //
+    // Atomic, unlike the strings above, because its writers are not promised to be one thread:
+    // notify() runs on whichever thread delivers the editor's messages, and setState/getState are
+    // called from wherever the host saves from.
+    std::atomic<Steinberg::int32> mDialStyle{kDialBlack};
 
     double mSampleRate = kNativeSampleRate;
     Steinberg::int32 mMaxBlockSize = 512;

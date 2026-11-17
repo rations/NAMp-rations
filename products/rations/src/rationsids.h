@@ -313,6 +313,32 @@ inline OutputMode outputModeFromNorm(double norm)
     return static_cast<OutputMode>(i);
 }
 
+// Which art the amp's own dials are drawn with: the user's choice on the settings page.
+//
+// It is NOT a parameter, and that is deliberate. Nothing about it is audio, so a host has nothing
+// to automate; and a parameter is a control port in the LV2 bundle, which every host would then
+// list beside the gain. It travels the way a channel's name does (kMsgDialStyle) and is saved the
+// way one is - by the processor, because the processor is the half that writes the state blob.
+//
+// The order is a SAVED VALUE and must not be reordered. It is also the order gui/make_knob.sh
+// draws the bitmaps in and the order the settings page lists them. Black is first because it is
+// what a project saved before the choice existed opens as.
+enum DialStyle : int {
+    kDialBlack = 0,   // knurled black grip, gold ring, spun black face, gold wedge
+    kDialGold = 1,    // spun gold face, black grip, black line
+    kDialPointer = 2, // a pointer knob, gold-edged so its shape reads on a black faceplate
+    kDialStyleCount = 3,
+};
+
+// A stored style, snapped to one this build has. A state blob and a message are both untrusted
+// input, and a later build with a fourth style is the ordinary way an out-of-range value arrives:
+// that project should open with its dials drawn the default way, not be refused over how its knobs
+// look.
+inline constexpr DialStyle dialStyleFromStored(Steinberg::int64 stored)
+{
+    return (stored >= 0 && stored < kDialStyleCount) ? static_cast<DialStyle>(stored) : kDialBlack;
+}
+
 // Plain-value ranges shared by the processor (denormalization) and the controller
 // (RangeParameter setup). Keep the two sides in sync via these.
 namespace ranges
@@ -675,7 +701,20 @@ inline double pedalNorm(const PedalParamSpec &spec, double plain)
 // so is what that project actually sounded like. That is also the rule the upstream plug-in
 // applies to its own older presets, and for the same reason: the safe default for a size setting
 // is the size the audio was made at.
-inline constexpr Steinberg::int32 kStateVersion = 8;
+//
+// Version 9 is never WRITTEN by this plug-in. It is the sibling rack product's: the same blob with
+// its pedalboard block written empty, and nothing appended. The two products share this format and
+// each takes the next number the other has not used, so that a version means one shape whichever
+// of them wrote it. A version 9 blob is therefore read here exactly as a version 8 one - its pedal
+// count is zero, which the length prefix already handles, and every pedal keeps its default.
+//
+// Version 10 appends the dial style - one int32, a DialStyle, after Slim, which is the end of the
+// blob. An int32 rather than the normalized double every parameter here is stored as, because it
+// is not a parameter: there is no range to widen later, only a list to add to. A version 1-9
+// project opens with the Black dials, which are the redrawn form of the only dial every earlier
+// build had. A value this build does not know is read as Black too rather than refused - see
+// dialStyleFromStored.
+inline constexpr Steinberg::int32 kStateVersion = 10;
 
 // The cabinet's two IR slots. Two, not N: the second is a blend partner for the first, and a list
 // of them would be a different feature with a different UI. Slot 0 is A, slot 1 is B.
@@ -713,6 +752,12 @@ inline constexpr const char *kMsgIsDirAttr = "isDir";
 // basename of whatever is loaded, and then to its default name.
 inline constexpr const char *kMsgChannelName = "RationsChannelName";
 inline constexpr const char *kMsgNameAttr = "name";
+
+// The dial style, controller -> processor: int "style", a DialStyle. Like a channel's name it
+// travels to the processor for one reason only - the processor is what writes the state blob - and
+// nothing on the audio path ever reads it.
+inline constexpr const char *kMsgDialStyle = "RationsDialStyle";
+inline constexpr const char *kDialStyleAttr = "style";
 
 // The editor asking the processor to re-send its capability message. The four banks are scanned,
 // parsed and built on worker threads, so at the moment a load is acknowledged the capture names do
