@@ -178,6 +178,24 @@ bool sendMessage(Vst::HostApplication &host, Vst::IComponent *component, const c
     return cp->notify(msg) == kResultOk;
 }
 
+// The same, for a message that carries one integer under a name of its own rather than a row.
+bool sendInt(Vst::HostApplication &host, Vst::IComponent *component, const char *messageID,
+             const char *attr, int value)
+{
+    FUnknownPtr<Vst::IConnectionPoint> cp(component);
+    if (!cp)
+        return false;
+    TUID iid;
+    memcpy(iid, Vst::IMessage::iid, sizeof(TUID));
+    Vst::IMessage *raw = nullptr;
+    if (host.createInstance(iid, iid, reinterpret_cast<void **>(&raw)) != kResultOk || !raw)
+        return false;
+    IPtr<Vst::IMessage> msg = owned(raw);
+    msg->setMessageID(messageID);
+    msg->getAttributes()->setInt(attr, value);
+    return cp->notify(msg) == kResultOk;
+}
+
 // What one block of processing is told and what it answers back. Everything the pedal does
 // travels one of these two ways, so this is the whole interface under test.
 struct Block {
@@ -317,7 +335,7 @@ std::pair<Vst::ParamID, double> cc(int number, int value)
 // arithmetic, which is the version of "a second copy of the layout" that fails loudly when the
 // layout changes under it instead of returning four plausible wrong numbers.
 bool readTrims(MemoryStream &s, double out[kChannelCount], int32 *slotCount = nullptr,
-               double *eqOn = nullptr, double *slim = nullptr)
+               double *eqOn = nullptr, double *slim = nullptr, int32 *dialStyle = nullptr)
 {
     s.seek(0, IBStream::kIBSeekSet, nullptr);
     IBStreamer streamer(&s, kLittleEndian);
@@ -371,7 +389,9 @@ bool readTrims(MemoryStream &s, double out[kChannelCount], int32 *slotCount = nu
         *eqOn = 1.0; // what a version 1-6 project opens as
     if (slim)
         *slim = 1.0; // and what a version 1-7 project opens as: the whole model
-    if (!slotCount && !eqOn && !slim)
+    if (dialStyle)
+        *dialStyle = kDialBlack; // and what a version 1-9 project opens as
+    if (!slotCount && !eqOn && !slim && !dialStyle)
         return true;
 
     // On to the length-prefixed slot, which means reading past the output section and the four
@@ -423,9 +443,20 @@ bool readTrims(MemoryStream &s, double out[kChannelCount], int32 *slotCount = nu
     // Version 8 onwards: Slim, after it, and now the end of the blob. Same rule and same fixture
     // trick as the EQ double above it: a version-7 blob made by rewriting the version word still
     // physically CARRIES this value, so a reader that forgot its guard would find it.
-    if (version < 8 || !slim)
+    if (version < 8 || (!slim && !dialStyle))
         return true;
-    return streamer.readDouble(*slim);
+    double slimValue = 1.0;
+    if (!streamer.readDouble(slimValue))
+        return false;
+    if (slim)
+        *slim = slimValue;
+    // Version 10 onwards: the dial style, one int32 after Slim, and now the end of the blob.
+    // (Version 9 changed what the pedalboard slot holds and appended nothing.) Guarded by the
+    // version for the reason the two above are: a version 8 or 9 fixture made from a version 10
+    // blob still physically carries it.
+    if (version < 10 || !dialStyle)
+        return true;
+    return streamer.readInt32(*dialStyle);
 }
 
 // Rewrite a state blob's MIDI block: a different version word, a different number of rows, and a
@@ -1227,6 +1258,106 @@ int main(int argc, char **argv)
             Block slimUp;
             slimUp.params.push_back({kSlimId, 1.0});
             rig.run(slimUp);
+            saved.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&saved) == kResultOk, "the blob under test is restored");
+        }
+
+        // --- the dial style, which is the whole of state version 10 --------------------------
+        //
+        // Not a parameter, so it is set the way the editor sets it - by a message - and there
+        // is no echo to read back: what proves it is the blob. It is the last field, one int32
+        // after Slim, and it is asked the three things Slim is asked: that it is written, that it
+        // survives a round trip, and that an older blob which physically carries it does not have
+        // it read.
+        //
+        // The editor half has no getter this tool can reach - the controller is the plug-in's own
+        // object behind an interface - so it is asked the one question whose answer shows from
+        // outside: a version 10 blob cut off before the field must be REFUSED by both halves. A
+        // controller that walked the blob and stopped at Slim would accept it.
+        {
+            check(sendInt(hostContext, component, kMsgDialStyle, kDialStyleAttr, kDialPointer),
+                  "the dial style message is accepted");
+            check(!sendInt(hostContext, component, kMsgDialStyle, kDialStyleAttr, kDialStyleCount),
+                  "... and a style this build does not have is refused, not stored");
+
+            MemoryStream withDial;
+            int32 dial = -1;
+            double t[kChannelCount] = {};
+            check(component->getState(&withDial) == kResultOk &&
+                      readTrims(withDial, t, nullptr, nullptr, nullptr, &dial) &&
+                      dial == kDialPointer,
+                  "the dial style is written at the end of the blob");
+
+            withDial.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(component->setState(&withDial) == kResultOk, "a version 10 blob loads");
+            MemoryStream again;
+            int32 dialAgain = -1;
+            check(component->getState(&again) == kResultOk &&
+                      readTrims(again, t, nullptr, nullptr, nullptr, &dialAgain) &&
+                      dialAgain == kDialPointer,
+                  "... and the style is still Pointer after the round trip");
+            withDial.seek(0, IBStream::kIBSeekSet, nullptr);
+            check(controller->setComponentState(&withDial) == kResultOk,
+                  "... and the editor accepts the same blob");
+
+            // Cut off before the field: four bytes short. Both halves must refuse it.
+            const TSize whole = withDial.getSize();
+            {
+                MemoryStream cut(withDial.getData(), whole - static_cast<TSize>(sizeof(int32)));
+                cut.seek(0, IBStream::kIBSeekSet, nullptr);
+                check(component->setState(&cut) != kResultOk,
+                      "a version 10 blob that ends before the dial style is refused");
+                cut.seek(0, IBStream::kIBSeekSet, nullptr);
+                check(controller->setComponentState(&cut) != kResultOk,
+                      "... and by the editor, which is what shows it reads the field at all");
+            }
+
+            // A style from a later build: the last four bytes rewritten to a value this build has
+            // no art for. The rack must still open, with the default dials.
+            {
+                std::vector<char> future(withDial.getData(), withDial.getData() + whole);
+                const int32 unknown = 99; // little-endian on every platform this builds for
+                memcpy(future.data() + future.size() - sizeof(int32), &unknown, sizeof(int32));
+                MemoryStream blob(future.data(), static_cast<TSize>(future.size()));
+                blob.seek(0, IBStream::kIBSeekSet, nullptr);
+                check(component->setState(&blob) == kResultOk,
+                      "a blob naming a style this build does not have still loads");
+                MemoryStream back;
+                int32 dialBack = -1;
+                check(component->getState(&back) == kResultOk &&
+                          readTrims(back, t, nullptr, nullptr, nullptr, &dialBack) &&
+                          dialBack == kDialBlack,
+                      "... and opens with the Black dials");
+                blob.seek(0, IBStream::kIBSeekSet, nullptr);
+                check(controller->setComponentState(&blob) == kResultOk,
+                      "... and the editor agrees with it");
+            }
+
+            // Older blobs built from the version 10 one: this product's previous version, and the
+            // one before it. Both still have the int sitting in their tail.
+            for (int32 older : {int32(9), int32(8)}) {
+                withDial.seek(0, IBStream::kIBSeekSet, nullptr);
+                check(component->setState(&withDial) == kResultOk, "the style is Pointer again");
+                std::vector<char> pre;
+                check(rewriteMidiBlock(withDial, older, kMidiLearnRowCount, pre),
+                      "an older blob can be built from it");
+                MemoryStream blob(pre.data(), static_cast<TSize>(pre.size()));
+                blob.seek(0, IBStream::kIBSeekSet, nullptr);
+                char what[96];
+                snprintf(what, sizeof(what), "a version %d blob loads", static_cast<int>(older));
+                check(component->setState(&blob) == kResultOk, what);
+                MemoryStream back;
+                int32 dialBack = -1;
+                check(
+                    component->getState(&back) == kResultOk &&
+                        readTrims(back, t, nullptr, nullptr, nullptr, &dialBack) &&
+                        dialBack == kDialBlack,
+                    "... and opens with the Black dials, not with the int its tail still carries");
+                blob.seek(0, IBStream::kIBSeekSet, nullptr);
+                check(controller->setComponentState(&blob) == kResultOk,
+                      "... and the editor agrees with it");
+            }
+
             saved.seek(0, IBStream::kIBSeekSet, nullptr);
             check(component->setState(&saved) == kResultOk, "the blob under test is restored");
         }

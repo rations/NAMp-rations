@@ -539,27 +539,30 @@ Editor art and the scripts that generate it (gui/, resources/img/):
 
   Copyright (c) 2026 rations — MIT Licence.
 
-  The amp-head panel (head-base.png), the speaker cabinet (cabinet-base.png), the
-  dial and the indicator lamps are the author's own artwork. The bat-handle toggle
-  switches (switch_up_ring.png, switch_down_ring.png) and the meter track are
-  generated procedurally by gui/make_switch.sh and gui/make_meter.sh (ImageMagick 7)
-  rather than authored as raster files, and Folder.svg is the author's own, drawn to
-  match the icon set below. The wordmark is two things together: the NAMp badge
+  The amp-head panel (head-base.png), the speaker cabinet (cabinet-base.png) and
+  the indicator lamps are the author's own artwork. The dials (dial.png,
+  dial_gold.png, dial_pointer.png and, in NAMp Rations, dial_pedal.png), the
+  bat-handle toggle switches (switch_up_ring.png, switch_down_ring.png) and the
+  meter track are generated procedurally by gui/make_knob.sh, gui/make_switch.sh
+  and gui/make_meter.sh (ImageMagick 7) rather than authored as raster files, and
+  Folder.svg is the author's own, drawn to match the icon set below. The wordmark is two things together: the NAMp badge
   (namp-badge-base.png, the author's own artwork, trimmed to its ink by
   gui/make_assets.sh into the shipped namp-badge.png) with the product's word drawn
   as text in Michroma beneath it at run time. Each product's application icon
   (packaging/icons/) is that same pair composed onto the head by gui/make_icon.sh.
 
-  gui/make_knob.sh, and gui/make_switch.sh's ancestor make_footswitch.sh, were
-  originally written by the same author for a sibling project that is licensed
-  GPL-3.0-or-later, and they carried that project's GPL-3 header. That project is
-  GPL-3 solely because it links JUCE. Neither script contains JUCE code or derives
-  from anything GPL-licensed: both are pure ImageMagick 7 command pipelines (masks,
-  radial gradients, and the CopyOpacity / DstIn / screen compose operators), and the
-  only mention of JUCE in either file was a comment explaining why the knob art must
-  be trimmed and centred before rotation — a requirement that applies identically to
-  Cairo. As the sole author and copyright holder, the author has relicensed them MIT
-  for use here.
+  gui/make_switch.sh's ancestor make_footswitch.sh, and the first gui/make_knob.sh
+  — the one that cropped a photographed dial, and which the present script
+  replaces — were originally written by the same author for a sibling project
+  that is licensed GPL-3.0-or-later, and they carried that project's GPL-3 header.
+  That project is GPL-3 solely because it links JUCE. Neither script contains JUCE
+  code or derives from anything GPL-licensed: both are pure ImageMagick 7 command
+  pipelines (masks, radial gradients, and the CopyOpacity / DstIn / screen compose
+  operators), and the only mention of JUCE in either file was a comment explaining
+  why the knob art must be trimmed and centred before rotation — a requirement
+  that applies identically to Cairo. As the sole author and copyright holder, the
+  author has relicensed them MIT for use here. The present gui/make_knob.sh draws
+  the dials from nothing and was written for this project.
 
 -------------------------------------------------------------------------------
 

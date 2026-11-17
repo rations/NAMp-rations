@@ -91,6 +91,15 @@ public:
     const std::string &channelNameOverride(int channel) const;
     std::string channelName(int channel) const;
 
+    // Which art the dials are drawn with: the settings page's Dials section sets it and every
+    // dial asks for it. Not a parameter - see DialStyle in rationsids.h for why - so it is sent to
+    // the processor as a message, because the processor is the half that saves it.
+    Steinberg::tresult setDialStyle(int style);
+    DialStyle dialStyle() const
+    {
+        return mDialStyle;
+    }
+
     // What one MIDI learn row is called. Every row is a channel, so every label follows whatever
     // the user renamed that channel to. It stays a function rather than becoming a direct call to
     // channelName() because the table it serves is generic over ParamID: a row pointing at
@@ -180,6 +189,9 @@ private:
     std::string mCapturePath[kChannelCount];
     bool mCaptureIsDir[kChannelCount] = {false, false, false, false};
     std::string mChannelNameOverride[kChannelCount];
+    // The editor's copy of the dial style. Written from the settings page and from component
+    // state, on the host UI thread like everything else here.
+    DialStyle mDialStyle = kDialBlack;
     RationsEditorView *mView = nullptr; // live editor, host UI/run-loop thread only
 
     // Last capability report from the processor, cached so an editor created later in the session

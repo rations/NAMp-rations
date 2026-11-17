@@ -105,6 +105,11 @@ return it to its default. Click the number under Threshold, Bass, Middle, Treble
 to **type a value**: Enter or Tab sets it, Escape leaves it alone, and either `2.5` or `2,5` works.
 The same applies to the amp in NAMp Rack.
 
+**How the dials look** is yours to choose. The settings page ends with a *Dials* section offering
+three: **Black** (a spun black face in a gold ring), **Gold** (a spun gold face) and **Pointer** (a
+pointer knob with a gold edge). It changes nothing about the sound and is saved with the project.
+The pedalboard's dials are their own and do not follow it. NAMp Rack has the same three.
+
 **You load your own captures.** Nothing ships in the bundle. Point each loader at a folder of
 `.nam` files or at a single one; the folder's name becomes the channel's name, and you can type
 over it.

@@ -601,7 +601,11 @@ set(NAMP_IMG_FILES
     img/head.png
     img/cabinet.png
     img/namp-badge.png
+    # One bitmap per dial style the settings page offers, in DialStyle's order
+    # (Black, Gold, Pointer). All three are drawn by gui/make_knob.sh.
     img/dial.png
+    img/dial_gold.png
+    img/dial_pointer.png
     img/led_on.png
     # The input-level lamp, lit. Generated from led-on-base.png by gui/make_assets.sh.
     img/led_green_on.png

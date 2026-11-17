@@ -21,12 +21,14 @@
 //      resize the window on a page change — so the four PNGs are four different
 //      shapes, exactly as the four windows are.
 //
-// Usage: panelrender <output-prefix> [resource-dir] [scale]
+// Usage: panelrender <output-prefix> [resource-dir] [scale] [dial-style]
 // Writes <prefix>-head.png, <prefix>-cabinet.png and <prefix>-settings.png.
 // The resource directory defaults to the usual runtime resolution
 // (RATIONS_RESOURCE_DIR, the bundle layout, or an executable-relative dir).
 // `scale` renders at a non-default size, which is how the host-resize path's
-// single cairo_scale is checked without a host.
+// single cairo_scale is checked without a host. `dial-style` is a DialStyle index
+// (0 Black, 1 Gold, 2 Pointer; default 0) and draws the amp's dials in that
+// style, so each one can be looked at on the real panel without an editor.
 //
 // The drawing below is deliberately NOT shared with the editor's own view
 // class: this rig has to keep working when that class is mid-rewrite, and a
@@ -61,7 +63,12 @@ namespace
 const char *const kRequiredImages[] = {
     "head",
     "cabinet",
+    // One per dial style the settings page offers, in DialStyle's order — the same
+    // names geo::kDialStyleImage carries, spelled out again here on purpose: a list
+    // that was derived from that table could not notice a name missing from it.
     "dial",
+    "dial_gold",
+    "dial_pointer",
     "led_on",
     "led_green_on",
     "led_off",
@@ -82,12 +89,19 @@ constexpr int kImageCount = static_cast<int>(sizeof(kRequiredImages) / sizeof(ch
 constexpr int kIconCount = static_cast<int>(sizeof(kRequiredIcons) / sizeof(char *));
 
 //------------------------------------------------------------------------
-// A knob: the dial bitmap rotated about its own centre. The art carries a gold
-// pointer straight up at mid-travel, so nothing is drawn on top of it.
-void drawKnob(Canvas &c, ImageCache &images, float cx, float cy, float r, double norm)
+// Which style the amp's dials are drawn in. Set once by main() from the command
+// line before anything is drawn and only read after that; this tool has one
+// thread. A global rather than a parameter because the page renderers share one
+// function-pointer signature and only some of them draw a dial.
+DialStyle gDialStyle = kDialBlack;
+
+// A dial drawn from a named bitmap, rotated about its own centre. The art carries
+// its own pointer straight up at mid-travel, so nothing is drawn on top of it.
+void drawDialArt(Canvas &c, ImageCache &images, const char *art, float cx, float cy, float r,
+                 double norm)
 {
     const Rect face(cx - r, cy - r, 2.0f * r, 2.0f * r);
-    if (cairo_surface_t *dial = images.get("dial")) {
+    if (cairo_surface_t *dial = images.get(art)) {
         c.drawImageRotated(dial, face, (norm - 0.5) * geo::kKnobSweepDeg);
     } else {
         c.setColor(0x28282E);
@@ -97,6 +111,12 @@ void drawKnob(Canvas &c, ImageCache &images, float cx, float cy, float r, double
         const double a = (norm - 0.5) * geo::kKnobSweepDeg * 3.14159265358979323846 / 180.0;
         c.strokeLine(cx, cy, cx + std::sin(a) * r * 0.8, cy - std::cos(a) * r * 0.8);
     }
+}
+
+// One of the amp's dials, in the style this run was asked for.
+void drawKnob(Canvas &c, ImageCache &images, float cx, float cy, float r, double norm)
+{
+    drawDialArt(c, images, geo::kDialStyleImage[gDialStyle], cx, cy, r, norm);
 }
 
 //------------------------------------------------------------------------
@@ -706,6 +726,34 @@ void renderSettings(Canvas &c, ImageCache &images, SvgCache &svgs)
                      geo::kOutputFootnote, cx, static_cast<float>(geo::kOutputFootnoteY));
     drawCenteredText(c, Font::Body, geo::kSettingsFootnoteSize, geo::kDimColor,
                      geo::kOutputFootnote2, cx, static_cast<float>(geo::kOutputFootnote2Y));
+
+    // --- the dials section -------------------------------------------------------------------
+    // The output section's radio rows again, ungated, with the style this run was asked for
+    // selected and the preview beside them wearing it.
+    drawCenteredText(c, Font::Title, geo::kSettingsHeadingSize, geo::kTextColor, geo::kDialHeading,
+                     cx, static_cast<float>(geo::kDialHeadingY));
+    for (int i = 0; i < kDialStyleCount; ++i) {
+        const Rect row(geo::kMidiRowX, geo::kDialRowY0 + i * geo::kOutputRowPitch, geo::kOutputRowW,
+                       geo::kOutputRowH);
+        const float dotCX = row.x + geo::kOutputDotCX;
+        const float dotCY = row.centerY();
+        c.setColor(geo::kAccent);
+        c.setPenSize(1.5f);
+        c.strokeEllipse(dotCX, dotCY, geo::kOutputDotR, geo::kOutputDotR);
+        if (i == gDialStyle) {
+            c.setColor(geo::kAccentBright);
+            c.fillEllipse(dotCX, dotCY, geo::kOutputDotFillR, geo::kOutputDotFillR);
+        }
+        c.setPenSize(1.0f);
+        c.setFont(Font::Title);
+        c.setFontSize(geo::kMidiRowTextSize);
+        c.setColor(geo::kTextColor);
+        c.drawString(geo::kDialStyleNames[i], row.x + geo::kOutputTextX,
+                     dotCY + geo::kMidiRowTextSize * 0.36f);
+    }
+    drawDialArt(c, images, geo::kDialStyleImage[gDialStyle],
+                static_cast<float>(geo::kDialPreviewCX), static_cast<float>(geo::kDialPreviewCY),
+                static_cast<float>(geo::kDialPreviewR), 0.5);
 }
 
 // The setup page: both columns, each drawn in its own coordinates and translated into place.
@@ -1082,6 +1130,16 @@ bool auditText(FontStack &fonts)
     }
     fits.push_back({"calibrate label", Font::Title, geo::kMidiRowTextSize, geo::kCalibrateLabel,
                     static_cast<float>(geo::kCalValueX - geo::kCalLabelX)});
+    // The dials section. A style's name is drawn from the radio column towards the preview dial,
+    // so the preview's near edge is what it must not reach — not the row's width, which is only
+    // the click target, exactly as for the output rows above.
+    fits.push_back({"dial heading", Font::Title, geo::kSettingsHeadingSize, geo::kDialHeading,
+                    static_cast<float>(geo::kMidiRowW)});
+    for (int i = 0; i < kDialStyleCount; ++i)
+        fits.push_back({"dial style row", Font::Title, geo::kMidiRowTextSize,
+                        geo::kDialStyleNames[i],
+                        static_cast<float>(geo::kDialPreviewCX - geo::kDialPreviewR -
+                                           geo::kMidiRowX - geo::kOutputTextX)});
 
     // The utility row, measured as a pair rather than against an allowance.
     //
@@ -1277,12 +1335,24 @@ bool renderPage(const char *path, geo::Page page, double scale, FontStack &fonts
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <output-prefix> [resource-dir] [scale]\n", argv[0]);
+        fprintf(stderr, "usage: %s <output-prefix> [resource-dir] [scale] [dial-style]\n", argv[0]);
         return 2;
     }
     const std::string prefix = argv[1];
     const std::string res = (argc > 2) ? std::string(argv[2]) : resourceDir();
     const double scale = (argc > 3) ? atof(argv[3]) : 1.0;
+    // Refused rather than clamped when it is out of range: a render of the wrong style that
+    // reports success is a picture of something nobody asked for.
+    if (argc > 4) {
+        char *end = nullptr;
+        const long style = strtol(argv[4], &end, 10);
+        if (end == argv[4] || *end != '\0' || style < 0 || style >= kDialStyleCount) {
+            fprintf(stderr, "panelrender: dial-style must be 0..%d (Black, Gold, Pointer)\n",
+                    kDialStyleCount - 1);
+            return 2;
+        }
+        gDialStyle = static_cast<DialStyle>(style);
+    }
     if (res.empty()) {
         fprintf(stderr, "panelrender: no resource directory; pass one explicitly\n");
         return 1;

@@ -501,7 +501,13 @@ set(NAMP_IMG_FILES
     # The head's title badge, drawn above "Rations" — see kBadgeH in src/geometry.h.
     img/namp-badge.png
     img/cabinet.png
+    # One bitmap per dial style the settings page offers, in DialStyle's order
+    # (Black, Gold, Pointer), then the pedalboard's own pointer cut. All four are
+    # drawn by gui/make_knob.sh.
     img/dial.png
+    img/dial_gold.png
+    img/dial_pointer.png
+    img/dial_pedal.png
     img/led_on.png
     # The input-level lamp, lit. Generated from led-on-base.png by gui/make_assets.sh.
     img/led_green_on.png
@@ -511,10 +517,11 @@ set(NAMP_IMG_FILES
     img/meter_track.png
     # The pedalboard. Five blank enclosures, each stored at the art's own trimmed
     # size and downscaled at draw time (the cabinet's arrangement, not the head's),
-    # plus the chrome footswitch cap. The knob and the two LEDs are NOT repeated
-    # here: the pedals blit the very same dial.png / led_on.png / led_off.png the
-    # amp head does. Built by gui/make_pedals.sh from resources/img/pedals/, which
-    # holds the untrimmed exports and the design references and ships nothing.
+    # plus the chrome footswitch cap. The two LEDs are NOT repeated here: the
+    # pedals blit the very same led_on.png / led_off.png the amp head does, and
+    # their knob is dial_pedal.png above. Built by gui/make_pedals.sh from
+    # resources/img/pedals/, which holds the untrimmed exports and the design
+    # references and ships nothing.
     img/pedal-boost.png
     img/pedal-chorus.png
     img/pedal-flanger.png

@@ -1130,6 +1130,16 @@ tresult PLUGIN_API RationsProcessor::notify(IMessage *message)
         return kResultOk;
     }
 
+    // The dial style. Recorded for getState and for nothing else, exactly like the name above.
+    if (id && strcmp(id, kMsgDialStyle) == 0) {
+        int64 style = -1;
+        if (message->getAttributes()->getInt(kDialStyleAttr, style) != kResultOk || style < 0 ||
+            style >= kDialStyleCount)
+            return kResultFalse;
+        mDialStyle.store(static_cast<int32>(style), std::memory_order_relaxed);
+        return kResultOk;
+    }
+
     int captureChannel = -1;
     for (int c = 0; c < kChannelCount; ++c) {
         if (id && strcmp(id, kMsgLoadCapture[c]) == 0)
@@ -1392,9 +1402,16 @@ tresult PLUGIN_API RationsProcessor::setState(IBStream *state)
     double slim = ranges::kSlimDefault;
     if (version >= 8 && !streamer.readDouble(slim))
         return kResultFalse;
+    // Version 10 onwards: the dial style, the last field. A version 1-9 project opens with the
+    // Black dials. A blob that says it is version 10 and ends before this field is truncated and is
+    // refused like any other; a style this build does not have is not - see dialStyleFromStored.
+    int32 dialStyle = kDialBlack;
+    if (version >= 10 && !streamer.readInt32(dialStyle))
+        return kResultFalse;
     mSlimNorm.store(std::clamp(slim, ranges::kSlimMin, ranges::kSlimMax),
                     std::memory_order_relaxed);
     mToneStackOn.store(toneStackOn > 0.5 ? 1.0 : 0.0, std::memory_order_relaxed);
+    mDialStyle.store(dialStyleFromStored(dialStyle), std::memory_order_relaxed);
 
     return kResultOk;
 }
@@ -1478,6 +1495,9 @@ tresult PLUGIN_API RationsProcessor::getState(IBStream *state)
     streamer.writeDouble(mToneStackOn.load(std::memory_order_relaxed));
     // Version 8 onwards: Slim. Appended after it, at the end, for exactly the same reason.
     streamer.writeDouble(mSlimNorm.load(std::memory_order_relaxed));
+    // Version 10 onwards: the dial style, and now the end of the blob. (Version 9 is the sibling
+    // product's and appends nothing - see kStateVersion.)
+    streamer.writeInt32(mDialStyle.load(std::memory_order_relaxed));
     return kResultOk;
 }
 

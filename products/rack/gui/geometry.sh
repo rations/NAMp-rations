@@ -68,6 +68,8 @@ HEAD_W=1133; HEAD_H=403
 # shape, 2.81:1, and a 4x12 cabinet is 1.70:1, so the cabinet page is height-
 # limited and the stored art is a long way above its draw size.
 CAB_W=1483; CAB_H=872
+# One bitmap per dial STYLE, all this size: gui/make_knob.sh draws them and the
+# editor picks one by the user's choice on the settings page.
 DIAL_PX=256                   # square; drawn at 56x56, extra headroom for rotation
 LED_PX=128                    # source size, drawn at 18x18
 SWITCH_W=112; SWITCH_H=184    # 4x of the 28x46 draw size

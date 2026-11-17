@@ -8,7 +8,8 @@
 #   ./gui/make_assets.sh
 #
 # Source art (resources/img, the author's own): head-base.png, cabinet-base.png,
-# dial-base.png, led-on-base.png, led-off-base.png. The *-base.png files are the
+# led-on-base.png, led-off-base.png. (dial-base.png is no longer one of them: the
+# dials are drawn by make_knob.sh, which says why.) The *-base.png files are the
 # untrimmed exports and are deliberately NOT in the bundle's resource list —
 # CMakeLists.txt ships the trimmed and generated results only. Overridable with
 # ART_DIR / OUT_DIR.

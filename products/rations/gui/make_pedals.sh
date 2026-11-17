@@ -20,11 +20,12 @@
 # not assets: the control positions in src/geometry.h were measured off the
 # first of them by differencing it against the blank base.
 #
-# Not built here, and not needed: the knob and the two LEDs. The pedals reuse
-# resources/img/dial.png, led_on.png and led_off.png — the very same files.
-# resources/img/pedals held byte-identical copies of all three; they were
-# deleted rather than shipped twice, because a second copy is a second thing to
-# keep in step with make_assets.sh.
+# Not built here: the knob and the two LEDs. The LEDs are resources/img/led_on.png
+# and led_off.png — the very same files the head uses; resources/img/pedals held
+# byte-identical copies and they were deleted rather than shipped twice, because a
+# second copy is a second thing to keep in step with make_assets.sh. The knob is
+# dial_pedal.png, the pointer cut for a coloured face, and make_knob.sh draws it
+# beside the head's own dials.
 set -euo pipefail
 cd "$(dirname "$0")"
 source ./geometry.sh

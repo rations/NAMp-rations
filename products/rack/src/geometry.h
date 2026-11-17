@@ -178,8 +178,11 @@ constexpr int kCabPageH = 460;
 // metadata in EVERY capture of a bank. That costs nothing but scrolling, which
 // is what a page that already scrolls is for, and it reaches the setup page as
 // 18 more units of air under the cabinet column, exactly as kSetupPageH intends.
+// And by 120 for the Dials section at its foot, at the same price: it is the last
+// thing in the column because it is the one thing there that changes nothing
+// about the sound.
 constexpr int kSettingsPageW = kSetupSetColW;
-constexpr int kSettingsPageH = 946;
+constexpr int kSettingsPageH = 1066;
 
 // The shortest that page's viewport may be dragged to, in logical units: the
 // fixed header band that carries the back button (kPageContentTop, 50) plus
@@ -525,10 +528,11 @@ enum class LedColor { Red, Green };
 // The gaps are named rather than folded into literal centres so the arithmetic
 // is checkable and so a part that grows fails the static_asserts below instead
 // of silently overlapping. Both are 6, and the DRAWN clearances are not equal:
-// dial.png's ink fills its 256x256 box edge to edge, while switch_up_ring.png's
-// ink starts 8 rows into a 184-row frame — 1.7 units once it is drawn at 40 —
-// so the dial-to-switch gap reads as 7.7 with the bat up and 6 with it down,
-// which is the bat travelling and is what it should look like.
+// a round dial's ink fills its 256x256 box edge to edge (the Pointer style's does
+// not, and sits further from the switch for it), while switch_up_ring.png's ink
+// starts 8 rows into a 184-row frame — 1.7 units once it is drawn at 40 — so the
+// dial-to-switch gap reads as 7.7 with the bat up and 6 with it down, which is
+// the bat travelling and is what it should look like.
 constexpr int kKnobPitch = 94;
 constexpr int kKnobX0 = 251;
 
@@ -1588,9 +1592,41 @@ constexpr double kCalWheelDb = 1.0;
 constexpr std::size_t kCalEditMaxChars = 8;
 constexpr int kOutputFootnoteY = 906;
 constexpr int kOutputFootnote2Y = kOutputFootnoteY + 18; // the MIDI footnotes' own pitch
-static_assert(kOutputFootnote2Y + 22 == kSettingsPageH,
-              "the output footnote block must keep the page's bottom margin - if a line is added "
-              "or removed here, kSettingsPageH moves with it");
+
+// Section 5: the dials. Three radio rows in the output section's own row shape —
+// same dot, same pitch, same column — because it is the same act: one of three,
+// chosen once. Beside them is ONE dial drawn in the style that is selected, so
+// the choice can be seen being made without a trip back to the amp to look.
+//
+// Last in the column because it is the least consequential thing in it: it
+// changes how the panel looks and nothing about how it sounds.
+//
+// The heading sits 28 below the footnote above it and the rows 18 below the
+// heading, which is what the output section keeps from the MIDI footnotes. There
+// is no footnote of its own: the parent plug-in needs one to say its pedalboard's
+// dials do not follow the choice, and this product has no pedalboard.
+constexpr int kDialHeadingY = kOutputFootnote2Y + 28; // 952
+constexpr int kDialRowY0 = kDialHeadingY + 18;        // 970
+constexpr int kDialRowsBottom =
+    kDialRowY0 + (kDialStyleCount - 1) * kOutputRowPitch + kOutputRowH; // 1044
+// The preview: centred on the three rows, in the calibration box's column, which
+// is the one other thing in this column that sits to the right of a radio list.
+// It is drawn at the size the head draws its own dials, so what is shown is what
+// the amp will carry, not an enlargement of it.
+constexpr int kDialPreviewCX = kCalValueX + kCalValueW / 2;        // 399
+constexpr int kDialPreviewCY = (kDialRowY0 + kDialRowsBottom) / 2; // 1007
+constexpr int kDialPreviewR = kKnobR;
+static_assert(kDialPreviewCX - kDialPreviewR > kMidiRowX + kOutputRowW,
+              "the dial preview must stay clear of the radio rows, which are click targets "
+              "across their whole width");
+static_assert(kDialPreviewCX + kDialPreviewR < kMidiRowX + kMidiRowW,
+              "the dial preview must stay inside the settings column's rows");
+static_assert(kDialPreviewCY - kDialPreviewR > kDialHeadingY,
+              "the dial preview must sit below the section's heading");
+static_assert(kDialRowsBottom + 22 == kSettingsPageH &&
+                  kDialPreviewCY + kDialPreviewR < kSettingsPageH,
+              "the dial rows must keep the page's bottom margin - if a row is added or removed "
+              "here, kSettingsPageH moves with it");
 
 // The Learn button's two states, named here so the panel and the art audit
 // cannot disagree about which strings have to fit inside it.
@@ -1634,6 +1670,11 @@ constexpr const char *kCapturePlaceholder = "Select a capture, or a folder of ca
 // The output section. The three mode names are the upstream plug-in's and are in
 // its order, which is also the order the parameter's value space is in.
 constexpr const char *kOutputHeading = "Output";
+// The dials section. The names are in DialStyle's order, which is a saved value,
+// and so are the image keys beside them — the file names gui/make_knob.sh writes.
+constexpr const char *kDialHeading = "Dials";
+constexpr const char *kDialStyleNames[kDialStyleCount] = {"Black", "Gold", "Pointer"};
+constexpr const char *kDialStyleImage[kDialStyleCount] = {"dial", "dial_gold", "dial_pointer"};
 constexpr const char *kOutputModeNames[3] = {"Raw", "Normalized", "Calibrated"};
 constexpr const char *kCalibrateLabel = "Calibrate Input";
 // What a greyed mode says instead of nothing. Which channel's captures it is
@@ -1671,7 +1712,7 @@ constexpr int kBrowserH = kCabPageH - 2 * kBrowserY; // 428
 constexpr int kCaptureBrowserX = 16;
 constexpr int kCaptureBrowserY = 40;
 constexpr int kCaptureBrowserW = kSettingsPageW - 2 * kCaptureBrowserX; // 534
-constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 866
+constexpr int kCaptureBrowserH = kSettingsPageH - 2 * kCaptureBrowserY; // 986
 // That height is a CEILING now, not the size: the settings page scrolls, so the
 // window showing it may be shorter than the page, and the card is sized to the
 // viewport instead (RationsEditorView::boundCaptureBrowser). This is the floor
